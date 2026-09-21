@@ -18,7 +18,7 @@ IB Gateway/TWS ──▶ collector ──▶ SQLite ──▶ features ──▶
 ## Quick start
 
 ```bash
-cd /home/monkeyplay/trading_pipeline
+cd trading-pipeline
 source .venv/bin/activate
 python -m dashboard.app        # then open http://127.0.0.1:8080
 ```
@@ -37,6 +37,8 @@ DB_PATH=data/trading_pipeline.dev.db python -m dashboard.app
 ### First-time setup
 
 ```bash
+git clone https://github.com/MonkeyPlay/trading-pipeline.git
+cd trading-pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -100,9 +102,12 @@ In one pass ([scripts/daily_forecast.py](scripts/daily_forecast.py)) it:
 logging to `logs/pipeline_run.log`. It is meant for cron, shortly before the 09:30 ET open:
 
 ```cron
-15 9 * * 1-5  /home/monkeyplay/trading_pipeline/scripts/run_pipeline.sh
-0  2 * * *    /home/monkeyplay/trading_pipeline/scripts/backup_db.sh
+15 9 * * 1-5  /path/to/trading-pipeline/scripts/run_pipeline.sh
+0  2 * * *    /path/to/trading-pipeline/scripts/backup_db.sh
 ```
+
+Both scripts resolve the project directory from their own location, so they can be
+invoked by absolute path from anywhere without a `cd` first.
 
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.

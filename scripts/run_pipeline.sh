@@ -5,15 +5,19 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/home/monkeyplay/trading_pipeline"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/pipeline_run.log"
 EXPIRY="${NQ_EXPIRY:-202609}"
-DB_PATH="data/trading_pipeline.db"
+DB_PATH="${DB_PATH:-data/trading_pipeline.db}"
 
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
 
+if [ ! -f .venv/bin/activate ]; then
+    echo "ERROR: no virtualenv at $PROJECT_DIR/.venv - see README first-time setup." >&2
+    exit 1
+fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
