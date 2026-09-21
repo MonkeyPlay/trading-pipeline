@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Secrets / local config
+.env
+.claude/settings.local.json
+
+# Data stores (generated / large)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/backups/
+
+# Logs
+logs/
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp

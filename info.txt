@@ -1,0 +1,24 @@
+This is an NQ futures opening-forecast pipeline (Interactive Brokers data collector → feature/forecast engine → SQLite → NiceGUI dashboard). There are two separate things you can run:
+
+1. The dashboard (view existing data/forecasts) — this is likely what "run" means for you day-to-day:
+cd /home/monkeyplay/trading_pipeline
+source .venv/bin/activate
+python -m dashboard.app        # then open http://127.0.0.1:8080
+
+
+2. The full daily pipeline (collects fresh IB data, runs forecast) — via scripts/run_pipeline.sh:
+./scripts/run_pipeline.sh
+
+3. To pull the latest data from IB Gateway into the DB, you run the collector directly (this is step 1 of run_pipeline.sh — you don't need daily_forecast.py for just an update, that's the forecasting step).
+cd /home/monkeyplay/trading_pipeline
+source .venv/bin/activate
+python3 -m collector.ib_collector --expiry 202609
+
+
+This requires IB Gateway/TWS running locally (port 4002 by default for paper trading, per config.py) and pulls 1-min bars via collector.ib_collector.
+
+A few things worth flagging before you try either:
+
+Your .env file is empty (0 bytes) — no OPENAI_API_KEY/ANTHROPIC_API_KEY set, so the forecaster will fall back to its deterministic baseline instead of using an LLM.
+No data/trading_pipeline.db was visible in the listing — if it doesn't exist yet, the dashboard will show an empty/uninitialized DB until you either run the pipeline once or use populate_mock_data.py to seed fake data for testing.
+This isn't a git repo, so there's no branch/commit state to worry about.
