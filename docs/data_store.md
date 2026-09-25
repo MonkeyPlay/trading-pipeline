@@ -16,9 +16,11 @@ locally).
 - Point any tool at another database with `--db postgresql://...` or the `DATABASE_URL`
   env var.
 
-`bars` is a TimescaleDB **hypertable** chunked weekly on `timestamp_utc`, so a day's
-delete-and-replace touches one chunk and cross-day range scans prune by time. The rest
-are ordinary tables. `database/connection.py` returns dates as `'YYYY-MM-DD'` and
+`bars` is a TimescaleDB **hypertable** chunked every 30 days on `timestamp_utc`. Every
+per-day query also bounds `timestamp_utc` to a window around the session
+(`queries._day_window`), so TimescaleDB only opens the one or two chunks that can hold
+that day; `save_trading_day()` rejects a bar whose timestamp falls outside its day for
+the same reason. The rest are ordinary tables. `database/connection.py` returns dates as `'YYYY-MM-DD'` and
 timestamps as `'YYYY-MM-DD HH:MM:SS'` (UTC) strings and JSON columns as text, so query
 callers see the same values the SQLite store used to hold.
 

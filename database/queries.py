@@ -9,6 +9,7 @@ and JSON handling for document storage fields.
 import json
 import re
 import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 from database.connection import Database, Error, Row
@@ -135,6 +136,11 @@ VALUES ({", ".join(f"%({c})s" for c in _BAR_COLUMNS)});
 
 _SESSION_DAY_KEY = "contract_id = %s AND interval = %s AND price_type = %s AND trading_day = %s"
 
+# The same key for the bars hypertable, plus a timestamp window that holds every bar
+# of the day. trading_day alone would make TimescaleDB visit every chunk; the window
+# lets it exclude all but the one or two chunks that can contain the day.
+_BARS_DAY_KEY = _SESSION_DAY_KEY + " AND timestamp_utc >= %s AND timestamp_utc < %s"
+
 
 def expected_bars_for(interval: str, rth_only: bool = False) -> Optional[int]:
     """Expected bar count for one full session at this interval, or None if unknown."""
@@ -175,6 +181,7 @@ def _prepare_bar_rows(bars, contract_id, interval, price_type, trading_day, sour
     """
     rows = []
     mismatched = set()
+    window_start, window_end = _day_window(trading_day)
     for b in bars:
         day = b.get("trading_day")
         if day is None:
@@ -185,6 +192,13 @@ def _prepare_bar_rows(bars, contract_id, interval, price_type, trading_day, sour
         if str(day) != trading_day:
             mismatched.add(str(day))
             continue
+
+        ts_day = _utc_date(b["timestamp_utc"])
+        if not (window_start <= ts_day < window_end):
+            raise ValueError(
+                f"Bar at {b['timestamp_utc']!r} cannot belong to trading day {trading_day}; "
+                f"its timestamp is outside that session."
+            )
 
         scope = str(b.get("session_scope", "ETH"))
         rows.append({
@@ -216,6 +230,30 @@ def _prepare_bar_rows(bars, contract_id, interval, price_type, trading_day, sour
     return list(deduped.values())
 
 
+def _day_window(first_day: str, last_day: Optional[str] = None):
+    """
+    UTC bounds that contain every bar of the NY sessions ``first_day``..``last_day``.
+
+    A session opens 18:00 ET the prior evening (22:00/23:00 UTC) and ends by 17:00 ET
+    (21:00/22:00 UTC), so [first_day - 1 day, last_day + 1 day) UTC always covers it.
+    """
+    start = date.fromisoformat(first_day) - timedelta(days=1)
+    end = date.fromisoformat(last_day or first_day) + timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
+def _utc_date(timestamp) -> str:
+    """'YYYY-MM-DD' UTC date of a timestamp; naive values are UTC, as everywhere else."""
+    dt = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.date().isoformat()
+
+
+def _bars_day_params(contract_id, interval, price_type, trading_day):
+    return (contract_id, interval, price_type, trading_day) + _day_window(trading_day)
+
+
 def _opt(value, cast):
     if value is None or (isinstance(value, float) and value != value):  # NaN
         return None
@@ -231,8 +269,8 @@ def _day_stats(conn, contract_id, interval, price_type, trading_day):
         "       COALESCE(SUM(CASE WHEN session_scope = 'RTH' THEN 1 ELSE 0 END), 0), "
         "       COALESCE(SUM(CASE WHEN is_completed = 0 THEN 1 ELSE 0 END), 0), "
         "       MIN(timestamp_utc), MAX(timestamp_utc) "
-        f"FROM bars WHERE {_SESSION_DAY_KEY};",
-        (contract_id, interval, price_type, trading_day),
+        f"FROM bars WHERE {_BARS_DAY_KEY};",
+        _bars_day_params(contract_id, interval, price_type, trading_day),
     ).fetchone()
     return {
         "bar_count": int(row[0]),
@@ -291,7 +329,7 @@ def save_trading_day(
                 "    fetched_at = excluded.fetched_at;",
                 key + (expected_bar_count, source),
             )
-            conn.execute(f"DELETE FROM bars WHERE {_SESSION_DAY_KEY};", key)
+            conn.execute(f"DELETE FROM bars WHERE {_BARS_DAY_KEY};", _bars_day_params(*key))
             if rows:
                 conn.executemany(_BARS_INSERT, rows)
 
@@ -449,8 +487,8 @@ def get_day_bars(
     session_scope: Optional[str] = None,
 ) -> List[Row]:
     """Every bar of one trading day, in time order. Hits the bars primary key directly."""
-    clauses = [_SESSION_DAY_KEY]
-    params: List[Any] = [contract_id, interval, price_type, _validate_day(trading_day)]
+    clauses = [_BARS_DAY_KEY]
+    params: List[Any] = list(_bars_day_params(contract_id, interval, price_type, _validate_day(trading_day)))
     if session_scope is not None:
         clauses.append("session_scope = %s")
         params.append(session_scope)
@@ -490,12 +528,18 @@ def get_bars(
     if trading_day is not None:
         clauses.append("trading_day = %s")
         params.append(_validate_day(trading_day))
+        start_day = end_day = trading_day
     if start_day is not None:
         clauses.append("trading_day >= %s")
         params.append(_validate_day(start_day))
+        # Also bound the time column, so TimescaleDB can skip chunks before the window.
+        clauses.append("timestamp_utc >= %s")
+        params.append(_day_window(start_day)[0])
     if end_day is not None:
         clauses.append("trading_day <= %s")
         params.append(_validate_day(end_day))
+        clauses.append("timestamp_utc < %s")
+        params.append(_day_window(end_day)[1])
     if start_utc is not None:
         clauses.append("timestamp_utc >= %s")
         params.append(start_utc)

@@ -1,15 +1,35 @@
-# Local TimescaleDB for the pipeline:  docker compose up -d
+# TimescaleDB for the pipeline:  docker compose up -d
 # Matches the DATABASE_URL / DEV_DATABASE_URL defaults in config.py.
+#
+# Settings come from the environment or the project's .env (the same file config.py
+# reads). For anything beyond a single-user laptop, set at least POSTGRES_PASSWORD there
+# and put the same password into DATABASE_URL / DEV_DATABASE_URL.
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.30.1-pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: trading
-      POSTGRES_PASSWORD: trading
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading}
       POSTGRES_DB: trading_pipeline
+      # The image runs timescaledb-tune when the data volume is first created. Pin the
+      # memory it tunes for instead of trusting detection, which sees the Docker VM
+      # (often half the host on Docker Desktop) rather than the machine. Sized for a
+      # 64 GB host; leaves the OS page cache, IB Gateway and the pipeline plenty.
+      TS_TUNE_MEMORY: ${TS_TUNE_MEMORY:-64GB}
+      TIMESCALEDB_TELEMETRY: "off"
     ports:
-      - "127.0.0.1:5432:5432"
+      # Local-only by default. Set POSTGRES_BIND=0.0.0.0 when the pipeline runs on
+      # another machine — with a real POSTGRES_PASSWORD and a firewall in front.
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
+    # Parallel queries use /dev/shm; Docker's 64 MB default is too small for them.
+    shm_size: 2gb
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading_pipeline"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes:
       - timescaledb-data:/var/lib/postgresql/data
       - ./docker/init-dev-db.sql:/docker-entrypoint-initdb.d/10-init-dev-db.sql:ro

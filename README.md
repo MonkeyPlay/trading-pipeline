@@ -51,6 +51,30 @@ databases with the credentials `config.py` defaults to. Any PostgreSQL 14+ serve
 the TimescaleDB extension works — point `DATABASE_URL` at it. The schema is created and
 migrated automatically on first use — there is no separate init step.
 
+#### Database server settings
+
+`docker-compose.yml` reads these from the environment or `.env`:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `trading` | Password for the `trading` role — change it, and match `DATABASE_URL` |
+| `POSTGRES_BIND` | `127.0.0.1` | Interface the DB listens on; `0.0.0.0` if the pipeline runs on another machine (firewall it) |
+| `TS_TUNE_MEMORY` | `64GB` | RAM `timescaledb-tune` sizes Postgres for |
+
+With 64 GB the tuner sets `shared_buffers=16GB`, `effective_cache_size=48GB`,
+`work_mem=128MB`, `maintenance_work_mem=2GB` and SSD-friendly planner costs. Tuning is
+written **once, when the data volume is created**; after changing `TS_TUNE_MEMORY` on an
+existing volume, re-run it in place and restart:
+
+```bash
+docker compose exec timescaledb timescaledb-tune --memory=64GB --yes --quiet \
+    --conf-path=/var/lib/postgresql/data/postgresql.conf
+docker compose restart timescaledb
+```
+
+`TS_TUNE_MEMORY` must not exceed the RAM Docker can actually give the container
+(Docker Desktop's VM limit, if you use it) or Postgres will refuse to start.
+
 **Coming from the SQLite version?** Copy the old file in once (read-only on the SQLite
 side, refuses a target that already holds data):
 
@@ -204,7 +228,7 @@ full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived
 
 PostgreSQL with TimescaleDB, upgraded in place and never regenerated. `init_database()`
 applies any pending migrations on every process start, so simply running the app upgrades
-it. `bars` is a TimescaleDB hypertable chunked weekly on `timestamp_utc`; everything else
+it. `bars` is a TimescaleDB hypertable chunked monthly (30 days) on `timestamp_utc`; everything else
 is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
