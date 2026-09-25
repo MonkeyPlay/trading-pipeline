@@ -1,57 +1,42 @@
 #!/bin/bash
 # scripts/backup_db.sh
-# Safely backs up the local SQLite database file to the backups folder.
+# Backs up the PostgreSQL / TimescaleDB database to the backups folder with pg_dump.
 # Can be scheduled via a simple daily cron job.
+#
+# pg_dump takes a consistent snapshot, so it is safe while the pipeline is writing.
+# Restore into an empty database that has the timescaledb extension available:
+#
+#   psql "$DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" \
+#                        -c "SELECT timescaledb_pre_restore();"
+#   pg_restore -d "$DATABASE_URL" --no-owner data/backups/trading_pipeline_backup_<ts>.dump
+#   psql "$DATABASE_URL" -c "SELECT timescaledb_post_restore();"
 
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DB_FILE="${DB_PATH:-data/trading_pipeline.db}"
-# DB_PATH is relative to the project root by convention (see config.py).
-case "$DB_FILE" in /*) ;; *) DB_FILE="$PROJECT_DIR/$DB_FILE" ;; esac
 BACKUP_DIR="$PROJECT_DIR/data/backups"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-BACKUP_FILE="$BACKUP_DIR/trading_pipeline_backup_$TIMESTAMP.db"
+BACKUP_FILE="$BACKUP_DIR/trading_pipeline_backup_$TIMESTAMP.dump"
 
-# Prefer the project venv; fall back to whatever python3 is on PATH.
-PYTHON="$PROJECT_DIR/.venv/bin/python"
-[ -x "$PYTHON" ] || PYTHON="$(command -v python3 || true)"
-if [ -z "$PYTHON" ]; then
-    echo "ERROR: no python3 found to run the backup." >&2
+# DATABASE_URL may live in the project's .env rather than the environment.
+if [ -z "${DATABASE_URL:-}" ] && [ -f "$PROJECT_DIR/.env" ]; then
+    DATABASE_URL="$(grep -E '^DATABASE_URL=' "$PROJECT_DIR/.env" | tail -n1 | cut -d= -f2- | tr -d "\"'")"
+fi
+DATABASE_URL="${DATABASE_URL:-postgresql://trading:trading@localhost:5432/trading_pipeline}"
+
+if ! command -v pg_dump >/dev/null 2>&1; then
+    echo "ERROR: pg_dump not found. Install the PostgreSQL client tools." >&2
     exit 1
 fi
 
 mkdir -p "$BACKUP_DIR"
 
-if [ -f "$DB_FILE" ]; then
-    echo "Creating compressed SQLite database backup..."
+echo "Creating PostgreSQL backup..."
+# Custom format is already compressed and restores selectively with pg_restore.
+# TimescaleDB's catalog triggers a few harmless circular-FK warnings; they are expected.
+pg_dump --format=custom --no-owner --file="$BACKUP_FILE" "$DATABASE_URL"
 
-    # sqlite3's online backup API - consistent even while the pipeline is writing.
-    # Uses the stdlib module rather than the sqlite3 CLI, which is often not installed.
-    "$PYTHON" - "$DB_FILE" "$BACKUP_FILE" <<'PY'
-import sqlite3, sys
+echo "Backup completed successfully! Saved as $BACKUP_FILE"
 
-src, dst = sys.argv[1], sys.argv[2]
-source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-try:
-    dest = sqlite3.connect(dst)
-    try:
-        with dest:
-            source.backup(dest)
-    finally:
-        dest.close()
-finally:
-    source.close()
-PY
-
-    # Compress the backup file to save space
-    gzip "$BACKUP_FILE"
-
-    echo "Backup completed successfully! Saved as ${BACKUP_FILE}.gz"
-
-    # Optional: Keep only the last 30 days of backups to prevent storage bloat
-    find "$BACKUP_DIR" -name "trading_pipeline_backup_*.db.gz" -mtime +30 -exec rm {} \;
-else
-    echo "ERROR: Active database file not found at $DB_FILE. Backup skipped."
-    exit 1
-fi
+# Keep only the last 30 days of backups to prevent storage bloat
+find "$BACKUP_DIR" -name "trading_pipeline_backup_*.dump" -mtime +30 -exec rm {} \;

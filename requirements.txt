@@ -4,6 +4,9 @@ numpy>=1.24
 pytz>=2023.3
 python-dotenv>=1.0
 
+# Database: PostgreSQL + TimescaleDB (see docker-compose.yml for a local server)
+psycopg[binary]>=3.1
+
 # Dashboard (NiceGUI + TradingView Lightweight Charts).
 # The charting library itself is vendored at
 # dashboard/components/lib/lightweight-charts.standalone.js, so the dashboard

@@ -1,6 +1,6 @@
 # database/queries.py
 """
-SQLite database query interface for the NQ Trading Pipeline.
+PostgreSQL / TimescaleDB query interface for the NQ Trading Pipeline.
 Provides robust functions to insert, update, and retrieve records across
 all 7 core database tables, with strict typing, parameterized inputs,
 and JSON handling for document storage fields.
@@ -8,9 +8,10 @@ and JSON handling for document storage fields.
 
 import json
 import re
-import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
+
+from database.connection import Database, Error, Row
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 def upsert_contract(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     symbol: str,
     expiry: Optional[str],
@@ -35,7 +36,7 @@ def upsert_contract(
     """
     query = """
     INSERT INTO contracts (contract_id, symbol, expiry, sec_type, exchange, currency, tick_size, multiplier)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT(contract_id) DO UPDATE SET
         symbol=excluded.symbol,
         expiry=excluded.expiry,
@@ -49,21 +50,21 @@ def upsert_contract(
         with conn:
             conn.execute(query, (contract_id, symbol, expiry, sec_type, exchange, currency, tick_size, multiplier))
         logger.debug(f"Contract {contract_id} ({symbol}{expiry or ''}) upserted successfully.")
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to upsert contract {contract_id}: {e}")
         raise
 
 
-def get_contract(conn: sqlite3.Connection, contract_id: int) -> Optional[sqlite3.Row]:
+def get_contract(conn: Database, contract_id: int) -> Optional[Row]:
     """Retrieves metadata of a specific contract by its Unique ID."""
     try:
-        return conn.execute("SELECT * FROM contracts WHERE contract_id = ?;", (contract_id,)).fetchone()
-    except sqlite3.Error as e:
+        return conn.execute("SELECT * FROM contracts WHERE contract_id = %s;", (contract_id,)).fetchone()
+    except Error as e:
         logger.error(f"Failed to fetch contract {contract_id}: {e}")
         raise
 
 
-def get_contract_by_expiry(conn: sqlite3.Connection, symbol: str, expiry: str) -> Optional[sqlite3.Row]:
+def get_contract_by_expiry(conn: Database, symbol: str, expiry: str) -> Optional[Row]:
     """
     Retrieves a contract by trading symbol and expiry.
 
@@ -74,25 +75,25 @@ def get_contract_by_expiry(conn: sqlite3.Connection, symbol: str, expiry: str) -
     """
     try:
         row = conn.execute(
-            "SELECT * FROM contracts WHERE symbol = ? AND expiry = ?;", (symbol, expiry)
+            "SELECT * FROM contracts WHERE symbol = %s AND expiry = %s;", (symbol, expiry)
         ).fetchone()
         if row is not None:
             return row
         return conn.execute(
-            "SELECT * FROM contracts WHERE symbol = ? AND expiry LIKE ? "
+            "SELECT * FROM contracts WHERE symbol = %s AND expiry LIKE %s "
             "ORDER BY expiry ASC LIMIT 1;",
             (symbol, f"{expiry}%"),
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to fetch contract by symbol={symbol}, expiry={expiry}: {e}")
         raise
 
 
-def list_contracts(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+def list_contracts(conn: Database) -> List[Row]:
     """Lists all monitored contracts in the database."""
     try:
         return conn.execute("SELECT * FROM contracts ORDER BY symbol, expiry;").fetchall()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to list contracts: {e}")
         raise
 
@@ -129,10 +130,10 @@ _BAR_COLUMNS = (
 
 _BARS_INSERT = f"""
 INSERT INTO bars ({", ".join(_BAR_COLUMNS)})
-VALUES ({", ".join(":" + c for c in _BAR_COLUMNS)});
+VALUES ({", ".join(f"%({c})s" for c in _BAR_COLUMNS)});
 """
 
-_SESSION_DAY_KEY = "contract_id = ? AND interval = ? AND price_type = ? AND trading_day = ?"
+_SESSION_DAY_KEY = "contract_id = %s AND interval = %s AND price_type = %s AND trading_day = %s"
 
 
 def expected_bars_for(interval: str, rth_only: bool = False) -> Optional[int]:
@@ -243,7 +244,7 @@ def _day_stats(conn, contract_id, interval, price_type, trading_day):
 
 
 def save_trading_day(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     trading_day: str,
     bars: List[Dict[str, Any]],
@@ -283,7 +284,7 @@ def save_trading_day(
             conn.execute(
                 "INSERT INTO session_days (contract_id, interval, price_type, trading_day, "
                 "                          status, expected_bar_count, source, fetched_at) "
-                "VALUES (?, ?, ?, ?, 'EMPTY', ?, ?, datetime('now')) "
+                "VALUES (%s, %s, %s, %s, 'EMPTY', %s, %s, now()) "
                 "ON CONFLICT(contract_id, interval, price_type, trading_day) DO UPDATE SET "
                 "    expected_bar_count = excluded.expected_bar_count, "
                 "    source = excluded.source, "
@@ -302,13 +303,13 @@ def save_trading_day(
                 raise ValueError(f"status must be one of {DAY_STATUSES}, got {resolved!r}")
 
             conn.execute(
-                "UPDATE session_days SET status = ?, bar_count = ?, rth_bar_count = ?, "
-                "    open_bar_count = ?, first_bar_utc = ?, last_bar_utc = ? "
+                "UPDATE session_days SET status = %s, bar_count = %s, rth_bar_count = %s, "
+                "    open_bar_count = %s, first_bar_utc = %s, last_bar_utc = %s "
                 f"WHERE {_SESSION_DAY_KEY};",
                 (resolved, stats["bar_count"], stats["rth_bar_count"], stats["open_bar_count"],
                  stats["first_bar_utc"], stats["last_bar_utc"]) + key,
             )
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to save trading day {day} for contract {contract_id}: {e}")
         raise
 
@@ -323,7 +324,7 @@ def save_trading_day(
 
 
 def save_bars_by_day(
-    conn: sqlite3.Connection,
+    conn: Database,
     bars: List[Dict[str, Any]],
     interval: str = "1m",
     price_type: str = "TRADES",
@@ -351,7 +352,7 @@ def save_bars_by_day(
 
 
 def delete_trading_day(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     trading_day: str,
     interval: str = "1m",
@@ -363,18 +364,18 @@ def delete_trading_day(
         with conn:
             cursor = conn.execute(f"DELETE FROM session_days WHERE {_SESSION_DAY_KEY};", key)
         return cursor.rowcount
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to delete trading day {trading_day}: {e}")
         raise
 
 
 def get_session_day(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     trading_day: str,
     interval: str = "1m",
     price_type: str = "TRADES",
-) -> Optional[sqlite3.Row]:
+) -> Optional[Row]:
     """The ledger row for one stored day, or None if that day was never fetched."""
     return conn.execute(
         f"SELECT * FROM session_days WHERE {_SESSION_DAY_KEY};",
@@ -383,25 +384,25 @@ def get_session_day(
 
 
 def get_stored_trading_days(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     interval: str = "1m",
     price_type: str = "TRADES",
     start: Optional[str] = None,
     end: Optional[str] = None,
-) -> Dict[str, sqlite3.Row]:
+) -> Dict[str, Row]:
     """
     The ledger for a contract as ``{trading_day: row}`` — the single query the
     collector runs before contacting IB to decide what it still needs.
     ``start`` / ``end`` are inclusive 'YYYY-MM-DD' bounds.
     """
-    clauses = ["contract_id = ?", "interval = ?", "price_type = ?"]
+    clauses = ["contract_id = %s", "interval = %s", "price_type = %s"]
     params: List[Any] = [contract_id, interval, price_type]
     if start is not None:
-        clauses.append("trading_day >= ?")
+        clauses.append("trading_day >= %s")
         params.append(_validate_day(start))
     if end is not None:
-        clauses.append("trading_day <= ?")
+        clauses.append("trading_day <= %s")
         params.append(_validate_day(end))
 
     try:
@@ -410,13 +411,13 @@ def get_stored_trading_days(
             tuple(params),
         ).fetchall()
         return {r["trading_day"]: r for r in rows}
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to read the session_days ledger for contract {contract_id}: {e}")
         raise
 
 
 def list_trading_days(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     interval: str = "1m",
     price_type: str = "TRADES",
@@ -424,34 +425,34 @@ def list_trading_days(
     limit: int = 100,
 ) -> List[str]:
     """Stored trading days, newest first. Defaults to days that actually hold bars."""
-    clauses = ["contract_id = ?", "interval = ?", "price_type = ?", "bar_count > 0"]
+    clauses = ["contract_id = %s", "interval = %s", "price_type = %s", "bar_count > 0"]
     params: List[Any] = [contract_id, interval, price_type]
     if statuses:
-        clauses.append(f"status IN ({', '.join('?' * len(statuses))})")
+        clauses.append(f"status IN ({', '.join(['%s'] * len(statuses))})")
         params.extend(statuses)
     params.append(limit)
 
     rows = conn.execute(
         f"SELECT trading_day FROM session_days WHERE {' AND '.join(clauses)} "
-        f"ORDER BY trading_day DESC LIMIT ?;",
+        f"ORDER BY trading_day DESC LIMIT %s;",
         tuple(params),
     ).fetchall()
     return [r["trading_day"] for r in rows]
 
 
 def get_day_bars(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     trading_day: str,
     interval: str = "1m",
     price_type: str = "TRADES",
     session_scope: Optional[str] = None,
-) -> List[sqlite3.Row]:
+) -> List[Row]:
     """Every bar of one trading day, in time order. Hits the bars primary key directly."""
     clauses = [_SESSION_DAY_KEY]
     params: List[Any] = [contract_id, interval, price_type, _validate_day(trading_day)]
     if session_scope is not None:
-        clauses.append("session_scope = ?")
+        clauses.append("session_scope = %s")
         params.append(session_scope)
 
     return conn.execute(
@@ -461,7 +462,7 @@ def get_day_bars(
 
 
 def get_bars(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     interval: str,
     start_utc: Optional[str] = None,
@@ -471,7 +472,7 @@ def get_bars(
     trading_day: Optional[str] = None,
     start_day: Optional[str] = None,
     end_day: Optional[str] = None,
-) -> List[sqlite3.Row]:
+) -> List[Row]:
     """
     Retrieves historical candles across days.
 
@@ -483,32 +484,32 @@ def get_bars(
 
     Prefer :func:`get_day_bars` when you want exactly one session.
     """
-    clauses = ["contract_id = ?", "interval = ?", "price_type = ?"]
+    clauses = ["contract_id = %s", "interval = %s", "price_type = %s"]
     params: List[Any] = [contract_id, interval, price_type]
 
     if trading_day is not None:
-        clauses.append("trading_day = ?")
+        clauses.append("trading_day = %s")
         params.append(_validate_day(trading_day))
     if start_day is not None:
-        clauses.append("trading_day >= ?")
+        clauses.append("trading_day >= %s")
         params.append(_validate_day(start_day))
     if end_day is not None:
-        clauses.append("trading_day <= ?")
+        clauses.append("trading_day <= %s")
         params.append(_validate_day(end_day))
     if start_utc is not None:
-        clauses.append("timestamp_utc >= ?")
+        clauses.append("timestamp_utc >= %s")
         params.append(start_utc)
     if end_utc is not None:
-        clauses.append("timestamp_utc <= ?")
+        clauses.append("timestamp_utc <= %s")
         params.append(end_utc)
     if session_scope is not None:
-        clauses.append("session_scope = ?")
+        clauses.append("session_scope = %s")
         params.append(session_scope)
 
     query = f"SELECT * FROM bars WHERE {' AND '.join(clauses)} ORDER BY timestamp_utc ASC;"
     try:
         return conn.execute(query, tuple(params)).fetchall()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to retrieve bars: {e}")
         raise
 
@@ -522,23 +523,23 @@ SELECT
     b.contract_id, b.interval, b.price_type, b.trading_day,
     CASE
         WHEN SUM(CASE WHEN b.is_completed = 0 THEN 1 ELSE 0 END) > 0 THEN 'PARTIAL'
-        WHEN COUNT(*) < :threshold THEN 'PARTIAL'
+        WHEN COUNT(*) < %(threshold)s::double precision THEN 'PARTIAL'
         ELSE 'COMPLETE'
     END,
     COUNT(*),
     SUM(CASE WHEN b.session_scope = 'RTH' THEN 1 ELSE 0 END),
     SUM(CASE WHEN b.is_completed = 0 THEN 1 ELSE 0 END),
-    :expected,
+    %(expected)s::integer,
     MIN(b.timestamp_utc), MAX(b.timestamp_utc),
     COALESCE(MIN(b.source), 'IBKR'),
     COALESCE(
         (SELECT s.fetched_at FROM session_days s
           WHERE s.contract_id = b.contract_id AND s.interval = b.interval
             AND s.price_type = b.price_type AND s.trading_day = b.trading_day),
-        datetime('now')
+        now()
     )
 FROM bars b
-WHERE b.interval = :interval AND b.price_type = :price_type
+WHERE b.interval = %(interval)s AND b.price_type = %(price_type)s
 GROUP BY b.contract_id, b.interval, b.price_type, b.trading_day
 ON CONFLICT(contract_id, interval, price_type, trading_day) DO UPDATE SET
     status = excluded.status,
@@ -567,12 +568,12 @@ UPDATE session_days
 """
 
 
-def rebuild_session_days(conn: sqlite3.Connection) -> int:
+def rebuild_session_days(conn: Database) -> int:
     """
     Recomputes the ``session_days`` ledger from the bars actually stored.
 
-    Idempotent repair path, used by migration 0003 and by
-    ``python -m database.backfill``. Days that hold no bars are marked 'EMPTY'
+    Idempotent repair path, used by ``python -m database.migrate_from_sqlite``
+    and ``python -m database.backfill``. Days that hold no bars are marked 'EMPTY'
     rather than dropped, so a recorded "source had nothing" is not lost.
     Returns the number of ledger rows the bars table accounts for.
     """
@@ -594,9 +595,9 @@ def rebuild_session_days(conn: sqlite3.Connection) -> int:
             conn.execute(_LEDGER_MARK_EMPTY)
             indexed = conn.execute(
                 "SELECT COUNT(*) FROM (SELECT 1 FROM bars "
-                "GROUP BY contract_id, interval, price_type, trading_day);"
+                "GROUP BY contract_id, interval, price_type, trading_day) AS days;"
             ).fetchone()[0]
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to rebuild the session_days ledger: {e}")
         raise
     return int(indexed)
@@ -607,7 +608,7 @@ def rebuild_session_days(conn: sqlite3.Connection) -> int:
 # ==========================================
 
 def create_collection_run(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     requested_start_utc: str,
     requested_end_utc: str,
@@ -625,7 +626,8 @@ def create_collection_run(
     INSERT INTO collection_runs (
         contract_id, trading_day, interval, requested_start_utc, requested_end_utc,
         download_status, errors, missing_intervals, last_successful_update
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+    RETURNING run_id;
     """
     missing_json = json.dumps(missing_intervals) if missing_intervals is not None else None
     try:
@@ -634,14 +636,14 @@ def create_collection_run(
                 contract_id, trading_day, interval, requested_start_utc, requested_end_utc,
                 download_status, errors, missing_json,
             ))
-            return cursor.lastrowid
-    except sqlite3.Error as e:
+            return int(cursor.fetchone()[0])
+    except Error as e:
         logger.error(f"Failed to log collection run start: {e}")
         raise
 
 
 def update_collection_run(
-    conn: sqlite3.Connection,
+    conn: Database,
     run_id: int,
     download_status: str,
     errors: Optional[str] = None,
@@ -651,38 +653,38 @@ def update_collection_run(
     """Updates status and logs gaps or error tracebacks upon completion/failure."""
     query = """
     UPDATE collection_runs
-    SET download_status = ?, errors = ?, missing_intervals = ?, bars_written = ?,
-        last_successful_update = datetime('now')
-    WHERE run_id = ?;
+    SET download_status = %s, errors = %s, missing_intervals = %s, bars_written = %s,
+        last_successful_update = now()
+    WHERE run_id = %s;
     """
     missing_json = json.dumps(missing_intervals) if missing_intervals is not None else None
     try:
         with conn:
             conn.execute(query, (download_status, errors, missing_json, bars_written, run_id))
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to update collection run {run_id}: {e}")
         raise
 
 
 def get_collection_runs_for_day(
-    conn: sqlite3.Connection, contract_id: int, trading_day: str
-) -> List[sqlite3.Row]:
+    conn: Database, contract_id: int, trading_day: str
+) -> List[Row]:
     """Every download attempt recorded for one trading day, newest first."""
     return conn.execute(
-        "SELECT * FROM collection_runs WHERE contract_id = ? AND trading_day = ? "
+        "SELECT * FROM collection_runs WHERE contract_id = %s AND trading_day = %s "
         "ORDER BY run_id DESC;",
         (contract_id, _validate_day(trading_day)),
     ).fetchall()
 
 
-def get_latest_collection_run(conn: sqlite3.Connection, contract_id: int) -> Optional[sqlite3.Row]:
+def get_latest_collection_run(conn: Database, contract_id: int) -> Optional[Row]:
     """Retrieves the last recorded run for a contract."""
     try:
         return conn.execute(
-            "SELECT * FROM collection_runs WHERE contract_id = ? ORDER BY run_id DESC LIMIT 1;",
+            "SELECT * FROM collection_runs WHERE contract_id = %s ORDER BY run_id DESC LIMIT 1;",
             (contract_id,),
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to fetch latest run for contract {contract_id}: {e}")
         raise
 
@@ -692,7 +694,7 @@ def get_latest_collection_run(conn: sqlite3.Connection, contract_id: int) -> Opt
 # ==========================================
 
 def save_feature_snapshot(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     timestamp_utc: str,
     previous_rth_high: Optional[float],
@@ -719,7 +721,7 @@ def save_feature_snapshot(
         contract_id, timestamp_utc, previous_rth_high, previous_rth_low, previous_rth_close,
         overnight_high, overnight_low, overnight_range, gap, pre_open_direction,
         historical_volatility, vwap, raw_features, feature_version, data_quality_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT(contract_id, timestamp_utc, feature_version) DO UPDATE SET
         previous_rth_high=excluded.previous_rth_high,
         previous_rth_low=excluded.previous_rth_low,
@@ -732,46 +734,42 @@ def save_feature_snapshot(
         historical_volatility=excluded.historical_volatility,
         vwap=excluded.vwap,
         raw_features=excluded.raw_features,
-        data_quality_status=excluded.data_quality_status;
+        data_quality_status=excluded.data_quality_status
+    RETURNING snapshot_id;
     """
     try:
         with conn:
-            conn.execute(query, (
+            row = conn.execute(query, (
                 contract_id, timestamp_utc, previous_rth_high, previous_rth_low, previous_rth_close,
                 overnight_high, overnight_low, overnight_range, gap, pre_open_direction,
                 historical_volatility, vwap, json.dumps(raw_features), feature_version, data_quality_status,
-            ))
-            row = conn.execute(
-                "SELECT snapshot_id FROM feature_snapshots "
-                "WHERE contract_id = ? AND timestamp_utc = ? AND feature_version = ?;",
-                (contract_id, timestamp_utc, feature_version),
-            ).fetchone()
+            )).fetchone()
             return int(row["snapshot_id"])
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to save feature snapshot: {e}")
         raise
 
 
-def get_feature_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> Optional[sqlite3.Row]:
+def get_feature_snapshot(conn: Database, snapshot_id: int) -> Optional[Row]:
     """Retrieves a feature snapshot by ID."""
     try:
         return conn.execute(
-            "SELECT * FROM feature_snapshots WHERE snapshot_id = ?;", (snapshot_id,)
+            "SELECT * FROM feature_snapshots WHERE snapshot_id = %s;", (snapshot_id,)
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to get snapshot {snapshot_id}: {e}")
         raise
 
 
-def get_latest_feature_snapshot(conn: sqlite3.Connection, contract_id: int) -> Optional[sqlite3.Row]:
+def get_latest_feature_snapshot(conn: Database, contract_id: int) -> Optional[Row]:
     """Retrieves the newest feature snapshot generated for a contract."""
     try:
         return conn.execute(
-            "SELECT * FROM feature_snapshots WHERE contract_id = ? "
+            "SELECT * FROM feature_snapshots WHERE contract_id = %s "
             "ORDER BY timestamp_utc DESC, snapshot_id DESC LIMIT 1;",
             (contract_id,),
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to get latest snapshot for contract {contract_id}: {e}")
         raise
 
@@ -781,7 +779,7 @@ def get_latest_feature_snapshot(conn: sqlite3.Connection, contract_id: int) -> O
 # ==========================================
 
 def save_prediction(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     forecast_cutoff: str,
     snapshot_id: int,
@@ -798,7 +796,8 @@ def save_prediction(
     INSERT INTO predictions (
         contract_id, forecast_cutoff, snapshot_id, model_version, prompt_version,
         opening_bias, scenarios, probabilities, raw_response, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING prediction_id;
     """
     try:
         with conn:
@@ -806,36 +805,36 @@ def save_prediction(
                 contract_id, forecast_cutoff, snapshot_id, model_version, prompt_version,
                 opening_bias, json.dumps(scenarios), json.dumps(probabilities), raw_response, created_at,
             ))
-            return cursor.lastrowid
-    except sqlite3.Error as e:
+            return int(cursor.fetchone()[0])
+    except Error as e:
         logger.error(f"Failed to save prediction: {e}")
         raise
 
 
-def get_prediction(conn: sqlite3.Connection, prediction_id: int) -> Optional[sqlite3.Row]:
+def get_prediction(conn: Database, prediction_id: int) -> Optional[Row]:
     """Retrieves an LLM prediction by its ID."""
     try:
         return conn.execute(
-            "SELECT * FROM predictions WHERE prediction_id = ?;", (prediction_id,)
+            "SELECT * FROM predictions WHERE prediction_id = %s;", (prediction_id,)
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to get prediction {prediction_id}: {e}")
         raise
 
 
-def get_predictions_by_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> List[sqlite3.Row]:
+def get_predictions_by_snapshot(conn: Database, snapshot_id: int) -> List[Row]:
     """Retrieves model predictions associated with a specific feature snapshot."""
     try:
         return conn.execute(
-            "SELECT * FROM predictions WHERE snapshot_id = ? ORDER BY created_at DESC;",
+            "SELECT * FROM predictions WHERE snapshot_id = %s ORDER BY created_at DESC;",
             (snapshot_id,),
         ).fetchall()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to get predictions for snapshot {snapshot_id}: {e}")
         raise
 
 
-def get_evaluations(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+def get_evaluations(conn: Database) -> List[Row]:
     """
     Joins predictions to their realized outcomes for the same contract and
     session date. Used by the evaluation dashboard.
@@ -854,12 +853,12 @@ def get_evaluations(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     FROM predictions p
     INNER JOIN outcomes o
         ON o.contract_id = p.contract_id
-       AND date(o.session_date) = date(p.forecast_cutoff)
+       AND o.session_date = (p.forecast_cutoff AT TIME ZONE 'America/New_York')::date
     ORDER BY p.forecast_cutoff DESC;
     """
     try:
         return conn.execute(query).fetchall()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to load evaluations: {e}")
         raise
 
@@ -869,7 +868,7 @@ def get_evaluations(conn: sqlite3.Connection) -> List[sqlite3.Row]:
 # ==========================================
 
 def save_outcome(
-    conn: sqlite3.Connection,
+    conn: Database,
     contract_id: int,
     session_date: str,
     first_15_minute_high: Optional[float],
@@ -894,7 +893,7 @@ def save_outcome(
         contract_id, session_date, first_15_minute_high, first_15_minute_low, first_15_minute_close,
         first_30_minute_high, first_30_minute_low, first_30_minute_close,
         initial_balance_high, initial_balance_low, rth_high, rth_low, rth_close, raw_outcomes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT(contract_id, session_date) DO UPDATE SET
         first_15_minute_high=excluded.first_15_minute_high,
         first_15_minute_low=excluded.first_15_minute_low,
@@ -907,34 +906,31 @@ def save_outcome(
         rth_high=excluded.rth_high,
         rth_low=excluded.rth_low,
         rth_close=excluded.rth_close,
-        raw_outcomes=excluded.raw_outcomes;
+        raw_outcomes=excluded.raw_outcomes
+    RETURNING outcome_id;
     """
     try:
         with conn:
-            conn.execute(query, (
+            row = conn.execute(query, (
                 contract_id, session_date, first_15_minute_high, first_15_minute_low, first_15_minute_close,
                 first_30_minute_high, first_30_minute_low, first_30_minute_close,
                 initial_balance_high, initial_balance_low, rth_high, rth_low, rth_close,
                 json.dumps(raw_outcomes),
-            ))
-            row = conn.execute(
-                "SELECT outcome_id FROM outcomes WHERE contract_id = ? AND session_date = ?;",
-                (contract_id, session_date),
-            ).fetchone()
+            )).fetchone()
             return int(row["outcome_id"])
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to save realized outcomes: {e}")
         raise
 
 
-def get_outcome(conn: sqlite3.Connection, contract_id: int, session_date: str) -> Optional[sqlite3.Row]:
+def get_outcome(conn: Database, contract_id: int, session_date: str) -> Optional[Row]:
     """Retrieves a session's realized outcomes by contract and YYYY-MM-DD date."""
     try:
         return conn.execute(
-            "SELECT * FROM outcomes WHERE contract_id = ? AND session_date = ?;",
+            "SELECT * FROM outcomes WHERE contract_id = %s AND session_date = %s;",
             (contract_id, session_date),
         ).fetchone()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to get outcome for contract {contract_id} on {session_date}: {e}")
         raise
 
@@ -943,7 +939,7 @@ def get_outcome(conn: sqlite3.Connection, contract_id: int, session_date: str) -
 # 7. ANALOGUE MATCHES TABLE HANDLERS
 # ==========================================
 
-def save_analogue_matches(conn: sqlite3.Connection, prediction_id: int, matches: List[Dict[str, Any]]) -> None:
+def save_analogue_matches(conn: Database, prediction_id: int, matches: List[Dict[str, Any]]) -> None:
     """
     Saves analogue historical session matches to support forecasting transparency.
     Expects matches to contain 'match_date', 'similarity_score', and 'ranking'.
@@ -951,7 +947,7 @@ def save_analogue_matches(conn: sqlite3.Connection, prediction_id: int, matches:
     """
     query = """
     INSERT INTO analogue_matches (prediction_id, match_date, similarity_score, ranking)
-    VALUES (?, ?, ?, ?)
+    VALUES (%s, %s, %s, %s)
     ON CONFLICT(prediction_id, match_date) DO UPDATE SET
         similarity_score=excluded.similarity_score,
         ranking=excluded.ranking;
@@ -963,18 +959,18 @@ def save_analogue_matches(conn: sqlite3.Connection, prediction_id: int, matches:
     try:
         with conn:
             conn.executemany(query, formatted_matches)
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to bulk-save analogue matches: {e}")
         raise
 
 
-def get_analogue_matches(conn: sqlite3.Connection, prediction_id: int) -> List[sqlite3.Row]:
+def get_analogue_matches(conn: Database, prediction_id: int) -> List[Row]:
     """Retrieves historical analogues sorted by closest similarity ranking."""
     try:
         return conn.execute(
-            "SELECT * FROM analogue_matches WHERE prediction_id = ? ORDER BY ranking ASC;",
+            "SELECT * FROM analogue_matches WHERE prediction_id = %s ORDER BY ranking ASC;",
             (prediction_id,),
         ).fetchall()
-    except sqlite3.Error as e:
+    except Error as e:
         logger.error(f"Failed to retrieve matches for prediction {prediction_id}: {e}")
         raise

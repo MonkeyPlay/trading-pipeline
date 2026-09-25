@@ -61,9 +61,9 @@ def _load_bars_df(conn, contract_id, lookback_days):
     return pd.DataFrame([dict(r) for r in rows])
 
 
-def run(db_path, symbol, expiry, model, lookback_days, target_date=None):
-    init_database(db_path=db_path)
-    conn = get_db_connection(db_path)
+def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
+    init_database(dsn)
+    conn = get_db_connection(dsn)
     try:
         contract = get_contract_by_expiry(conn, symbol, expiry)
         if contract is None:
@@ -180,7 +180,7 @@ def run(db_path, symbol, expiry, model, lookback_days, target_date=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run + persist the daily NQ opening forecast")
-    parser.add_argument("--db", default=Config.DB_PATH)
+    parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
     parser.add_argument("--symbol", default="NQ")
     parser.add_argument("--expiry", required=True, help="Contract expiry YYYYMM (e.g. 202609)")
     parser.add_argument("--model", default=Config.LLM_MODEL)

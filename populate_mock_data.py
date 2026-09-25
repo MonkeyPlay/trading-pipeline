@@ -1,14 +1,14 @@
 # populate_mock_data.py
 """
-Populate the SQLite database with realistic mock trading data — bars, feature
+Populate the database with realistic mock trading data — bars, feature
 snapshots, predictions, outcomes and analogue matches — for the last few
 trading days, so the dashboard can be verified without a live IB connection.
 
     python populate_mock_data.py                 # append to the dev DB
     python populate_mock_data.py --reset         # drop & recreate the dev DB first
-    python populate_mock_data.py --db some.db    # target a specific file
+    python populate_mock_data.py --db postgresql://...   # target a specific database
 
-Writes to Config.DEV_DB_PATH by default. Refuses to --reset any database that
+Writes to Config.DEV_DATABASE_URL by default. Refuses to --reset any database that
 contains non-MOCK bars (i.e. real collected data) unless --force is given.
 """
 
@@ -23,7 +23,7 @@ import pytz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database.connection import get_db_connection, init_database, reset_database
+from database.connection import describe_dsn, get_db_connection, init_database, reset_database
 from database.queries import (
     upsert_contract,
     save_bars_by_day,
@@ -106,11 +106,9 @@ def _direction_to_bias(direction):
     return {"UP": "BULLISH", "DOWN": "BEARISH", "FLAT": "NEUTRAL"}[direction]
 
 
-def _assert_mock_safe(db_path):
+def _assert_mock_safe(dsn):
     """Abort if the target DB holds any non-MOCK bars (i.e. real collected data)."""
-    if not os.path.exists(db_path):
-        return
-    conn = get_db_connection(db_path)
+    conn = get_db_connection(dsn)
     try:
         row = conn.execute(
             "SELECT COUNT(*) FROM bars WHERE source IS NOT NULL AND source <> 'MOCK';"
@@ -121,24 +119,24 @@ def _assert_mock_safe(db_path):
         conn.close()
     if row and row[0]:
         raise SystemExit(
-            f"Refusing to --reset '{db_path}': it contains {row[0]} non-MOCK bar(s). "
-            f"Point --db at a scratch file, or pass --force if you really mean it."
+            f"Refusing to --reset '{describe_dsn(dsn)}': it contains {row[0]} non-MOCK bar(s). "
+            f"Point --db at a scratch database, or pass --force if you really mean it."
         )
 
 
-def main(reset=False, db_path=None, force=False):
-    db_path = db_path or Config.DEV_DB_PATH
+def main(reset=False, dsn=None, force=False):
+    dsn = dsn or Config.DEV_DATABASE_URL
 
     if reset:
         if not force:
-            _assert_mock_safe(db_path)
-        logger.info(f"Resetting dev database at {db_path} ...")
-        reset_database(db_path=db_path)
-    elif not os.path.exists(db_path):
-        init_database(db_path=db_path)
+            _assert_mock_safe(dsn)
+        logger.info(f"Resetting dev database at {describe_dsn(dsn)} ...")
+        reset_database(dsn)
+    else:
+        init_database(dsn)
 
-    logger.info(f"Populating mock data into {db_path}")
-    conn = get_db_connection(db_path)
+    logger.info(f"Populating mock data into {describe_dsn(dsn)}")
+    conn = get_db_connection(dsn)
     try:
         upsert_contract(
             conn, contract_id=CONTRACT_ID, symbol="NQ", expiry="202609",
@@ -275,8 +273,8 @@ def main(reset=False, db_path=None, force=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Populate a dev DB with mock data")
-    parser.add_argument("--db", default=None, help=f"Target DB file (default: {Config.DEV_DB_PATH})")
+    parser.add_argument("--db", default=None, help="Target PostgreSQL URL (default: DEV_DATABASE_URL)")
     parser.add_argument("--reset", action="store_true", help="Drop and recreate all tables first")
     parser.add_argument("--force", action="store_true", help="Allow --reset even on a DB with real data")
     args = parser.parse_args()
-    main(reset=args.reset, db_path=args.db, force=args.force)
+    main(reset=args.reset, dsn=args.db, force=args.force)

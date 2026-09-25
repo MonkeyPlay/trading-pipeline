@@ -13,11 +13,15 @@ load_dotenv()
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 class Config:
-    # Database Settings
-    #   DB_PATH     - the long-lived production store (collector + pipeline write here)
-    #   DEV_DB_PATH - throwaway store for populate_mock_data.py / experiments
-    DB_PATH = os.getenv("DB_PATH", "data/trading_pipeline.db")
-    DEV_DB_PATH = os.getenv("DEV_DB_PATH", "data/trading_pipeline.dev.db")
+    # Database Settings (PostgreSQL + TimescaleDB connection URLs)
+    #   DATABASE_URL     - the long-lived production store (collector + pipeline write here)
+    #   DEV_DATABASE_URL - throwaway store for populate_mock_data.py / experiments
+    DATABASE_URL = os.getenv(
+        "DATABASE_URL", "postgresql://trading:trading@localhost:5432/trading_pipeline"
+    )
+    DEV_DATABASE_URL = os.getenv(
+        "DEV_DATABASE_URL", "postgresql://trading:trading@localhost:5432/trading_pipeline_dev"
+    )
     SCHEMA_PATH = os.getenv("SCHEMA_PATH", os.path.join(_PROJECT_ROOT, "database", "schema.sql"))
 
     # IBKR Connection Settings
@@ -39,16 +43,12 @@ class Config:
     @classmethod
     def validate(cls):
         """Validates critical config values."""
-        # Ensure data folder directory exists
-        db_dir = os.path.dirname(cls.DB_PATH)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        
         # Check LLM keys (optional warnings rather than hard crashes)
         if not cls.OPENAI_API_KEY and not cls.ANTHROPIC_API_KEY:
             print("WARNING: Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY found in environment variables.")
 
 if __name__ == "__main__":
     Config.validate()
-    print("Database Path:", Config.DB_PATH)
+    from database.connection import describe_dsn
+    print("Database:", describe_dsn(Config.DATABASE_URL))
     print("IBKR Gateway Port:", Config.IB_PORT)

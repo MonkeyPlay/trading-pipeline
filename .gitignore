@@ -12,7 +12,7 @@ venv/
 .env
 .claude/settings.local.json
 
-# Data stores (generated / large)
+# Data stores (generated / large) — legacy SQLite files kept for migrate_from_sqlite
 data/*.db
 data/*.db-shm
 data/*.db-wal

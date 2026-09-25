@@ -1,0 +1,18 @@
+# Local TimescaleDB for the pipeline:  docker compose up -d
+# Matches the DATABASE_URL / DEV_DATABASE_URL defaults in config.py.
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading
+      POSTGRES_DB: trading_pipeline
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./docker/init-dev-db.sql:/docker-entrypoint-initdb.d/10-init-dev-db.sql:ro
+
+volumes:
+  timescaledb-data:

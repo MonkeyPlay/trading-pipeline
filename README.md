@@ -7,10 +7,10 @@ deterministic baseline) for an opening forecast, scores that forecast against wh
 actually happened, and serves the whole thing in a NiceGUI dashboard drawn with
 TradingView's Lightweight Charts.
 
-Everything runs on your machine against a single SQLite file. No server, no cloud.
+Everything runs on your machine against a local PostgreSQL + TimescaleDB database. No cloud.
 
 ```
-IB Gateway/TWS ──▶ collector ──▶ SQLite ──▶ features ──▶ matching ──▶ forecaster ──▶ SQLite
+IB Gateway/TWS ──▶ collector ──▶ TimescaleDB ──▶ features ──▶ matching ──▶ forecaster ──▶ TimescaleDB
                                     │                                                  │
                                     └──────────────── NiceGUI dashboard ◀─────────────┘
 ```
@@ -23,15 +23,16 @@ source .venv/bin/activate
 python -m dashboard.app        # then open http://127.0.0.1:8080
 ```
 
-That serves the dashboard against whatever is already in `data/trading_pipeline.db`.
+That serves the dashboard against whatever is already in the `trading_pipeline` database
+(`DATABASE_URL`).
 It never needs IB to be running — it only reads stored data. `DASHBOARD_PORT` and
 `DASHBOARD_HOST` override where it listens.
 
 **No data yet?** Seed a throwaway database with realistic fake sessions:
 
 ```bash
-python populate_mock_data.py --reset          # writes data/trading_pipeline.dev.db
-DB_PATH=data/trading_pipeline.dev.db python -m dashboard.app
+python populate_mock_data.py --reset          # writes the trading_pipeline_dev database
+DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_pipeline_dev python -m dashboard.app
 ```
 
 ### First-time setup
@@ -42,10 +43,20 @@ cd trading-pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+docker compose up -d          # local TimescaleDB on 127.0.0.1:5432 (see docker-compose.yml)
 ```
 
-The database is created and migrated automatically on first use — there is no
-separate init step.
+The compose file creates both the `trading_pipeline` and `trading_pipeline_dev`
+databases with the credentials `config.py` defaults to. Any PostgreSQL 14+ server with
+the TimescaleDB extension works — point `DATABASE_URL` at it. The schema is created and
+migrated automatically on first use — there is no separate init step.
+
+**Coming from the SQLite version?** Copy the old file in once (read-only on the SQLite
+side, refuses a target that already holds data):
+
+```bash
+python -m database.migrate_from_sqlite --sqlite data/trading_pipeline.db
+```
 
 ## The three things you can run
 
@@ -121,8 +132,8 @@ Settings come from environment variables or a local `.env`, read by
 
 | Variable | Default | What it does |
 |---|---|---|
-| `DB_PATH` | `data/trading_pipeline.db` | Production store — collector and pipeline write here |
-| `DEV_DB_PATH` | `data/trading_pipeline.dev.db` | Throwaway store for `populate_mock_data.py` |
+| `DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline` | Production store — collector and pipeline write here |
+| `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
 | `IB_CLIENT_ID` | `1` | IB socket client id |
@@ -191,18 +202,21 @@ full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived
 
 ## Database
 
-One SQLite file, upgraded in place and never regenerated. `init_database()` applies any
-pending migrations on every process start, so simply running the app upgrades it.
+PostgreSQL with TimescaleDB, upgraded in place and never regenerated. `init_database()`
+applies any pending migrations on every process start, so simply running the app upgrades
+it. `bars` is a TimescaleDB hypertable chunked weekly on `timestamp_utc`; everything else
+is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
 
 ```bash
 python -m database.migrations                      # show current + pending versions
-python -m database.migrations --db data/x.db       # apply pending migrations
+python -m database.migrations --db postgresql://...  # apply pending migrations
 python -m database.migrations --snapshot           # regenerate database/schema.sql
-python -m database.backfill --ledger-only          # recompute session_days from bars
-./scripts/backup_db.sh                             # timestamped, gzipped backup (30-day retention)
+python -m database.backfill                        # recompute session_days from bars
+python -m database.migrate_from_sqlite --sqlite data/x.db  # one-time import of a SQLite store
+./scripts/backup_db.sh                             # timestamped pg_dump backup (30-day retention)
 ```
 
 Never edit an applied migration or the generated `database/schema.sql` — add a new

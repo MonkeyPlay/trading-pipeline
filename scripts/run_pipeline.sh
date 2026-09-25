@@ -9,7 +9,6 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/pipeline_run.log"
 EXPIRY="${NQ_EXPIRY:-202609}"
-DB_PATH="${DB_PATH:-data/trading_pipeline.db}"
 
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
@@ -27,10 +26,10 @@ log "Starting NQ opening forecast automation (expiry $EXPIRY)..."
 
 # 1. Collect recent 1-minute bars from IB Gateway/TWS.
 log "Fetching recent candles from IB Gateway..."
-python3 -m collector.ib_collector --days 5 --expiry "$EXPIRY" --db "$DB_PATH" >> "$LOG_FILE" 2>&1
+python3 -m collector.ib_collector --days 5 --expiry "$EXPIRY" >> "$LOG_FILE" 2>&1
 
 # 2. Compute features, run the forecast, evaluate prior outcomes, and persist everything.
 log "Running feature + forecast + evaluation pipeline..."
-python3 scripts/daily_forecast.py --expiry "$EXPIRY" --db "$DB_PATH" >> "$LOG_FILE" 2>&1
+python3 scripts/daily_forecast.py --expiry "$EXPIRY" >> "$LOG_FILE" 2>&1
 
 log "Opening forecast pipeline execution completed successfully!"

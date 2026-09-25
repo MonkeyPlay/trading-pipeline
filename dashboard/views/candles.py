@@ -273,7 +273,7 @@ class SessionExplorer:
         self.chart.apply(spec)
 
     def refresh_session(self) -> None:
-        """Reloads the day from SQLite and redraws everything."""
+        """Reloads the day from the database and redraws everything."""
         if self.contract is None or self.date is None:
             return
         self.load_day()
@@ -557,8 +557,8 @@ class SessionExplorer:
         # Analogue candidates: strictly earlier sessions only (no look-ahead).
         candidate_rows = self.conn.execute(
             "SELECT trading_day FROM session_days "
-            "WHERE contract_id = ? AND interval = '1m' AND bar_count > 0 "
-            "  AND trading_day < ? ORDER BY trading_day DESC LIMIT 60",
+            "WHERE contract_id = %s AND interval = '1m' AND bar_count > 0 "
+            "  AND trading_day < %s ORDER BY trading_day DESC LIMIT 60",
             (contract_id, self.date),
         ).fetchall()
 

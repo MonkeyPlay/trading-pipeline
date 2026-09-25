@@ -33,6 +33,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from config import Config
 from database.connection import get_db_connection, init_database
 from database.queries import (
     upsert_contract,
@@ -399,10 +400,10 @@ def _fetch_and_store_day(app, conn, contract_info, day_str, now_utc):
         return None
 
 
-def run_collection_workflow(db_path, host, port, client_id, symbol, expiry, days_to_download,
+def run_collection_workflow(dsn, host, port, client_id, symbol, expiry, days_to_download,
                             gap_fill=True, start=None, end=None, plan_only=False):
-    init_database(db_path=db_path)
-    conn = get_db_connection(db_path)
+    init_database(dsn)
+    conn = get_db_connection(dsn)
 
     app = None
     try:
@@ -497,7 +498,7 @@ def run_collection_workflow(db_path, host, port, client_id, symbol, expiry, days
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trading Pipeline IBKR Historical Data Collector")
-    parser.add_argument("--db", type=str, default="data/trading_pipeline.db", help="Path to SQLite database file")
+    parser.add_argument("--db", type=str, default=Config.DATABASE_URL, help="PostgreSQL connection URL")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="IP address of IB Gateway or TWS")
     parser.add_argument("--port", type=int, default=4002, help="API port (4002 Gateway paper, 4001 Gateway live, 7497 TWS paper)")
     parser.add_argument("--client-id", type=int, default=1, help="Client ID for the socket API connection")
@@ -515,7 +516,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.init_only:
-        init_database(db_path=args.db)
+        init_database(args.db)
         print("Database initialized successfully. Exiting.")
         sys.exit(0)
 
@@ -523,7 +524,7 @@ if __name__ == "__main__":
         parser.error("--expiry is required unless --init-only is specified.")
 
     run_collection_workflow(
-        db_path=args.db, host=args.host, port=args.port, client_id=args.client_id,
+        dsn=args.db, host=args.host, port=args.port, client_id=args.client_id,
         symbol=args.symbol, expiry=args.expiry, days_to_download=args.days,
         gap_fill=not args.full, start=args.start, end=args.end, plan_only=args.plan_only,
     )

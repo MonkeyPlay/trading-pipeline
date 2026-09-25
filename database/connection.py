@@ -1,91 +1,214 @@
 # database/connection.py
 """
-SQLite connection management and schema initialization for the NQ Trading Pipeline.
+PostgreSQL / TimescaleDB connection management for the NQ Trading Pipeline.
 
 Schema is managed exclusively through forward-only migrations
 (``database/migrations/``); see ``database/migrations.py``. An existing database
 is upgraded in place and never regenerated.
+
+The rest of the codebase was written against ``sqlite3`` and keeps that shape:
+``conn.execute(...)`` returns a cursor, ``with conn:`` is one transaction, and
+rows answer to both ``row[0]`` and ``row["column"]``. ``Database`` provides
+exactly that on top of psycopg 3, so query code only differs in its SQL.
+
+Dates and timestamps come back as the same strings the SQLite store held
+('YYYY-MM-DD' and 'YYYY-MM-DD HH:MM:SS' in UTC), and JSON columns as their text,
+so callers that compare or parse those values are unchanged.
 """
 
-import os
-import sqlite3
+import functools
 import logging
+import os
+import threading
+from typing import Any, Optional, Sequence
+
+import psycopg
+from psycopg.adapt import Loader
+from psycopg.types.string import TextLoader
 
 from database.migrations import apply_migrations
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATH = "data/trading_pipeline.db"
+_DEFAULT_DSN = "postgresql://trading:trading@localhost:5432/trading_pipeline"
+
+Error = psycopg.Error
 
 
-def get_db_connection(db_path=_DEFAULT_DB_PATH):
+def default_dsn() -> str:
+    """``DATABASE_URL`` if set, else the local development default."""
+    return os.getenv("DATABASE_URL", _DEFAULT_DSN)
+
+
+class Row(tuple):
+    """A result row readable by position or by column name, like ``sqlite3.Row``."""
+
+    __slots__ = ()
+    _names: Sequence[str] = ()
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            try:
+                return tuple.__getitem__(self, self._names.index(key))
+            except ValueError:
+                raise IndexError(f"No column named {key!r}") from None
+        return tuple.__getitem__(self, key)
+
+    def keys(self):
+        return list(self._names)
+
+
+@functools.lru_cache(maxsize=256)
+def _row_class(names):
+    return type("Row", (Row,), {"__slots__": (), "_names": names})
+
+
+def _row_factory(cursor):
+    if cursor.description is None:
+        return tuple
+    cls = _row_class(tuple(c.name for c in cursor.description))
+    return lambda values: tuple.__new__(cls, values)
+
+
+class _UtcTimestampLoader(Loader):
+    """TIMESTAMPTZ -> 'YYYY-MM-DD HH:MM:SS' (the session time zone is pinned to UTC)."""
+
+    def load(self, data):
+        text = bytes(data).decode()
+        return text[:-3] if text.endswith("+00") else text
+
+
+def _configure_adapters(conn: psycopg.Connection) -> None:
+    conn.adapters.register_loader("date", TextLoader)
+    conn.adapters.register_loader("timestamptz", _UtcTimestampLoader)
+    conn.adapters.register_loader("timestamp", TextLoader)
+    conn.adapters.register_loader("json", TextLoader)
+    conn.adapters.register_loader("jsonb", TextLoader)
+
+
+class Database:
     """
-    Opens a connection with foreign keys on, WAL journaling, and Row results.
+    A psycopg connection with the ``sqlite3.Connection`` surface this project uses.
 
-    ``check_same_thread=False`` is required because the dashboard shares one
-    connection across NiceGUI's worker threads. All writes go through
-    ``with conn:`` transactions, which serialise access.
+    Statements outside ``with conn:`` autocommit. ``with conn:`` opens a
+    transaction that commits on success and rolls back on an exception; nested
+    blocks become savepoints.
+
+    The dashboard shares one connection across NiceGUI's worker threads, so a
+    re-entrant lock is held for every statement and for the whole of a
+    transaction block — one thread's transaction never interleaves another's.
     """
-    db_dir = os.path.dirname(db_path)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-        logger.info(f"Created database directory: {db_dir}")
 
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.row_factory = sqlite3.Row
-    return conn
+    def __init__(self, raw: psycopg.Connection):
+        self.raw = raw
+        self._lock = threading.RLock()
+        self._tx = threading.local()
+
+    # -- statements ---------------------------------------------------------
+
+    def execute(self, query: str, params: Optional[Any] = None) -> psycopg.Cursor:
+        with self._lock:
+            return self.raw.execute(query, params)
+
+    def executemany(self, query: str, params_seq) -> psycopg.Cursor:
+        with self._lock:
+            cur = self.raw.cursor()
+            cur.executemany(query, list(params_seq))
+            return cur
+
+    # -- transactions -------------------------------------------------------
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            stack = getattr(self._tx, "stack", None)
+            if stack is None:
+                stack = self._tx.stack = []
+            tx = self.raw.transaction()
+            tx.__enter__()
+            stack.append(tx)
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return self._tx.stack.pop().__exit__(exc_type, exc, tb)
+        finally:
+            self._lock.release()
+
+    def close(self) -> None:
+        self.raw.close()
+
+    @property
+    def closed(self) -> bool:
+        return self.raw.closed
 
 
-def init_database(db_path=_DEFAULT_DB_PATH, schema_path=None):
+def get_db_connection(dsn: Optional[str] = None) -> Database:
     """
-    Ensures the database exists and is migrated to the latest schema version.
-    Safe to call on every process start. ``schema_path`` is accepted for
-    backwards compatibility and ignored (migrations are authoritative).
+    Opens an autocommit connection whose session time zone is UTC, so naive
+    timestamp strings are read as UTC — the same convention the SQLite store used.
     """
-    conn = get_db_connection(db_path)
+    raw = psycopg.connect(dsn or default_dsn(), autocommit=True, row_factory=_row_factory,
+                          options="-c timezone=UTC")
+    _configure_adapters(raw)
+    return Database(raw)
+
+
+def init_database(dsn: Optional[str] = None, schema_path=None):
+    """
+    Ensures the database is migrated to the latest schema version. Safe to call
+    on every process start. ``schema_path`` is accepted for backwards
+    compatibility and ignored (migrations are authoritative).
+    """
+    conn = get_db_connection(dsn)
     try:
         apply_migrations(conn)
     finally:
         conn.close()
 
 
-def reset_database(db_path=_DEFAULT_DB_PATH):
+def reset_database(dsn: Optional[str] = None):
     """
-    DEV ONLY. Drops every user table, resets the schema version, and re-migrates
-    from scratch. Never call this against a database holding real collected data.
+    DEV ONLY. Drops every table in the current schema (including the migration
+    ledger) and re-migrates from scratch. Never call this against a database
+    holding real collected data.
     """
-    conn = get_db_connection(db_path)
+    conn = get_db_connection(dsn)
     try:
         with conn:
-            conn.execute("PRAGMA foreign_keys = OFF;")
             names = [
                 r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+                    "SELECT tablename FROM pg_tables WHERE schemaname = current_schema();"
                 )
             ]
             for name in names:
-                conn.execute(f"DROP TABLE IF EXISTS {name};")
-            conn.execute("PRAGMA user_version = 0;")
-            conn.execute("PRAGMA foreign_keys = ON;")
+                conn.execute(f'DROP TABLE IF EXISTS "{name}" CASCADE;')
         logger.info(f"Dropped {len(names)} table(s); schema version reset to 0.")
     finally:
         conn.close()
-    init_database(db_path=db_path)
+    init_database(dsn)
+
+
+def describe_dsn(dsn: Optional[str] = None) -> str:
+    """'host:port/dbname' for display, without credentials."""
+    info = psycopg.conninfo.conninfo_to_dict(dsn or default_dsn())
+    host = info.get("host", "localhost")
+    port = info.get("port", "5432")
+    return f"{host}:{port}/{info.get('dbname', '')}"
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    test_db = "data/trading_pipeline_test.db"
+    from database.migrations import get_user_version
+
+    init_database()
+    c = get_db_connection()
     try:
-        init_database(db_path=test_db)
-        c = get_db_connection(test_db)
-        print("schema version:", c.execute("PRAGMA user_version;").fetchone()[0])
-        c.close()
-        print(f"Success! Test database initialized at: {test_db}")
+        print("schema version:", get_user_version(c))
+        print(f"Success! Database at {describe_dsn()} is migrated.")
     finally:
-        for suffix in ("", "-wal", "-shm"):
-            if os.path.exists(test_db + suffix):
-                os.remove(test_db + suffix)
+        c.close()

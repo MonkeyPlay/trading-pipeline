@@ -1,7 +1,7 @@
 # dashboard/app.py
 """
 NiceGUI web application entrypoint for the NQ Opening Forecast System.
-Opens the SQLite connection, applies the shared chrome, and routes the views.
+Opens the database connection, applies the shared chrome, and routes the views.
 
 Run from the project root:  python -m dashboard.app
 """
@@ -21,7 +21,8 @@ from nicegui import app, ui
 from config import Config
 from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
-from database.connection import get_db_connection, init_database
+from database.connection import describe_dsn, get_db_connection, init_database
+from database.migrations import get_user_version
 
 _PAGE_BACKGROUND = "#131722"
 
@@ -30,16 +31,16 @@ _connection = None
 
 def connection():
     """
-    The process-wide SQLite connection.
+    The process-wide database connection.
 
-    Opened lazily on first use and shared by every page: the connection is
-    created with ``check_same_thread=False`` and all writes go through
-    ``with conn:`` transactions, which serialise access.
+    Opened lazily on first use and shared by every page: statements and
+    ``with conn:`` transactions take the connection's lock, which serialises
+    access across NiceGUI's worker threads.
     """
     global _connection
     if _connection is None:
-        init_database(db_path=Config.DB_PATH)  # idempotent: applies pending migrations
-        _connection = get_db_connection(Config.DB_PATH)
+        init_database(Config.DATABASE_URL)  # idempotent: applies pending migrations
+        _connection = get_db_connection(Config.DATABASE_URL)
     return _connection
 
 
@@ -53,11 +54,11 @@ def _close_connection() -> None:
 
 def _db_status(conn) -> str:
     try:
-        version = conn.execute("PRAGMA user_version;").fetchone()[0]
+        version = get_user_version(conn)
         bars = conn.execute("SELECT COUNT(*) FROM bars;").fetchone()[0]
-        return f"{os.path.basename(Config.DB_PATH)} · schema v{version:04d} · {bars:,} bars"
+        return f"{describe_dsn(Config.DATABASE_URL)} · schema v{version:04d} · {bars:,} bars"
     except Exception:
-        return f"{os.path.basename(Config.DB_PATH)} · schema unknown"
+        return f"{describe_dsn(Config.DATABASE_URL)} · schema unknown"
 
 
 def chrome(active: str, conn) -> None:

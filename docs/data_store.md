@@ -5,12 +5,22 @@ belongs to, and each day is written, replaced, and reasoned about as one whole.
 
 ## One growing database, never regenerated
 
-- **Production DB**: `data/trading_pipeline.db` (`Config.DB_PATH`). The collector and
+The store is PostgreSQL with the TimescaleDB extension (`docker compose up -d` runs one
+locally).
+
+- **Production DB**: `trading_pipeline` (`Config.DATABASE_URL`). The collector and
   `scripts/daily_forecast.py` write here. It is append-only in spirit — historical
   bars are immutable once settled.
-- **Dev DB**: `data/trading_pipeline.dev.db` (`Config.DEV_DB_PATH`). `populate_mock_data.py`
+- **Dev DB**: `trading_pipeline_dev` (`Config.DEV_DATABASE_URL`). `populate_mock_data.py`
   writes here. `--reset` refuses to touch any DB that contains non-`MOCK` bars.
-- Point any tool at another file with `--db` or the `DB_PATH` env var.
+- Point any tool at another database with `--db postgresql://...` or the `DATABASE_URL`
+  env var.
+
+`bars` is a TimescaleDB **hypertable** chunked weekly on `timestamp_utc`, so a day's
+delete-and-replace touches one chunk and cross-day range scans prune by time. The rest
+are ordinary tables. `database/connection.py` returns dates as `'YYYY-MM-DD'` and
+timestamps as `'YYYY-MM-DD HH:MM:SS'` (UTC) strings and JSON columns as text, so query
+callers see the same values the SQLite store used to hold.
 
 ## Day-partitioned schema
 
@@ -68,23 +78,26 @@ writes each one through the same path.
 ## Schema migrations
 
 Schema is defined by the ordered files in `database/migrations/` (`NNNN_description.sql`)
-and tracked by `PRAGMA user_version`. Never edit an applied migration or `schema.sql`
-(generated) — add a new migration. A migration may also register Python `PRE_HOOKS` /
-`POST_HOOKS` in `database/migrations.py` for work SQL cannot do (0003 uses both: a
-timezone-aware `trading_day` backfill before, a ledger rebuild after).
+and tracked in the `schema_migrations` table. Never edit an applied migration or
+`schema.sql` (generated) — add a new migration. A migration may also register Python
+`PRE_HOOKS` / `POST_HOOKS` in `database/migrations.py` for work SQL cannot do. Every
+process migrates on start; an advisory lock keeps two of them from applying the same file.
+
+`0001` is the SQLite store's final (v0003) schema restated for Postgres. An existing
+SQLite file is carried over once with `python -m database.migrate_from_sqlite`.
 
 ```
 python -m database.migrations                     # show versions
-python -m database.migrations --db data/x.db      # apply pending migrations
-python -m database.migrations --snapshot          # regenerate database/schema.sql
-python -m database.backfill --db data/x.db        # repair derived data
-python -m database.backfill --ledger-only         # recompute session_days from bars
+python -m database.migrations --db postgresql://...     # apply pending migrations
+python -m database.migrations --snapshot                 # regenerate database/schema.sql
+python -m database.backfill --db postgresql://...        # recompute session_days from bars
+python -m database.migrate_from_sqlite --sqlite data/x.db  # one-time SQLite import
 ```
 
 `init_database()` runs pending migrations on every process start, so upgrading is
 automatic. An existing database is upgraded in place, never dropped.
 
-Run `--ledger-only` if `session_days` and `bars` ever drift apart — the collector
+Run `database.backfill` if `session_days` and `bars` ever drift apart — the collector
 trusts the ledger to decide what to download, so it must agree with what is stored.
 
 ## Incremental collection

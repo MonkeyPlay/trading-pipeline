@@ -1,115 +1,160 @@
 -- 0001_initial_schema.sql
--- The 7 core tables of the NQ Trading Pipeline. Uses IF NOT EXISTS so it is
--- safe to run against a database that predates the migration runner.
+-- Baseline PostgreSQL / TimescaleDB schema for the NQ Trading Pipeline.
+--
+-- This is the SQLite store at its final version (0003, the day-partitioned store)
+-- restated for Postgres. Data from an existing SQLite file is carried over with
+-- python -m database.migrate_from_sqlite.
+--
+--   session_days : one row per (contract, interval, price_type, NY trading day).
+--                  The authoritative ledger of *which days we hold*. The collector
+--                  queries it before contacting IB so that a stored day is never
+--                  downloaded again. A day with no data at the source is recorded
+--                  too (status 'EMPTY').
+--
+--   bars         : a TimescaleDB hypertable chunked on timestamp_utc. Every bar is
+--                  a child of its session_days row (FK, ON DELETE CASCADE), so a bar
+--                  cannot exist outside a registered day and deleting a day removes
+--                  its bars atomically.
 
-CREATE TABLE IF NOT EXISTS contracts (
-    contract_id INTEGER PRIMARY KEY,
-    symbol TEXT NOT NULL,
-    expiry TEXT,
-    sec_type TEXT NOT NULL DEFAULT 'FUT',
-    exchange TEXT NOT NULL,
-    currency TEXT NOT NULL DEFAULT 'USD',
-    tick_size REAL,
-    multiplier TEXT
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+CREATE TABLE contracts (
+    contract_id BIGINT PRIMARY KEY,
+    symbol      TEXT NOT NULL,
+    expiry      TEXT,
+    sec_type    TEXT NOT NULL DEFAULT 'FUT',
+    exchange    TEXT NOT NULL,
+    currency    TEXT NOT NULL DEFAULT 'USD',
+    tick_size   DOUBLE PRECISION,
+    multiplier  TEXT
 );
 
-CREATE TABLE IF NOT EXISTS bars (
-    contract_id INTEGER NOT NULL,
-    timestamp_utc TEXT NOT NULL,
-    interval TEXT NOT NULL,
-    open REAL NOT NULL,
-    high REAL NOT NULL,
-    low REAL NOT NULL,
-    close REAL NOT NULL,
-    volume INTEGER NOT NULL,
-    price_type TEXT NOT NULL,
-    session_scope TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'IBKR',
-    is_completed INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (contract_id, interval, timestamp_utc, price_type, session_scope),
-    FOREIGN KEY (contract_id) REFERENCES contracts(contract_id) ON DELETE CASCADE
+CREATE TABLE session_days (
+    contract_id        BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    interval           TEXT NOT NULL,
+    price_type         TEXT NOT NULL,
+    trading_day        DATE NOT NULL,              -- NY session date
+    status             TEXT NOT NULL,              -- COMPLETE | PARTIAL | EMPTY
+    bar_count          INTEGER NOT NULL DEFAULT 0,
+    rth_bar_count      INTEGER NOT NULL DEFAULT 0,
+    open_bar_count     INTEGER NOT NULL DEFAULT 0, -- bars still flagged is_completed = 0
+    expected_bar_count INTEGER,                    -- rough yardstick used to judge completeness
+    first_bar_utc      TIMESTAMPTZ,
+    last_bar_utc       TIMESTAMPTZ,
+    source             TEXT NOT NULL DEFAULT 'IBKR',
+    fetched_at         TIMESTAMPTZ NOT NULL,       -- when this day was last written
+    PRIMARY KEY (contract_id, interval, price_type, trading_day),
+    CHECK (status IN ('COMPLETE', 'PARTIAL', 'EMPTY'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_bars_timestamp ON bars (timestamp_utc);
-CREATE INDEX IF NOT EXISTS idx_bars_contract_interval ON bars (contract_id, interval);
+CREATE INDEX idx_session_days_day ON session_days (trading_day);
+CREATE INDEX idx_session_days_status ON session_days (contract_id, interval, status);
 
-CREATE TABLE IF NOT EXISTS collection_runs (
-    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contract_id INTEGER NOT NULL,
-    requested_start_utc TEXT NOT NULL,
-    requested_end_utc TEXT NOT NULL,
-    download_status TEXT NOT NULL,
-    errors TEXT,
-    missing_intervals TEXT,
-    last_successful_update TEXT NOT NULL,
-    FOREIGN KEY (contract_id) REFERENCES contracts(contract_id) ON DELETE CASCADE
+CREATE TABLE bars (
+    contract_id   BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    interval      TEXT NOT NULL,
+    price_type    TEXT NOT NULL,
+    trading_day   DATE NOT NULL,                   -- NY session date
+    timestamp_utc TIMESTAMPTZ NOT NULL,            -- hypertable time dimension
+    session_scope TEXT NOT NULL,                   -- derived from timestamp: RTH | ETH
+    open          DOUBLE PRECISION NOT NULL,
+    high          DOUBLE PRECISION NOT NULL,
+    low           DOUBLE PRECISION NOT NULL,
+    close         DOUBLE PRECISION NOT NULL,
+    volume        BIGINT NOT NULL,
+    wap           DOUBLE PRECISION,
+    bar_count     INTEGER,
+    source        TEXT NOT NULL DEFAULT 'IBKR',
+    is_completed  SMALLINT NOT NULL DEFAULT 1,
+    PRIMARY KEY (contract_id, interval, price_type, trading_day, timestamp_utc),
+    FOREIGN KEY (contract_id, interval, price_type, trading_day)
+        REFERENCES session_days (contract_id, interval, price_type, trading_day)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (session_scope IN ('RTH', 'ETH')),
+    CHECK (is_completed IN (0, 1))
 );
 
-CREATE TABLE IF NOT EXISTS feature_snapshots (
-    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contract_id INTEGER NOT NULL,
-    timestamp_utc TEXT NOT NULL,
-    previous_rth_high REAL,
-    previous_rth_low REAL,
-    previous_rth_close REAL,
-    overnight_high REAL,
-    overnight_low REAL,
-    overnight_range REAL,
-    gap REAL,
-    pre_open_direction TEXT,
-    historical_volatility REAL,
-    vwap REAL,
-    raw_features JSON,
-    feature_version TEXT NOT NULL,
-    data_quality_status TEXT NOT NULL,
-    UNIQUE (contract_id, timestamp_utc, feature_version),
-    FOREIGN KEY (contract_id) REFERENCES contracts(contract_id) ON DELETE CASCADE
+-- One chunk per week of bars: ~6.5k one-minute NQ bars per contract, small enough
+-- that a day's delete-and-replace touches a single chunk. Also creates the
+-- timestamp_utc index that cross-day range queries use.
+SELECT create_hypertable('bars', by_range('timestamp_utc', INTERVAL '7 days'));
+
+CREATE TABLE collection_runs (
+    run_id                 BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    contract_id            BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    trading_day            DATE,
+    interval               TEXT,
+    requested_start_utc    TIMESTAMPTZ NOT NULL,
+    requested_end_utc      TIMESTAMPTZ NOT NULL,
+    download_status        TEXT NOT NULL,
+    errors                 TEXT,
+    missing_intervals      JSONB,
+    bars_written           INTEGER,
+    last_successful_update TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_features_timestamp ON feature_snapshots (timestamp_utc);
+CREATE INDEX idx_collection_runs_day ON collection_runs (contract_id, trading_day);
 
-CREATE TABLE IF NOT EXISTS predictions (
-    prediction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contract_id INTEGER NOT NULL,
-    forecast_cutoff TEXT NOT NULL,
-    snapshot_id INTEGER NOT NULL,
-    model_version TEXT NOT NULL,
-    prompt_version TEXT NOT NULL,
-    opening_bias TEXT,
-    scenarios JSON,
-    probabilities JSON,
-    raw_response TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (contract_id) REFERENCES contracts(contract_id) ON DELETE CASCADE,
-    FOREIGN KEY (snapshot_id) REFERENCES feature_snapshots(snapshot_id)
+CREATE TABLE feature_snapshots (
+    snapshot_id           BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    contract_id           BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    timestamp_utc         TIMESTAMPTZ NOT NULL,
+    previous_rth_high     DOUBLE PRECISION,
+    previous_rth_low      DOUBLE PRECISION,
+    previous_rth_close    DOUBLE PRECISION,
+    overnight_high        DOUBLE PRECISION,
+    overnight_low         DOUBLE PRECISION,
+    overnight_range       DOUBLE PRECISION,
+    gap                   DOUBLE PRECISION,
+    pre_open_direction    TEXT,
+    historical_volatility DOUBLE PRECISION,
+    vwap                  DOUBLE PRECISION,
+    raw_features          JSONB,
+    feature_version       TEXT NOT NULL,
+    data_quality_status   TEXT NOT NULL,
+    UNIQUE (contract_id, timestamp_utc, feature_version)
 );
 
-CREATE TABLE IF NOT EXISTS outcomes (
-    outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contract_id INTEGER NOT NULL,
-    session_date TEXT NOT NULL,
-    first_15_minute_high REAL,
-    first_15_minute_low REAL,
-    first_15_minute_close REAL,
-    first_30_minute_high REAL,
-    first_30_minute_low REAL,
-    first_30_minute_close REAL,
-    initial_balance_high REAL,
-    initial_balance_low REAL,
-    rth_high REAL,
-    rth_low REAL,
-    rth_close REAL,
-    raw_outcomes JSON,
-    UNIQUE (contract_id, session_date),
-    FOREIGN KEY (contract_id) REFERENCES contracts(contract_id) ON DELETE CASCADE
+CREATE INDEX idx_features_timestamp ON feature_snapshots (timestamp_utc);
+
+CREATE TABLE predictions (
+    prediction_id   BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    contract_id     BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    forecast_cutoff TIMESTAMPTZ NOT NULL,
+    snapshot_id     BIGINT NOT NULL REFERENCES feature_snapshots (snapshot_id),
+    model_version   TEXT NOT NULL,
+    prompt_version  TEXT NOT NULL,
+    opening_bias    TEXT,
+    scenarios       JSONB,
+    probabilities   JSONB,
+    raw_response    TEXT,
+    created_at      TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS analogue_matches (
-    match_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prediction_id INTEGER NOT NULL,
-    match_date TEXT NOT NULL,
-    similarity_score REAL NOT NULL,
-    ranking INTEGER NOT NULL,
-    UNIQUE (prediction_id, match_date),
-    FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id) ON DELETE CASCADE
+CREATE TABLE outcomes (
+    outcome_id            BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    contract_id           BIGINT NOT NULL REFERENCES contracts (contract_id) ON DELETE CASCADE,
+    session_date          DATE NOT NULL,
+    first_15_minute_high  DOUBLE PRECISION,
+    first_15_minute_low   DOUBLE PRECISION,
+    first_15_minute_close DOUBLE PRECISION,
+    first_30_minute_high  DOUBLE PRECISION,
+    first_30_minute_low   DOUBLE PRECISION,
+    first_30_minute_close DOUBLE PRECISION,
+    initial_balance_high  DOUBLE PRECISION,
+    initial_balance_low   DOUBLE PRECISION,
+    rth_high              DOUBLE PRECISION,
+    rth_low               DOUBLE PRECISION,
+    rth_close             DOUBLE PRECISION,
+    raw_outcomes          JSONB,
+    UNIQUE (contract_id, session_date)
+);
+
+CREATE TABLE analogue_matches (
+    match_id         BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    prediction_id    BIGINT NOT NULL REFERENCES predictions (prediction_id) ON DELETE CASCADE,
+    match_date       DATE NOT NULL,
+    similarity_score DOUBLE PRECISION NOT NULL,
+    ranking          INTEGER NOT NULL,
+    UNIQUE (prediction_id, match_date)
 );
