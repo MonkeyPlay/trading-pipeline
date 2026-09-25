@@ -306,7 +306,6 @@ to the browser.
 
 ## Notes & gotchas
 
-- **Not a git repository.** There is no branch or commit state here.
 - The holiday calendar in [collector/coverage.py](collector/coverage.py) is hand-maintained
   and can be wrong; days already in the ledger are reconsidered so a partial holiday
   session can still be completed.
