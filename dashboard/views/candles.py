@@ -14,7 +14,7 @@ user's zoom, scroll and crosshair exactly where they were.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -26,6 +26,7 @@ from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
     get_bars,
+    get_daily_rth_closes,
     get_day_bars,
     get_outcome,
     get_session_day,
@@ -60,9 +61,32 @@ _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
 # EMAs are past their warm-up and the previous-RTH levels have a prior session to read.
 _INDICATOR_WARMUP_DAYS = 5
 
-# Anchor periods that can sit outside the warm-up window and so need every
-# loaded session to reach their boundary.
+# Anchor periods that can sit outside the warm-up window, so the history for them
+# is loaded back to the start of the period (see ``_period_start``).
 _LONG_ANCHORS = ("Week", "Month", "Quarter", "Year")
+
+# Earlier sessions the forecast searches for analogues (see ``_analogue_candidates``).
+_ANALOGUE_CANDIDATES = 60
+
+
+def _period_start(trading_day: str, period: str) -> str:
+    """First calendar day of the anchor period containing ``trading_day``.
+
+    Matches ``indicator.auto_anchored_vwap._period_keys``, which keys bars by
+    session date: ISO week, calendar month, quarter or year.
+    """
+    d = date.fromisoformat(trading_day)
+    if period == "Week":
+        start = d - timedelta(days=d.isoweekday() - 1)
+    elif period == "Month":
+        start = d.replace(day=1)
+    elif period == "Quarter":
+        start = d.replace(month=3 * ((d.month - 1) // 3) + 1, day=1)
+    elif period == "Year":
+        start = d.replace(month=1, day=1)
+    else:
+        raise ValueError(f"Not a long anchor period: {period!r}")
+    return start.isoformat()
 
 
 def _resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -121,6 +145,9 @@ class SessionExplorer:
         # Loaded per session and reused across indicator changes.
         self.day_df: Optional[pd.DataFrame] = None
         self.recent_bars: Optional[pd.DataFrame] = None
+        # {trading_day: last RTH close} for the whole history up to the displayed
+        # day: historical volatility spans all of it, recent_bars only a window.
+        self.rth_closes: Dict[str, float] = {}
         self.snapshot: Dict[str, Any] = {}
         self.snapshot_is_real = False
         self._warmup_cache: Dict[Any, pd.DataFrame] = {}
@@ -145,14 +172,48 @@ class SessionExplorer:
         df = enrich_candle_timezones(pd.DataFrame([dict(r) for r in rows]))
         self.day_df = calculate_vwap(_resample(df, self.timeframe))
 
-        # The pre-open snapshot needs multi-day history, so pull a wider window.
-        self.recent_bars = pd.DataFrame([
-            dict(r) for r in get_bars(self.conn, contract_id, interval="1m", end_day=self.date)
-        ])
+        # The snapshot and the analogue search need earlier sessions: each candidate
+        # plus the session before it. That window also covers the indicator warm-up.
+        self.recent_bars = self._load_bars(self._history_start())
+        self.rth_closes = get_daily_rth_closes(self.conn, contract_id, interval="1m", end_day=self.date)
         self._compute_snapshot()
 
+    def _analogue_candidates(self) -> List[str]:
+        """The earlier sessions a forecast compares against, newest first (no look-ahead)."""
+        rows = self.conn.execute(
+            "SELECT trading_day FROM session_days "
+            "WHERE contract_id = %s AND interval = '1m' AND bar_count > 0 "
+            "  AND trading_day < %s ORDER BY trading_day DESC LIMIT %s",
+            (self.contract["contract_id"], self.date, _ANALOGUE_CANDIDATES),
+        ).fetchall()
+        return [r["trading_day"] for r in rows]
+
+    def _history_start(self) -> Optional[str]:
+        """
+        First trading day ``recent_bars`` must hold: the session before the oldest
+        analogue candidate (or before the displayed day), since every snapshot reads
+        its previous session's RTH. None when there is nothing earlier to load.
+        """
+        candidates = self._analogue_candidates()
+        oldest = candidates[-1] if candidates else self.date
+        row = self.conn.execute(
+            "SELECT MAX(trading_day) FROM session_days "
+            "WHERE contract_id = %s AND interval = '1m' AND price_type = 'TRADES' "
+            "  AND bar_count > 0 AND trading_day < %s",
+            (self.contract["contract_id"], oldest),
+        ).fetchone()
+        return row[0] or oldest
+
+    def _load_bars(self, start_day: Optional[str]) -> pd.DataFrame:
+        return pd.DataFrame([
+            dict(r) for r in get_bars(
+                self.conn, self.contract["contract_id"], interval="1m",
+                start_day=start_day, end_day=self.date,
+            )
+        ])
+
     def _compute_snapshot(self) -> None:
-        snapshot = calculate_pre_open_snapshot(self.recent_bars, self.date)
+        snapshot = calculate_pre_open_snapshot(self.recent_bars, self.date, self.rth_closes)
         self.snapshot_is_real = bool(snapshot) and "error" not in snapshot
         if self.snapshot_is_real:
             self.snapshot = snapshot
@@ -190,11 +251,27 @@ class SessionExplorer:
         if self.recent_bars is None or self.recent_bars.empty:
             return None
 
-        cache_key = (self.date, self.timeframe, sessions)
+        anchor = self.aavwap.anchor_period if sessions is None else None
+        cache_key = (self.date, self.timeframe, sessions, anchor)
         if cache_key in self._warmup_cache:
             return self._warmup_cache[cache_key]
 
-        enriched = enrich_candle_timezones(self.recent_bars)
+        bars = self.recent_bars
+        if sessions is None:
+            # A long anchor needs every bar since its period began, and one earlier
+            # bar so the boundary itself is visible; a week's margin covers holidays.
+            start = (date.fromisoformat(_period_start(self.date, self.aavwap.anchor_period))
+                     - timedelta(days=7)).isoformat()
+            loaded_from = bars["trading_day"].min()
+            if start < loaded_from:
+                earlier = get_bars(
+                    self.conn, self.contract["contract_id"], interval="1m",
+                    start_day=start, end_day=loaded_from,
+                )
+                earlier = pd.DataFrame([dict(r) for r in earlier if r["trading_day"] < loaded_from])
+                bars = pd.concat([earlier, bars], ignore_index=True) if not earlier.empty else bars
+
+        enriched = enrich_candle_timezones(bars)
         enriched = enriched[enriched["trading_day"] <= self.date]
         days = sorted(enriched["trading_day"].dropna().unique())
         if not days:
@@ -555,17 +632,9 @@ class SessionExplorer:
         """Analogue search plus the model call. Runs off the event loop."""
         contract_id = self.contract["contract_id"]
         # Analogue candidates: strictly earlier sessions only (no look-ahead).
-        candidate_rows = self.conn.execute(
-            "SELECT trading_day FROM session_days "
-            "WHERE contract_id = %s AND interval = '1m' AND bar_count > 0 "
-            "  AND trading_day < %s ORDER BY trading_day DESC LIMIT 60",
-            (contract_id, self.date),
-        ).fetchall()
-
         hist_snapshots = []
-        for row in candidate_rows:
-            day = row["trading_day"]
-            hist = calculate_pre_open_snapshot(self.recent_bars, day)
+        for day in self._analogue_candidates():
+            hist = calculate_pre_open_snapshot(self.recent_bars, day, self.rth_closes)
             if "error" in hist:
                 continue
             outcome = get_outcome(self.conn, contract_id, day)

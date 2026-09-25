@@ -62,11 +62,16 @@ def calculate_vwap(df):
     return df
 
 
-def calculate_pre_open_snapshot(df, target_trading_day):
+def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None):
     """
     Computes a feature snapshot frozen at 09:30 AM ET for a target trading day.
     Requires at least the previous trading day's RTH bars and the current day's
     overnight (pre-09:30 ET) bars.
+
+    Historical volatility is taken over every day before the target. By default
+    those days are the ones in ``df``; pass ``rth_closes`` — ``{trading_day: last
+    RTH close}``, e.g. from ``database.queries.get_daily_rth_closes`` — to take it
+    over a longer history than ``df`` holds.
     """
     if df is None or df.empty:
         return {}
@@ -134,14 +139,17 @@ def calculate_pre_open_snapshot(df, target_trading_day):
     vwap_val = float(pre_open_vwap_rows.iloc[-1]["vwap"]) if not pre_open_vwap_rows.empty else rth_open
 
     # --- Historical volatility: stddev of prior daily RTH log returns ---
-    rth_closes = []
-    for day in all_days[:target_idx]:
-        day_rth = df[(df["trading_day"] == day) & (df["session_scope"] == "RTH")]
-        if not day_rth.empty:
-            rth_closes.append(float(day_rth.iloc[-1]["close"]))
+    if rth_closes is not None:
+        prior_closes = [close for day, close in sorted(rth_closes.items()) if day < target_trading_day]
+    else:
+        prior_closes = []
+        for day in all_days[:target_idx]:
+            day_rth = df[(df["trading_day"] == day) & (df["session_scope"] == "RTH")]
+            if not day_rth.empty:
+                prior_closes.append(float(day_rth.iloc[-1]["close"]))
 
-    if len(rth_closes) >= 3:
-        returns = np.diff(np.log(rth_closes))
+    if len(prior_closes) >= 3:
+        returns = np.diff(np.log(prior_closes))
         volatility = float(np.std(returns))
     else:
         volatility = 0.01

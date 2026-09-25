@@ -558,6 +558,44 @@ def get_bars(
         raise
 
 
+def get_daily_rth_closes(
+    conn: Database,
+    contract_id: int,
+    interval: str = "1m",
+    price_type: str = "TRADES",
+    end_day: Optional[str] = None,
+) -> Dict[str, float]:
+    """
+    ``{trading_day: close of that day's last RTH bar}``, oldest first, for every
+    stored day up to ``end_day``.
+
+    RTH is classified from the timestamp exactly as
+    ``features.session_windows.enrich_candle_timezones`` does (Mon-Fri,
+    09:30-16:00 New York), so this equals the per-day closes that
+    ``calculate_pre_open_snapshot`` would derive from the full bar history —
+    without loading that history. An RTH bar never rolls into the next session,
+    so its trading day is its New York calendar date.
+    """
+    clauses = ["contract_id = %s", "interval = %s", "price_type = %s"]
+    params: List[Any] = [contract_id, interval, price_type]
+    if end_day is not None:
+        clauses.append("trading_day <= %s")
+        params.append(_validate_day(end_day))
+        clauses.append("timestamp_utc < %s")
+        params.append(_day_window(end_day)[1])
+
+    rows = conn.execute(
+        "SELECT DISTINCT ON (ny::date) ny::date AS day, close "
+        "FROM (SELECT timestamp_utc, close, timestamp_utc AT TIME ZONE 'America/New_York' AS ny "
+        f"      FROM bars WHERE {' AND '.join(clauses)}) b "
+        "WHERE extract(isodow FROM ny) < 6 "
+        "  AND ny::time >= '09:30' AND ny::time < '16:00' "
+        "ORDER BY ny::date, timestamp_utc DESC;",
+        tuple(params),
+    ).fetchall()
+    return {r["day"]: float(r["close"]) for r in rows}
+
+
 _LEDGER_UPSERT_FROM_BARS = """
 INSERT INTO session_days (
     contract_id, interval, price_type, trading_day, status, bar_count, rth_bar_count,
