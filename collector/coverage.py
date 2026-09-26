@@ -17,7 +17,7 @@ Upgrade path for the holiday calendar: replace ``_CME_HOLIDAYS`` /
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from database.queries import expected_bars_for, get_stored_trading_days
 
@@ -67,6 +67,14 @@ def expected_trading_days(start: date, end: date) -> List[date]:
     return out
 
 
+def previous_trading_day(d: date) -> date:
+    """The last trading day strictly before ``d``."""
+    d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
 def plan_trading_days(
     conn,
     contract_id: int,
@@ -77,6 +85,8 @@ def plan_trading_days(
     rth_only: bool = False,
     force: bool = False,
     trailing_days: int = REFRESH_TRAILING_DAYS,
+    expected: Optional[int] = None,
+    extra_days: Iterable[date] = (),
 ) -> List[DayPlan]:
     """
     Decides, for every expected trading day in [start, end], whether it must be
@@ -87,14 +97,19 @@ def plan_trading_days(
       ok       - already stored; skip it
 
     ``force=True`` re-downloads the whole window (the collector's ``--full``).
+    ``expected`` is the instrument's own bar yardstick (default: the futures one).
+    ``extra_days`` are planned too although they lie outside [start, end] - the
+    collector uses it for the reference day before a contract becomes active.
     A day the source had no data for is stored as 'EMPTY' and treated as ``ok``:
     we asked once, and asking again every run would just burn the pacing budget.
     """
+    extra = {d for d in extra_days if not (start <= d <= end)}
     ledger = get_stored_trading_days(
         conn, contract_id, interval=interval, price_type=price_type,
-        start=start.isoformat(), end=end.isoformat(),
+        start=min([start, *extra]).isoformat(), end=max([end, *extra]).isoformat(),
     )
-    expected = expected_bars_for(interval, rth_only=rth_only)
+    if expected is None:
+        expected = expected_bars_for(interval, rth_only=rth_only)
     trailing_cutoff = datetime.now(timezone.utc).date() - timedelta(days=trailing_days)
 
     # The holiday list is hand-maintained and can be wrong (CME runs shortened
@@ -102,7 +117,8 @@ def plan_trading_days(
     # the market traded, so consider it even if the calendar excludes it —
     # otherwise a partial holiday session could never be completed.
     candidates = {d.isoformat() for d in expected_trading_days(start, end)}
-    candidates.update(ledger.keys())
+    candidates.update(k for k in ledger if start.isoformat() <= k <= end.isoformat())
+    candidates.update(d.isoformat() for d in extra)
 
     plan = []
     for key in sorted(candidates):

@@ -7,26 +7,36 @@ deterministic baseline) for an opening forecast, scores that forecast against wh
 actually happened, and serves the whole thing in a NiceGUI dashboard drawn with
 TradingView's Lightweight Charts.
 
-Four instruments are tracked out of the box:
+Ten instruments are collected out of the box:
 
-| Symbol | Instrument | Tick | Multiplier | Role |
-|---|---|---|---|---|
-| `ES` | S&P 500 E-mini | 0.25 | 50 | forecast target |
-| `NQ` | Nasdaq-100 E-mini | 0.25 | 20 | forecast target |
-| `RTY` | Russell 2000 E-mini | 0.10 | 50 | forecast target |
-| `VIX` | CBOE Volatility Index | 0.01 | — | pre-open context |
+| Symbol | Instrument | IB type | Role |
+|---|---|---|---|
+| `ES` | S&P 500 E-mini | FUT, rolls quarterly | forecast target |
+| `NQ` | Nasdaq-100 E-mini | FUT, rolls quarterly | forecast target |
+| `RTY` | Russell 2000 E-mini | FUT, rolls quarterly | forecast target |
+| `VIX` | Cboe Volatility Index (spot) | IND | intermarket context |
+| `VXN` | Cboe Nasdaq-100 Volatility Index (spot) | IND | intermarket context |
+| `TNX` | Cboe 10-Year Treasury Yield Index (yield × 10) | IND | intermarket context |
+| `DX` | US Dollar Index future (ICE) — DXY proxy | FUT, rolls quarterly | intermarket context |
+| `SMH` | VanEck Semiconductor ETF | STK | intermarket context |
+| `10Y` | Micro 10-Year Yield future (quoted in yield) | FUT, rolls monthly | intermarket context |
+| `2YY` | Micro 2-Year Yield future (quoted in yield) | FUT, rolls monthly | intermarket context |
+
+`GC` (gold) and `CL` (WTI crude) are defined too but only collected once added to
+`CONTEXT_SYMBOLS`. See [Intermarket sources](#intermarket-sources) for how each logical
+asset maps onto these.
 
 The three futures share the same RTH window, the same 18:00 ET Globex roll and the same
 holiday calendar, so the session and coverage logic is identical for each. Each is
 forecast **independently** — analogues for ES are drawn only from past ES sessions, never
 across instruments. `SYMBOLS` selects which ones run.
 
-**VIX is context, not a target.** It is the cash index rather than a future: no expiry, no
-volume, `sec_type = 'IND'`. It is collected like anything else, but instead of being
-forecast it contributes the pre-open VIX level and its change from the prior close to
+**Context instruments are never forecast.** VIX, for instance, is the cash index rather
+than a future: no expiry, no volume, `sec_type = 'IND'`. It is collected like anything
+else, but instead of being forecast it contributes the pre-open VIX level and its change from the prior close to
 *every* futures snapshot (`vix_pre_open`, `vix_change`), and those reach the model in the
 prompt. `CONTEXT_SYMBOLS` controls this set. Because nothing on the Session Explorer page
-applies to an index, cash indices are left out of its contract picker.
+applies to a context instrument, they are left out of its contract picker.
 
 If VIX has not been collected, the columns stay NULL and the prompt simply omits the line —
 a missing feed never blocks a forecast or reports a stale level.
@@ -137,8 +147,27 @@ python -m collector.ib_collector --start 2026-08-01 --end 2026-08-31
 python -m collector.ib_collector --days 30 --full                 # re-download everything
 ```
 
-With no `--symbol` it collects everything in `SYMBOLS`, and with no `--expiry` each symbol
-resolves its own contract month (see [Configuration](#configuration)).
+With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`.
+
+**Futures follow their front contract.** Each future has a roll rule in `config.py`
+(equity indices: the quarterly contract, rolling 8 days before expiry). The collector asks
+IB once for the whole contract chain, expired contracts included, and fetches every
+trading day from the contract that was front *on that day*. It also stores the trading
+day before each contract becomes active, so the first day after a roll still has a
+same-contract previous close. The choice is recorded per day in `active_contracts`.
+`--expiry 202609` (or `NQ_EXPIRY=202609` for one symbol) pins a single contract instead.
+
+**Backfill before relying on standardized features.** The z-scored intermarket features
+need the prior 60 same-window returns, i.e. about three months of history for every
+context instrument. Once:
+
+```bash
+python -m collector.ib_collector --days 100      # ~70 trading days, across the last roll
+```
+
+That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
+requests / 10 min), so ten instruments take a couple of hours. Later runs only fetch the
+new and trailing days.
 
 **All symbols go through one IB connection**, which matters: the request pacer that keeps
 you under IB's historical-data rate limit lives on that connection. Running one process
@@ -183,6 +212,16 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
+**The intermarket features read the 09:28 ET closes**, which a 09:15 run has not seen yet.
+To have them in the store, also collect once they exist:
+
+```cron
+29 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.ib_collector --days 5 >> logs/pipeline_run.log 2>&1
+```
+
+Collecting after the open adds no look-ahead: features select bars by timestamp
+(`get_last_bar_at_or_before`), never by what happens to be stored.
+
 It covers every symbol in `SYMBOLS`, and hands the whole list to each step in one process
 so the collector's rate-limit pacing stays accurate and one instrument's missing data does
 not suppress the others' forecasts.
@@ -197,9 +236,9 @@ Settings come from environment variables or a local `.env`, read by
 | `DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline` | Production store — collector and pipeline write here |
 | `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
 | `SYMBOLS` | `ES,NQ,RTY` | Instruments that are forecast, in order |
-| `CONTEXT_SYMBOLS` | `VIX` | Collected as pre-open context only; never forecast |
-| `EXPIRY` | `202612` | Contract month shared by the futures (they use one quarterly cycle) |
-| `<SYMBOL>_EXPIRY` | — | Overrides `EXPIRY` for one instrument, e.g. `RTY_EXPIRY=202612` mid-roll |
+| `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,2YY` | Collected as intermarket context only; never forecast |
+| `EXPIRY` | `202612` | Contract month the forecast and dashboard read; the collector follows each roll rule regardless |
+| `<SYMBOL>_EXPIRY` | — | Pins one future everywhere, collector included, e.g. `RTY_EXPIRY=202612` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
 | `IB_CLIENT_ID` | `1` | IB socket client id |
@@ -212,14 +251,15 @@ Settings come from environment variables or a local `.env`, read by
 ```bash
 # .env
 SYMBOLS=ES,NQ,RTY
-CONTEXT_SYMBOLS=VIX
+CONTEXT_SYMBOLS=VIX,VXN,TNX,DX,SMH,10Y,2YY
 EXPIRY=202612
 LLM_MODEL=gpt-4o-mini
 OPENAI_API_KEY=sk-...
 ```
 
 **Adding another instrument** means one entry in `INSTRUMENTS` in [config.py](config.py)
-(symbol, display name, exchange, tick size, multiplier, and `sec_type` for a non-future),
+(symbol, display name, exchange, tick size, multiplier, `sec_type` for a non-future, a
+`RollRule` for a future, the unit its values come in, and a rough bar count per day),
 then adding the symbol to `SYMBOLS` or `CONTEXT_SYMBOLS`. Nothing else is symbol-specific:
 the `contracts` table already keys everything by contract, and the collector reads tick
 size and multiplier back from IB. A non-CME or non-equity-index future would also need the
@@ -236,6 +276,48 @@ Check what config resolves to:
 ```bash
 python config.py
 ```
+
+## Intermarket sources
+
+The pre-open intermarket features are defined over **logical assets** (`nq`, `es`, `vix`,
+`us10y`, ...). `ASSET_SOURCES` in [config.py](config.py) maps each one to the instrument
+actually recorded, with its freshness rule, and the collector registers that map in the
+`asset_sources` table on every run (a changed definition becomes a new row, so every
+version a feature could have used stays on record). `python config.py` prints it.
+
+| Asset | Recorded as | Unit | Freshness | Notes |
+|---|---|---|---|---|
+| `nq`, `es`, `rty` | NQ / ES / RTY front future | price | 5 min | |
+| `vix` | VIX spot index | index points | 15 min | printed in Cboe's global hours and RTH |
+| `vxn` | VXN spot index | index points | 15 min | may print in RTH only — then pre-open is null, not carried |
+| `us10y` | TNX | percent × 10 (1 unit = 10 bps) | 30 min | |
+| `us2y` | — | | | **unmapped**: IB has no spot 2-year yield history, so this stays null |
+| `dxy` | DX front future | price | 30 min | **proxy**: ICE does not license the DXY index to IB |
+| `smh` | SMH | price | 30 min | premarket trades included (`useRTH=0`) |
+| `us10y_yield_fut`, `us2y_yield_fut` | 10Y / 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset names |
+| `gc`, `cl` | GC / CL front future | price | 10 min | optional, not collected by default |
+
+What the store guarantees for these features:
+
+- **Only genuine prints.** Bars are stored exactly as IB sends them; a minute without a
+  print is absent, never forward-filled. `bars.timestamp_utc` is the bar's *open* time, so
+  the "09:28 close" is the close of the bar stamped 09:27, and a value's age is the
+  distance from its bar's close to the instant it stands for.
+- **One contract per future per day.** `active_contracts` says which contract stood for a
+  symbol on each trading day, and the day before each activation is stored too, so a
+  pre-open value and its previous-RTH-close reference always come from the same contract.
+- **Units configured once.** Each instrument's `value_unit` (and for yields
+  `bps_per_unit`) is recorded with the source. A day whose median value is implausible
+  for the configured unit (e.g. TNX arriving as plain percent) is refused, not stored.
+- **No implicit substitution.** An asset without a source (`us2y`) has no row to fall back
+  on; proxies are flagged `is_proxy` and futures-yield proxies carry their own names.
+
+`database/queries.py` has the read primitives: `get_active_contract(conn, symbol, day)`,
+`get_last_bar_at_or_before(conn, contract_id, as_of_utc)` (last *closed* bar, with its
+close time) and `get_asset_sources(conn)`.
+
+Breadth (historical-constituent advance/decline) is not collected: it needs historical
+index membership and per-constituent data, which nothing here records.
 
 ## How a forecast is built
 
@@ -286,10 +368,13 @@ it. `bars` is a TimescaleDB hypertable chunked monthly (30 days) on `timestamp_u
 is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
-`collection_runs`, `feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
+`collection_runs`, `active_contracts` (the contract that stood for each symbol per day),
+`asset_sources` (the logical-asset source map, versioned), `feature_snapshots`,
+`predictions`, `analogue_matches`, `outcomes`.
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
-ES and RTY needed no migration — only the VIX context columns did (`0002`). It does roughly
+ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll
+and source bookkeeping for the intermarket context (`0003`). It does roughly
 quadruple the stored volume against a single-symbol history: budget about 5 MB per contract
 per month of 1-minute bars.
 

@@ -125,10 +125,11 @@ opening a socket**:
    `collection_runs` (`trading_day`, `interval`, `bars_written`).
 
 ```
-python -m collector.ib_collector --expiry 202609 --days 30 --plan-only   # report only
-python -m collector.ib_collector --expiry 202609 --days 30               # fill the gaps
-python -m collector.ib_collector --expiry 202609 --start 2026-08-01 --end 2026-08-31
-python -m collector.ib_collector --expiry 202609 --days 30 --full        # re-download all
+python -m collector.ib_collector --days 30 --plan-only                   # report only
+python -m collector.ib_collector --days 30                               # fill the gaps
+python -m collector.ib_collector --start 2026-08-01 --end 2026-08-31
+python -m collector.ib_collector --days 30 --full                        # re-download all
+python -m collector.ib_collector --expiry 202609 --days 30 --symbol NQ   # one pinned contract
 ```
 
 The holiday calendar is hand-maintained and can be wrong, so any day already in the
@@ -136,6 +137,51 @@ ledger is also considered — a partial holiday session can still be completed.
 
 Minute-level gap filling is intentionally not done: thin overnight periods have no
 trades, so a missing minute is not a reliable signal. Days are.
+
+### Futures rolls and `active_contracts`
+
+A future with a `RollRule` (`config.INSTRUMENTS`) is collected as a chain rather than
+one contract. The collector asks IB once for every listed and recently expired contract
+(`includeExpired`), stores them all in `contracts` (with `contract_month`, trading and
+liquid hours, time zone), and assigns each trading day the nearest eligible contract whose
+expiry is more than the rule's `days_before_expiry` away (`collector/rolls.py`). Then:
+
+- every day is fetched from the contract active on it, and
+- the trading day **before** each contract becomes active (or before the window starts)
+  is fetched from that contract too, so the first day after a roll still has a
+  same-contract previous close. A return never mixes two expiries.
+
+The day → contract map is written to `active_contracts (symbol, trading_day,
+contract_id, rule)`; single-contract instruments (indices, stocks) get rows too, so it is
+the one place a feature looks up "which contract was NQ on this day". Once the chain is
+stored, planning is offline again; the chain is re-discovered only when it no longer
+covers the window (a new roll ahead). `--expiry` / `<SYMBOL>_EXPIRY` pin one contract
+and leave `active_contracts` untouched. `--plan-only` writes nothing.
+
+Expected bars per day, and therefore `COMPLETE` vs `PARTIAL`, come from each
+instrument's `expected_bars` rather than the futures constant: a spot index or an ETF
+prints far fewer minutes than an 18:00–17:00 futures session and would otherwise stay
+`PARTIAL` and be re-downloaded on every run. `database.backfill` keeps each day's own
+expected count.
+
+### Source map, units and bar timestamps
+
+`asset_sources` holds every version of `config.ASSET_SOURCES` — logical asset → recorded
+symbol, `what_to_show`, `value_kind`, `value_unit`, `bps_per_unit`, the freshness rule
+`max_age_minutes`, proxy flag, and whether the symbol is in the configured collection
+set. The collector registers it at the start of every run; an unchanged definition only
+refreshes `last_registered_at`, a changed one becomes a new row. `current_asset_sources`
+is the latest definition per asset.
+
+`bars.timestamp_utc` is the bar's **open** time (IB's convention): the 1-minute bar
+stamped 09:27 ET closes at 09:28 ET. Bars are exactly what IB sent — a minute without a
+print is absent, never forward-filled — so the age of any value is recoverable.
+`get_last_bar_at_or_before(conn, contract_id, as_of_utc)` returns the last bar that had
+*closed* by an instant, with its `close_time_utc`.
+
+A day whose median close falls outside the instrument's `plausible_range` is refused
+(logged as a `FAILED` collection run), since it almost always means `value_unit` does not
+match what the source sends.
 
 ### Reading days back
 
@@ -145,6 +191,9 @@ get_bars(conn, cid, "1m", start_day="2026-09-01", end_day="2026-09-08")
 get_stored_trading_days(conn, cid)                        # {day: ledger row}
 list_trading_days(conn, cid, limit=100)                   # days holding bars, newest first
 get_session_day(conn, cid, "2026-09-08")                  # one ledger row
+get_active_contract(conn, "NQ", "2026-09-08")             # contract that stood for NQ that day
+get_last_bar_at_or_before(conn, cid, "2026-09-08 13:28:00")  # last bar closed by 09:28 ET
+get_asset_sources(conn)                                   # {asset: current source definition}
 ```
 
 ### Upgrade path
@@ -152,7 +201,7 @@ get_session_day(conn, cid, "2026-09-08")                  # one ledger row
 - Holiday calendar: swap the hand-maintained `_CME_HOLIDAYS` in `collector/coverage.py`
   for `pandas_market_calendars` (`CME_Equity`), including half-days — and derive
   per-day expected bar counts from it instead of one constant.
-- Continuous contract: when multiple expiries accumulate, build a derived
-  `bars_continuous` table from `bars` + a `contract_rolls` table (do not hand-edit).
+- Continuous contract: `active_contracts` already records the roll per day; a derived
+  `bars_continuous` series can be built from it and `bars` (do not hand-edit).
 - Other intervals: `session_days` is keyed by `interval`, so 5m/15m series coexist
   with 1m without any schema change.

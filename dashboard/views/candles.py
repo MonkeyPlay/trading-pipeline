@@ -114,9 +114,12 @@ def _cutoff_utc_iso(session_date: str) -> str:
     return NY_TZ.localize(datetime(d.year, d.month, d.day, 9, 30)).astimezone(pytz.utc).isoformat()
 
 
-def _is_cash_index(symbol: str) -> bool:
+def _is_context_only(symbol: str) -> bool:
+    """Collected as intermarket context (VIX, TNX, DX, SMH, ...) rather than forecast."""
+    if symbol in Config.SYMBOLS:
+        return False
     instrument = Config.instrument(symbol)
-    return instrument is not None and instrument.is_index
+    return symbol in Config.CONTEXT_SYMBOLS or (instrument is not None and not instrument.is_future)
 
 
 def _safe(value, default=0.0):
@@ -137,13 +140,14 @@ class SessionExplorer:
 
     def __init__(self, conn) -> None:
         self.conn = conn
-        # Cash indices (VIX) are collected as pre-open context, not forecast, and every
-        # control on this page — snapshot, analogues, forecast — assumes a future. They
-        # feed in through the snapshot instead of being selectable here.
+        # Context instruments are collected, not forecast, and every control on this
+        # page — snapshot, analogues, forecast — assumes a forecast target. They feed in
+        # through the snapshot instead. The collector also records whole futures chains
+        # to plan rolls, so only contracts that actually hold bars are offered.
         self.contracts = {
             f"{c['symbol']} ({c['expiry']})": c
-            for c in list_contracts(conn)
-            if not _is_cash_index(c["symbol"])
+            for c in list_contracts(conn, with_data_only=True)
+            if not _is_context_only(c["symbol"])
         }
 
         self.contract = None

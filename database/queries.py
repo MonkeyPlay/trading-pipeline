@@ -6,6 +6,7 @@ all 7 core database tables, with strict typing, parameterized inputs,
 and JSON handling for document storage fields.
 """
 
+import hashlib
 import json
 import re
 import logging
@@ -30,14 +31,25 @@ def upsert_contract(
     tick_size: Optional[float] = None,
     multiplier: Optional[str] = None,
     sec_type: str = "FUT",
+    contract_month: Optional[str] = None,
+    local_symbol: Optional[str] = None,
+    trading_class: Optional[str] = None,
+    primary_exchange: Optional[str] = None,
+    time_zone_id: Optional[str] = None,
+    trading_hours: Optional[str] = None,
+    liquid_hours: Optional[str] = None,
 ) -> None:
     """
-    Inserts or updates a contract. Enables unique contract tracking for futures
-    by ensuring each contract_id represents a separate NQ expiry.
+    Inserts or updates a contract; each contract_id is one expiry of one symbol.
+
+    The IB detail fields (contract month, hours, ...) are optional: a caller that
+    does not know them leaves whatever an earlier IB resolution stored.
     """
     query = """
-    INSERT INTO contracts (contract_id, symbol, expiry, sec_type, exchange, currency, tick_size, multiplier)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO contracts (contract_id, symbol, expiry, sec_type, exchange, currency, tick_size,
+                           multiplier, contract_month, local_symbol, trading_class,
+                           primary_exchange, time_zone_id, trading_hours, liquid_hours, updated_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
     ON CONFLICT(contract_id) DO UPDATE SET
         symbol=excluded.symbol,
         expiry=excluded.expiry,
@@ -45,11 +57,23 @@ def upsert_contract(
         exchange=excluded.exchange,
         currency=excluded.currency,
         tick_size=excluded.tick_size,
-        multiplier=excluded.multiplier;
+        multiplier=excluded.multiplier,
+        contract_month=COALESCE(excluded.contract_month, contracts.contract_month),
+        local_symbol=COALESCE(excluded.local_symbol, contracts.local_symbol),
+        trading_class=COALESCE(excluded.trading_class, contracts.trading_class),
+        primary_exchange=COALESCE(excluded.primary_exchange, contracts.primary_exchange),
+        time_zone_id=COALESCE(excluded.time_zone_id, contracts.time_zone_id),
+        trading_hours=COALESCE(excluded.trading_hours, contracts.trading_hours),
+        liquid_hours=COALESCE(excluded.liquid_hours, contracts.liquid_hours),
+        updated_at=excluded.updated_at;
     """
     try:
         with conn:
-            conn.execute(query, (contract_id, symbol, expiry, sec_type, exchange, currency, tick_size, multiplier))
+            conn.execute(query, (
+                contract_id, symbol, expiry, sec_type, exchange, currency, tick_size, multiplier,
+                contract_month, local_symbol, trading_class, primary_exchange, time_zone_id,
+                trading_hours, liquid_hours,
+            ))
         logger.debug(f"Contract {contract_id} ({symbol}{expiry or ''}) upserted successfully.")
     except Error as e:
         logger.error(f"Failed to upsert contract {contract_id}: {e}")
@@ -98,13 +122,110 @@ def get_contract_by_expiry(conn: Database, symbol: str, expiry: Optional[str]) -
         raise
 
 
-def list_contracts(conn: Database) -> List[Row]:
-    """Lists all monitored contracts in the database."""
+def list_contracts(conn: Database, with_data_only: bool = False) -> List[Row]:
+    """
+    Lists contracts in the database. The collector records a future's whole
+    contract chain to plan its rolls, so most of those rows hold no bars;
+    ``with_data_only`` keeps just the contracts that have at least one stored bar.
+    """
+    where = (" WHERE EXISTS (SELECT 1 FROM session_days s "
+             "WHERE s.contract_id = contracts.contract_id AND s.bar_count > 0)") if with_data_only else ""
     try:
-        return conn.execute("SELECT * FROM contracts ORDER BY symbol, expiry;").fetchall()
+        return conn.execute(f"SELECT * FROM contracts{where} ORDER BY symbol, expiry;").fetchall()
     except Error as e:
         logger.error(f"Failed to list contracts: {e}")
         raise
+
+
+def list_future_chain(conn: Database, symbol: str) -> List[Row]:
+    """Every stored contract of a futures symbol, nearest expiry first."""
+    return conn.execute(
+        "SELECT * FROM contracts WHERE symbol = %s AND sec_type = 'FUT' AND expiry IS NOT NULL "
+        "ORDER BY expiry ASC;",
+        (symbol,),
+    ).fetchall()
+
+
+# ------------------------------------------
+# Active contract per symbol and trading day
+# ------------------------------------------
+
+def set_active_contracts(conn: Database, symbol: str, assignments: Dict[str, int], rule: str) -> int:
+    """
+    Records which contract stands for ``symbol`` on each trading day, as
+    ``{'YYYY-MM-DD': contract_id}``. Re-assigning a day replaces its row, so a
+    changed roll rule takes effect the next time the collector plans that day.
+    """
+    rows = [(symbol, _validate_day(day), int(cid), rule) for day, cid in sorted(assignments.items())]
+    if not rows:
+        return 0
+    try:
+        with conn:
+            conn.executemany(
+                "INSERT INTO active_contracts (symbol, trading_day, contract_id, rule, assigned_at) "
+                "VALUES (%s, %s, %s, %s, now()) "
+                "ON CONFLICT (symbol, trading_day) DO UPDATE SET "
+                "    contract_id = excluded.contract_id, rule = excluded.rule, "
+                "    assigned_at = excluded.assigned_at;",
+                rows,
+            )
+    except Error as e:
+        logger.error(f"Failed to record active contracts for {symbol}: {e}")
+        raise
+    return len(rows)
+
+
+def get_active_contract(conn: Database, symbol: str, trading_day: str) -> Optional[Row]:
+    """
+    The contract that stood for ``symbol`` on ``trading_day`` (joined with its
+    contract row), or None if the collector never assigned one.
+    """
+    return conn.execute(
+        "SELECT a.trading_day, a.rule, c.* FROM active_contracts a "
+        "JOIN contracts c ON c.contract_id = a.contract_id "
+        "WHERE a.symbol = %s AND a.trading_day = %s;",
+        (symbol, _validate_day(trading_day)),
+    ).fetchone()
+
+
+# ------------------------------------------
+# Logical asset -> recorded instrument map
+# ------------------------------------------
+
+def register_asset_sources(conn: Database, sources: List[Dict[str, Any]]) -> None:
+    """
+    Stores the current source definition of each logical asset. A definition is
+    identified by the hash of its fields: an unchanged one only has its
+    ``last_registered_at`` refreshed, a changed one becomes a new row, so every
+    definition a feature may have been built under stays on record.
+    """
+    fields = ("symbol", "sec_type", "exchange", "what_to_show", "value_kind", "value_unit",
+              "bps_per_unit", "max_age_minutes", "roll_rule", "is_proxy", "optional",
+              "collected", "description", "notes")
+    rows = []
+    for src in sources:
+        payload = {f: src.get(f) for f in fields}
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+        rows.append({"asset": src["asset"], "config_hash": digest, **payload})
+
+    cols = ("asset", "config_hash") + fields
+    try:
+        with conn:
+            conn.executemany(
+                f"INSERT INTO asset_sources ({', '.join(cols)}) "
+                f"VALUES ({', '.join(f'%({c})s' for c in cols)}) "
+                "ON CONFLICT (asset, config_hash) DO UPDATE SET last_registered_at = now();",
+                rows,
+            )
+    except Error as e:
+        logger.error(f"Failed to register asset sources: {e}")
+        raise
+
+
+def get_asset_sources(conn: Database) -> Dict[str, Row]:
+    """``{asset: row}`` for the definition each asset is currently collected under."""
+    rows = conn.execute("SELECT * FROM current_asset_sources ORDER BY asset;").fetchall()
+    return {r["asset"]: r for r in rows}
 
 
 # ==========================================
@@ -604,6 +725,42 @@ def get_daily_rth_closes(
     return {r["day"]: float(r["close"]) for r in rows}
 
 
+_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
+
+def get_last_bar_at_or_before(
+    conn: Database,
+    contract_id: int,
+    as_of_utc: str,
+    interval: str = "1m",
+    price_type: str = "TRADES",
+    lookback_days: int = 7,
+) -> Optional[Row]:
+    """
+    The last bar of a contract that had fully *closed* by ``as_of_utc``, or None.
+
+    Bars are stamped with their open time, so a 1-minute bar stamped 09:27 is the
+    09:28 close and is eligible at an as-of of 09:28 but not 09:27. Only stored
+    bars are considered - nothing is filled forward - so the returned row's
+    ``timestamp_utc`` plus one interval is the true time of the observation, and
+    the caller measures its age against a freshness rule from that.
+
+    ``lookback_days`` bounds the scan (and lets TimescaleDB skip other chunks);
+    it spans a long weekend.
+    """
+    minutes = _INTERVAL_MINUTES.get(interval)
+    if minutes is None:
+        raise ValueError(f"Unknown interval {interval!r}")
+    return conn.execute(
+        "SELECT *, timestamp_utc + make_interval(mins => %s::int) AS close_time_utc FROM bars "
+        "WHERE contract_id = %s AND interval = %s AND price_type = %s "
+        "  AND timestamp_utc <= %s::timestamptz - make_interval(mins => %s::int) "
+        "  AND timestamp_utc >= %s::timestamptz - make_interval(days => %s::int) "
+        "ORDER BY timestamp_utc DESC LIMIT 1;",
+        (minutes, contract_id, interval, price_type, as_of_utc, minutes, as_of_utc, lookback_days),
+    ).fetchone()
+
+
 _LEDGER_UPSERT_FROM_BARS = """
 INSERT INTO session_days (
     contract_id, interval, price_type, trading_day, status, bar_count, rth_bar_count,
@@ -613,22 +770,21 @@ SELECT
     b.contract_id, b.interval, b.price_type, b.trading_day,
     CASE
         WHEN SUM(CASE WHEN b.is_completed = 0 THEN 1 ELSE 0 END) > 0 THEN 'PARTIAL'
-        WHEN COUNT(*) < %(threshold)s::double precision THEN 'PARTIAL'
+        WHEN COUNT(*) < MAX(COALESCE(s.expected_bar_count, %(expected)s::integer, 0))
+                        * %(ratio)s::double precision THEN 'PARTIAL'
         ELSE 'COMPLETE'
     END,
     COUNT(*),
     SUM(CASE WHEN b.session_scope = 'RTH' THEN 1 ELSE 0 END),
     SUM(CASE WHEN b.is_completed = 0 THEN 1 ELSE 0 END),
-    %(expected)s::integer,
+    MAX(COALESCE(s.expected_bar_count, %(expected)s::integer)),
     MIN(b.timestamp_utc), MAX(b.timestamp_utc),
     COALESCE(MIN(b.source), 'IBKR'),
-    COALESCE(
-        (SELECT s.fetched_at FROM session_days s
-          WHERE s.contract_id = b.contract_id AND s.interval = b.interval
-            AND s.price_type = b.price_type AND s.trading_day = b.trading_day),
-        now()
-    )
+    COALESCE(MAX(s.fetched_at), now())
 FROM bars b
+LEFT JOIN session_days s
+       ON s.contract_id = b.contract_id AND s.interval = b.interval
+      AND s.price_type = b.price_type AND s.trading_day = b.trading_day
 WHERE b.interval = %(interval)s AND b.price_type = %(price_type)s
 GROUP BY b.contract_id, b.interval, b.price_type, b.trading_day
 ON CONFLICT(contract_id, interval, price_type, trading_day) DO UPDATE SET
@@ -680,7 +836,7 @@ def rebuild_session_days(conn: Database) -> int:
                     "interval": interval,
                     "price_type": price_type,
                     "expected": expected,
-                    "threshold": (expected * DAY_COMPLETE_RATIO) if expected else 0,
+                    "ratio": DAY_COMPLETE_RATIO,
                 })
             conn.execute(_LEDGER_MARK_EMPTY)
             indexed = conn.execute(

@@ -4,10 +4,10 @@
 # Intended to run before the 09:30 AM NY equity open (e.g. 09:15 AM NY / 13:15 UTC).
 #
 # Covers every instrument in SYMBOLS (default ES,NQ,RTY), plus CONTEXT_SYMBOLS
-# (default VIX) which is collected as pre-open context but never forecast. Both
-# steps take the whole list in one process: the collector so its IB rate-limit
-# pacer accounts for all symbols together, the forecast so one instrument's
-# missing data does not suppress the others.
+# (default VIX,VXN,TNX,DX,SMH,10Y,2YY) which is collected as intermarket context
+# but never forecast. Both steps take the whole list in one process: the collector
+# so its IB rate-limit pacer accounts for all symbols together, the forecast so
+# one instrument's missing data does not suppress the others.
 
 set -euo pipefail
 
@@ -30,7 +30,7 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG_FILE"; }
 log "Starting opening forecast automation..."
 
 # 1. Collect recent 1-minute bars from IB Gateway/TWS, for the forecast targets and
-# the context instruments alike. Symbols and expiries come from config.py.
+# the context instruments alike. Symbols and roll rules come from config.py.
 log "Fetching recent candles from IB Gateway..."
 python3 -m collector.ib_collector --days 5 >> "$LOG_FILE" 2>&1
 
