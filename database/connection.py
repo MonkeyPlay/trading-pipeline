@@ -186,8 +186,10 @@ def reset_database(dsn: Optional[str] = None):
             ]
             for name in names:
                 conn.execute(f'DROP TABLE IF EXISTS "{name}" CASCADE;')
-            # The v2 forecast records (migration 0004) live in their own schema.
+            # The v2 forecast records (migration 0004) live in their own schema, and
+            # functions outlive the tables that use them.
             conn.execute("DROP SCHEMA IF EXISTS forecast CASCADE;")
+            conn.execute("DROP FUNCTION IF EXISTS reject_bar_receipt_mutation() CASCADE;")
         logger.info(f"Dropped {len(names)} table(s); schema version reset to 0.")
     finally:
         conn.close()

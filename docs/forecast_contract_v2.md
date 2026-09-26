@@ -67,7 +67,7 @@ each in [0, 1], summing to 1 (±1e-6).
 | `bar_start_at` = start of `[start, start + 1m)`, UTC | `bars.timestamp_utc` already is the bar start (IB labels by start); documented on the column and exposed as `bar_intervals.bar_start_at`. An end-labelled provider must be shifted at ingestion. |
 | T = 09:29:00 ET; only `bar_end_at <= T` | every read ends at T; the latest bar read starts 09:28. The builder is tested to be unchanged by any bar at/after 09:29 (`test_no_lookahead`). |
 | live: `features_frozen_at <= generated_at < 09:30` | CHECK on `feature_snapshots` (live frozen before `forecast.rth_open_at(session_date)`), trigger on `forecast_runs` (generated_at ≥ frozen_at always; < 09:30 for live). `build_snapshot` refuses a live capture outside [T, 09:30). |
-| historical values are `historical_reconstruction` / `unverified_historical` | the only way to get `live_capture` is `nq_forecast_v2.py live`; `verified` is set only for a live capture whose every included source's ledger `fetched_at` ≤ `features_frozen_at`. |
+| historical values are `historical_reconstruction` / `unverified_historical` | the only way to get `live_capture` is `nq_forecast_v2.py live`; `verified` is set only for a live capture where every included source's current-session observation has a real-time receipt (`bar_receipts`) of the exact value used, received by `features_frozen_at`, and every reference value was stored by then. |
 | P = close of the bar starting 09:28; missing → null | taken from exactly that minute; no substitution (`test_missing_p_is_null_not_substituted`). |
 | Cprev / PDH / PDL from the previous *scheduled* RTH session | `[09:30, scheduled close)` of `calendar.previous_session()`; the 12:59 bar on an early-close day. The open and closing minute must exist and ≥ 90 % of minutes. |
 | A = 14-session Wilder ATR through the previous session | TR with the same contract's previous close; seeded with 14 TRs, `(13·ATR + TR)/14`. No current-day RTH bar is read. A ≤ 0 → ATR-scaled features `undefined`. |
@@ -86,7 +86,8 @@ each in [0, 1], summing to 1 (±1e-6).
   rule); without a row, the configured contract, and the snapshot says so.
 - A cross-session reference — Cprev, an intermarket reference close, the previous close
   inside a daily true range — comes from the **same** contract as the session's value.
-  The collector already stores the day before each contract becomes active for this.
+  The collector stores `ROLL_WARMUP_SESSIONS` (7) days of each contract before it becomes
+  active, which is also enough for the single-contract intraday series on a roll day.
 - Intraday indicator series (5m/15m EMA, 1m ATR) use only the snapshot contract's bars.
   Nothing is spliced or back-adjusted.
 
@@ -104,8 +105,9 @@ ONH, ONL, EMA200, …) so outcomes are measured from exactly the snapshot's anch
   every bar window read. Identical data gives the identical id, so re-running a
   reconstruction returns the stored snapshot instead of duplicating it.
 - **source_status** per asset: symbol, contract id, local symbol, the observation and
-  reference bar (start, end, age in minutes), the ledger `fetched_at` of the day each
-  came from (`available_at`), and a validity code (`valid`, `stale`, `missing`,
+  reference bar (start, end, age in minutes), when each value became available
+  (`available_at`, with `evidence`: `bar_receipt` - the streamer's receive time of that
+  exact bar - or the weaker `day_ledger`, the day's last write time), and a validity code (`valid`, `stale`, `missing`,
   `unmapped`, `no_contract`). NQ adds ON coverage and 60m completeness; there are
   entries for the calendar version and the event calendar.
 - **feature_status** per feature: `valid`, `missing`, `stale`, `insufficient_history`,
@@ -177,11 +179,18 @@ Backfill accordingly (`--days 460` for everything).
 
 ### Live capture timing
 
-`live` waits until 09:29:45 ET for the NQ bar starting 09:28 to reach the store, then
-freezes and forecasts; anything finishing at or after 09:30:00 is refused by the
-database. The bars themselves must be collected between 09:29:00 and that deadline, which
-the current collector (two-day window per instrument, one request per day, with pacing
-sleeps) cannot do reliably for ten instruments. See recommendations below.
+```
+09:00      collector.live_stream starts: one keep-up-to-date 1m stream per instrument
+09:29:00   the 09:28 minute ends; the stream finalises it (next_bar / timer, +5 s)
+09:29:01   confirm_fetch: one short historical request per instrument re-reads 09:28
+09:29:0x   nq_forecast_v2.py live sees the confirmed NQ and ES bars, freezes, forecasts
+09:29:45   latest freeze (--wait-until); anything at/after 09:30:00 is refused by the DB
+```
+
+Every streamed bar is in `bar_receipts` with its `received_at`; a live snapshot cites
+that time per source and is `verified` only if every observation has one (see
+[data_store.md](data_store.md#real-time-bars-and-bar_receipts)). Without the streamer,
+`live` still works from downloaded bars but the capture is `unverified_historical`.
 
 ## Recommendations (not implemented here)
 
@@ -189,17 +198,9 @@ sleeps) cannot do reliably for ten instruments. See recommendations below.
    revision can *detect* that inputs changed but cannot *reproduce* an old snapshot. An
    append-only archive of replaced days (or a `bar_revisions` table keyed by
    `session_days.fetched_at`) would make every snapshot rebuildable.
-2. **A live-tail collector with receipt times.** Subscribe to real-time / keep-up-to-date
-   bars for the symbols the snapshot needs and store a per-bar `received_at`. That
-   meets the 09:29–09:30 window and gives per-bar point-in-time evidence instead of the
-   day-level ledger `fetched_at` used now.
-3. **Store more pre-roll history.** The collector keeps only one session of the incoming
-   contract before a roll, so the single-contract 5m EMA200 (≈ 4 Globex sessions) is
-   `insufficient_history` for the first days after each roll. Storing ~7 sessions before
-   activation removes that gap.
-4. **Extend the calendar yearly.** `features/calendar.py` covers 2024–2027 and raises
+2. **Extend the calendar yearly.** `features/calendar.py` covers 2024–2027 and raises
    outside it; add each new year (bump `CALENDAR_VERSION`) — or pin a calendar library
    version and record it, if you prefer.
-5. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses
+3. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses
    the 09:30 opening bar's open as its gap, and v1 records are overwritten on re-run.
    Keep it for the dashboard until that is moved to the v2 views.

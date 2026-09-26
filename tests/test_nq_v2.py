@@ -149,14 +149,46 @@ def test_live_capture_must_freeze_before_the_open(market):
     assert live.pit_availability_status == "unverified_historical"
 
 
-def test_live_capture_verified_when_every_source_was_available(market):
-    md, sessions = market
+def _receipts_for_observations(md, s, received_at, bump=0.0):
+    """A real-time receipt of every source's latest bar ending by T, as the streamer writes."""
+    out = {}
+    for (cid, _), g in md._bars.items():
+        last = g[g["bar_start_at"] < s.cutoff_at].iloc[-1]
+        out[(cid, last["bar_start_at"])] = {"received_at": received_at, "revision": 1,
+                                             "finalised_by": "confirm_fetch",
+                                             "close": float(last["close"]) + bump}
+    return out
+
+
+def test_live_capture_pit_needs_bar_receipts(market):
+    md, _ = market
     s = cal.session(DAY)
     fetched = {k: s.cutoff_at for k in md._fetched}
     bars = pd.concat([g.assign(contract_id=k[0], price_type=k[1]) for k, g in md._bars.items()])
-    md2 = FrameMarketData(bars, active=md._active, contracts=md._contracts, fetched_at=fetched)
-    live = build_snapshot(md2, DAY, "live_capture", frozen_at=s.cutoff_at + timedelta(seconds=30))
-    assert live.pit_availability_status == "verified"
+    frozen = s.cutoff_at + timedelta(seconds=30)
+
+    def live(receipts):
+        m = FrameMarketData(bars, active=md._active, contracts=md._contracts, fetched_at=fetched,
+                            receipts=receipts)
+        return build_snapshot(m, DAY, "live_capture", frozen_at=frozen)
+
+    # Day-level ledger times alone are not per-bar proof.
+    ledger_only = live(None)
+    assert ledger_only.pit_availability_status == "unverified_historical"
+    assert ledger_only.source_status["nq"]["observation"]["evidence"] == "day_ledger"
+
+    ok = live(_receipts_for_observations(md, s, s.cutoff_at + timedelta(seconds=3)))
+    assert ok.pit_availability_status == "verified"
+    obs = ok.source_status["nq"]["observation"]
+    assert obs["evidence"] == "bar_receipt" and obs["available_at"] == "2026-06-10T13:29:03Z"
+    assert ok.source_status["nq"]["reference"]["evidence"] == "day_ledger"
+
+    # A receipt of a different value (the store was rewritten since) proves nothing.
+    assert live(_receipts_for_observations(md, s, s.cutoff_at, bump=0.25)).pit_availability_status \
+        == "unverified_historical"
+    # Nor does one received after the freeze.
+    assert live(_receipts_for_observations(md, s, frozen + timedelta(seconds=1))).pit_availability_status \
+        == "unverified_historical"
 
 
 def test_event_features_need_a_calendar(market):

@@ -52,10 +52,15 @@ class IBKRPacer:
         
         logger.debug(f"Registered historical request for Contract {contract_id} ({bar_size}) ending at {end_time_str}")
 
-    def wait_if_necessary(self, contract_id: int, duration: str, bar_size: str, end_time_str: str):
+    def wait_if_necessary(self, contract_id: int, duration: str, bar_size: str, end_time_str: str,
+                          min_spacing: float = None):
         """
         Analyzes recent request logs and blocks execution (sleeps) if necessary to comply
         with volume windows and identical request locks.
+
+        ``min_spacing`` overrides the default gap between consecutive requests, for a
+        burst of small requests to *different* contracts (IB's burst limit is per
+        contract); the volume window and the duplicate lock still apply.
         """
         now = time.time()
         
@@ -95,8 +100,9 @@ class IBKRPacer:
         # Ensures basic serial spacing between consecutive API requests
         if self.request_history:
             time_since_last = now - self.request_history[-1]
-            if time_since_last < self.default_delay:
-                wait_time = self.default_delay - time_since_last
+            spacing = self.default_delay if min_spacing is None else min_spacing
+            if time_since_last < spacing:
+                wait_time = spacing - time_since_last
                 time.sleep(wait_time)
 
     def handle_rate_limit_error(self, backoff_seconds=30.0):

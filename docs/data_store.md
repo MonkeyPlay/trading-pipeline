@@ -147,9 +147,14 @@ liquid hours, time zone), and assigns each trading day the nearest eligible cont
 expiry is more than the rule's `days_before_expiry` away (`collector/rolls.py`). Then:
 
 - every day is fetched from the contract active on it, and
-- the trading day **before** each contract becomes active (or before the window starts)
-  is fetched from that contract too, so the first day after a roll still has a
-  same-contract previous close. A return never mixes two expiries.
+- the `Config.ROLL_WARMUP_SESSIONS` (default 7) trading days **before** each contract
+  becomes active (or before the window starts) are fetched from that contract too. The
+  last of them gives the first day after a roll a same-contract previous close - a
+  return never mixes two expiries - and all of them give indicators computed on the new
+  contract alone enough history on the roll day.
+- the next contract's warm-up days are fetched as they happen: once a run's window
+  reaches the first of them, they are planned for the incoming contract
+  (`rolls.upcoming_roll`), so nothing is left to download on the roll morning.
 
 The day → contract map is written to `active_contracts (symbol, trading_day,
 contract_id, rule)`; single-contract instruments (indices, stocks) get rows too, so it is
@@ -178,6 +183,27 @@ stamped 09:27 ET closes at 09:28 ET. Bars are exactly what IB sent — a minute 
 print is absent, never forward-filled — so the age of any value is recoverable.
 `get_last_bar_at_or_before(conn, contract_id, as_of_utc)` returns the last bar that had
 *closed* by an instant, with its `close_time_utc`.
+
+### Real-time bars and `bar_receipts`
+
+`collector/live_stream.py` keeps an IB keep-up-to-date 1-minute stream per instrument
+and, when a minute is final, calls `queries.save_live_bars()`, which in one transaction
+per day:
+
+- appends the bar to **`bar_receipts`** with `received_at` (when the pipeline knew the
+  final value), `revision` and `finalised_by` - `next_bar` (the stream moved on),
+  `timer` (no later update within the grace period), `initial_fill` (history sent when
+  the stream opened), `late_update` (IB changed a finished minute) or `confirm_fetch`
+  (a short historical re-read of a key minute, by default 09:28). The table is
+  append-only: a different value is the next revision, an identical one is not stored;
+- upserts the bar into `bars` with `is_completed = 0` and source `IBKR_LIVE`, so the
+  day stays `PARTIAL` and the regular collector re-downloads it once it has settled.
+
+`save_trading_day()` and `save_live_bars()` take the same per-day advisory lock, and a
+download that replaces a day re-inserts the latest revision of every live bar newer than
+the last downloaded minute: a download requested at 09:26 cannot drop the 09:28 bar the
+stream stored at 09:29. Minutes the download covers take the downloaded value; the
+receipts keep what was known live either way.
 
 The v2 feature contract ([forecast_contract_v2.md](forecast_contract_v2.md)) calls this
 column `bar_start_at` and names bars by their start: its "09:28 close" is the bar stamped

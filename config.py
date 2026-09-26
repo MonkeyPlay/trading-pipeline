@@ -237,6 +237,12 @@ class Config:
     ]
     EXPIRY = os.getenv("EXPIRY", "202612")
 
+    # Trading days of a future's next contract stored before it becomes front, so
+    # indicators computed on that contract alone (the v2 5m EMA200 needs ~4 Globex
+    # sessions) are warm on the roll day. The last one is also the first active
+    # day's same-contract reference close, so this is at least 1.
+    ROLL_WARMUP_SESSIONS = max(1, int(os.getenv("ROLL_WARMUP_SESSIONS", "7")))
+
     # Application Settings
     TIMEZONE = "America/New_York"
     FEATURE_VERSION = "v1.0"

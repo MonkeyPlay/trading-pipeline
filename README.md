@@ -152,9 +152,11 @@ With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`.
 **Futures follow their front contract.** Each future has a roll rule in `config.py`
 (equity indices: the quarterly contract, rolling 8 days before expiry). The collector asks
 IB once for the whole contract chain, expired contracts included, and fetches every
-trading day from the contract that was front *on that day*. It also stores the trading
-day before each contract becomes active, so the first day after a roll still has a
-same-contract previous close. The choice is recorded per day in `active_contracts`.
+trading day from the contract that was front *on that day*. It also stores the
+`ROLL_WARMUP_SESSIONS` (7) trading days before each contract becomes active - collected
+as they happen, ahead of the roll - so the first day after a roll has a same-contract
+previous close and enough same-contract history for intraday indicators (the v2 5-minute
+EMA200 needs about four sessions). The choice is recorded per day in `active_contracts`.
 `--expiry 202609` (or `NQ_EXPIRY=202609` for one symbol) pins a single contract instead.
 
 **Backfill before relying on standardized features.** The z-scored intermarket features
@@ -215,12 +217,24 @@ Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (
 during EST), so adjust if the box is not on New York time.
 
 **The intermarket features read the bars ending at 09:29 ET** (the v2 cutoff T), which a
-09:15 run has not seen yet.
-To have them in the store, also collect once they exist:
+09:15 run has not seen yet, and which must be stored before 09:30. Re-downloading days
+cannot do that for ten instruments, so a **real-time streamer** keeps one IB
+keep-up-to-date 1-minute stream per instrument open and stores each minute the moment it
+is final, with the time it was received:
 
 ```cron
-29 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.ib_collector --days 5 >> logs/pipeline_run.log 2>&1
+0  9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.live_stream >> logs/live_stream.log 2>&1
+29 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python scripts/nq_forecast_v2.py live >> logs/pipeline_run.log 2>&1
 ```
+
+The streamer ([collector/live_stream.py](collector/live_stream.py)) runs until `--until`
+(09:31 ET by default), re-reads the 09:28 minute of every instrument right after it ends
+(`--confirm-at`) so P is IB's own historical bar, and uses client id `IB_CLIENT_ID + 1`
+so the historical collector can run beside it. Each bar goes to `bars` (as not yet
+completed, so the regular collector re-downloads the day later) and, append-only, to
+`bar_receipts` with its `received_at` - the per-bar point-in-time proof a `verified`
+live snapshot cites. `nq_forecast_v2.py live` waits (until 09:29:45) for the confirmed
+NQ and ES 09:28 bars, then freezes and forecasts before 09:30.
 
 Collecting after the open adds no look-ahead: features select bars by timestamp
 (`get_last_bar_at_or_before`), never by what happens to be stored.
@@ -244,7 +258,8 @@ Settings come from environment variables or a local `.env`, read by
 | `<SYMBOL>_EXPIRY` | — | Pins one future everywhere, collector included, e.g. `RTY_EXPIRY=202612` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
-| `IB_CLIENT_ID` | `1` | IB socket client id |
+| `IB_CLIENT_ID` | `1` | IB socket client id (the real-time streamer uses this + 1) |
+| `ROLL_WARMUP_SESSIONS` | `7` | Trading days of a future's next contract stored before it becomes front |
 | `OPENAI_API_KEY` | — | Enables OpenAI-backed forecasts |
 | `ANTHROPIC_API_KEY` | — | Enables Anthropic-backed forecasts |
 | `LLM_MODEL` | `gpt-4o-mini` | Model name; a name containing `claude` selects Anthropic |
@@ -309,7 +324,7 @@ What the store guarantees for these features:
   stamped 09:28, which ends at 09:29 = T. A value's age is the
   distance from its bar's close to the instant it stands for.
 - **One contract per future per day.** `active_contracts` says which contract stood for a
-  symbol on each trading day, and the day before each activation is stored too, so a
+  symbol on each trading day, and the days before each activation are stored too, so a
   pre-open value and its previous-RTH-close reference always come from the same contract.
 - **Units configured once.** Each instrument's `value_unit` (and for yields
   `bps_per_unit`) is recorded with the source. A day whose median value is implausible
@@ -376,7 +391,7 @@ database whose name contains `test`; they reset it).
 
 | Path | What lives there |
 |---|---|
-| [collector/](collector/) | IB API client, coverage planner, request pacing |
+| [collector/](collector/) | IB API client, coverage planner, request pacing, real-time bar streamer |
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools |
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
@@ -396,7 +411,8 @@ is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `active_contracts` (the contract that stood for each symbol per day),
-`asset_sources` (the logical-asset source map, versioned), `economic_events` /
+`asset_sources` (the logical-asset source map, versioned), `bar_receipts` (every
+real-time bar as received, with `received_at`; append-only), `economic_events` /
 `economic_event_coverage` (an optional event calendar), and the v1 forecast tables
 `feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
 

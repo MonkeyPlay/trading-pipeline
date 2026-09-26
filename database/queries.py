@@ -410,6 +410,150 @@ def _day_stats(conn, contract_id, interval, price_type, trading_day):
     }
 
 
+def _as_utc(timestamp) -> datetime:
+    """A timestamp (string or datetime; naive = UTC) as an aware UTC datetime."""
+    dt = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp))
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _lock_day(conn: Database, key) -> None:
+    """
+    Serialises writers of one stored day (a download replacing it, the live
+    stream adding to it) for the rest of the current transaction.
+    """
+    digest = hashlib.sha256("|".join(map(str, ("day",) + tuple(key))).encode()).hexdigest()
+    conn.execute("SELECT pg_advisory_xact_lock(%s);", (int(digest[:15], 16),))
+
+
+def _restore_live_bars(conn: Database, key, after: Optional[datetime]) -> int:
+    """
+    Re-inserts the latest received revision of every live bar of the day that
+    starts after ``after`` (every live bar when None) and is not already stored.
+    """
+    contract_id, interval, price_type, day = key
+    cursor = conn.execute(
+        f"""
+        INSERT INTO bars ({", ".join(_BAR_COLUMNS)})
+        SELECT DISTINCT ON (r.bar_start_at)
+               r.contract_id, r.interval, r.price_type, r.trading_day, r.bar_start_at, r.session_scope,
+               r.open, r.high, r.low, r.close, r.volume, r.wap, r.bar_count, r.source, 0
+          FROM bar_receipts r
+         WHERE r.contract_id = %s AND r.interval = %s AND r.price_type = %s AND r.trading_day = %s
+           AND r.bar_start_at >= %s AND r.bar_start_at < %s
+           AND (%s::timestamptz IS NULL OR r.bar_start_at > %s::timestamptz)
+         ORDER BY r.bar_start_at, r.revision DESC
+        ON CONFLICT DO NOTHING;
+        """,
+        (contract_id, interval, price_type, day) + _day_window(day) + (after, after),
+    )
+    return cursor.rowcount or 0
+
+
+_RECEIPT_VALUES = ("open", "high", "low", "close", "volume", "wap", "bar_count")
+
+
+def save_live_bars(
+    conn: Database,
+    contract_id: int,
+    bars: List[Dict[str, Any]],
+    interval: str = "1m",
+    price_type: str = "TRADES",
+    expected_bar_count: Optional[int] = None,
+    source: str = "IBKR_LIVE",
+    stream_id: Optional[str] = None,
+) -> Dict[str, int]:
+    """
+    Stores final real-time bars, one transaction per trading day.
+
+    Each bar dict needs ``timestamp_utc`` (bar start), ``trading_day``,
+    ``session_scope``, OHLCV, ``received_at`` and ``finalised_by``; ``wap`` and
+    ``bar_count`` are optional. For every bar:
+
+      - a ``bar_receipts`` row is appended, unless its values equal the latest
+        revision already received for that minute (then nothing is recorded);
+      - ``bars`` is upserted with ``is_completed = 0``, so the day stays PARTIAL
+        and the regular collector re-downloads it once it has settled.
+
+    Returns ``{'receipts': n, 'unchanged': n}``.
+    """
+    expected = expected_bar_count if expected_bar_count is not None else expected_bars_for(interval)
+    by_day: Dict[str, List[Dict[str, Any]]] = {}
+    for b in bars:
+        by_day.setdefault(_validate_day(b["trading_day"]), []).append(b)
+
+    counts = {"receipts": 0, "unchanged": 0}
+    for day, day_bars in sorted(by_day.items()):
+        key = (int(contract_id), str(interval), str(price_type), day)
+        try:
+            with conn:
+                _lock_day(conn, key)
+                conn.execute(
+                    "INSERT INTO session_days (contract_id, interval, price_type, trading_day, status, "
+                    "                          expected_bar_count, source, fetched_at) "
+                    "VALUES (%s, %s, %s, %s, 'PARTIAL', %s, %s, now()) "
+                    "ON CONFLICT (contract_id, interval, price_type, trading_day) DO NOTHING;",
+                    key + (expected, source),
+                )
+                # Stable sort: two revisions of one minute keep their arrival order, and
+                # each is stored with its own values and its own receive time.
+                for b in sorted(day_bars, key=lambda x: _as_utc(x["timestamp_utc"])):
+                    start = _as_utc(b["timestamp_utc"])
+                    row = _prepare_bar_rows([b], contract_id, interval, price_type, day, source)[0]
+                    latest = conn.execute(
+                        "SELECT * FROM bar_receipts WHERE contract_id = %s AND interval = %s "
+                        "AND price_type = %s AND bar_start_at = %s ORDER BY revision DESC LIMIT 1;",
+                        key[:3] + (start,),
+                    ).fetchone()
+                    if latest is not None and all(latest[c] == row[c] for c in _RECEIPT_VALUES):
+                        counts["unchanged"] += 1
+                        continue
+                    conn.execute(
+                        "INSERT INTO bar_receipts (contract_id, interval, price_type, bar_start_at, "
+                        "received_at, revision, trading_day, session_scope, open, high, low, close, "
+                        "volume, wap, bar_count, finalised_by, source, stream_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+                        key[:3] + (start, _as_utc(b["received_at"]),
+                                   1 if latest is None else int(latest["revision"]) + 1, day,
+                                   row["session_scope"], row["open"], row["high"], row["low"], row["close"],
+                                   row["volume"], row["wap"], row["bar_count"], b["finalised_by"], source,
+                                   stream_id),
+                    )
+                    conn.execute(
+                        _BARS_INSERT.rstrip().rstrip(";")
+                        + " ON CONFLICT (contract_id, interval, price_type, trading_day, timestamp_utc) "
+                          "DO UPDATE SET open = excluded.open, high = excluded.high, low = excluded.low, "
+                          "close = excluded.close, volume = excluded.volume, wap = excluded.wap, "
+                          "bar_count = excluded.bar_count, source = excluded.source, is_completed = 0;",
+                        dict(row, is_completed=0),
+                    )
+                    counts["receipts"] += 1
+
+                stats = _day_stats(conn, *key)
+                conn.execute(
+                    "UPDATE session_days SET status = %s, bar_count = %s, rth_bar_count = %s, "
+                    "    open_bar_count = %s, first_bar_utc = %s, last_bar_utc = %s, fetched_at = now() "
+                    f"WHERE {_SESSION_DAY_KEY};",
+                    (derive_day_status(stats["bar_count"], expected, stats["open_bar_count"]),
+                     stats["bar_count"], stats["rth_bar_count"], stats["open_bar_count"],
+                     stats["first_bar_utc"], stats["last_bar_utc"]) + key,
+                )
+        except Error as e:
+            logger.error(f"Failed to store live bars of {day} for contract {contract_id}: {e}")
+            raise
+    return counts
+
+
+def get_bar_receipts(
+    conn: Database, contract_id: int, bar_start_utc, interval: str = "1m", price_type: str = "TRADES",
+) -> List[Row]:
+    """Every received revision of one minute, oldest first."""
+    return conn.execute(
+        "SELECT * FROM bar_receipts WHERE contract_id = %s AND interval = %s AND price_type = %s "
+        "AND bar_start_at = %s ORDER BY revision;",
+        (contract_id, interval, price_type, bar_start_utc),
+    ).fetchall()
+
+
 def save_trading_day(
     conn: Database,
     contract_id: int,
@@ -447,6 +591,7 @@ def save_trading_day(
 
     try:
         with conn:
+            _lock_day(conn, key)
             # The ledger row is the parent of the bars, so it must exist first.
             conn.execute(
                 "INSERT INTO session_days (contract_id, interval, price_type, trading_day, "
@@ -461,6 +606,10 @@ def save_trading_day(
             conn.execute(f"DELETE FROM bars WHERE {_BARS_DAY_KEY};", _bars_day_params(*key))
             if rows:
                 conn.executemany(_BARS_INSERT, rows)
+            # A download only covers the day up to the moment it was requested. Live
+            # bars the stream stored after that moment must survive the replacement.
+            last_downloaded = max((_as_utc(r["timestamp_utc"]) for r in rows), default=None)
+            _restore_live_bars(conn, key, last_downloaded)
 
             stats = _day_stats(conn, *key)
             resolved = status or derive_day_status(

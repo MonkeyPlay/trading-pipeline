@@ -13,10 +13,11 @@ Every command registers the feature, label and model definitions first; a
 changed definition under an existing version name stops the run.
 
 ``live`` is the only path that produces ``live_capture`` snapshots. It waits
-(until 09:29:45 ET by default) for the NQ bar starting 09:28 to reach the store,
-freezes the snapshot, and forecasts; both must be complete before 09:30:00 ET or
-nothing is recorded as live. Bars must be collected separately between 09:29:00
-and the deadline - see "Live capture timing" in the doc.
+(until 09:29:45 ET by default) for the NQ and ES bars starting 09:28 - as
+confirmed by the real-time streamer, collector/live_stream.py - freezes the
+snapshot, and forecasts; both must be complete before 09:30:00 ET or nothing is
+recorded as live. Only bars with a real-time receipt make a live capture
+``verified``.
 """
 
 import argparse
@@ -35,6 +36,7 @@ if _PROJECT_ROOT not in sys.path:
 from config import Config
 from database import forecast_store as store
 from database.connection import get_db_connection, init_database
+from database.queries import get_bar_receipts
 from features import calendar as cal
 from features import catalogue as catv2
 from features.market_data import DbMarketData
@@ -153,6 +155,22 @@ def cmd_backfill(conn, md, args):
     return 0
 
 
+def _last_bar_ready(conn, contract_id, bar_start, accept_unconfirmed) -> bool:
+    """
+    The minute is in the store and, when the real-time streamer has received it,
+    the streamer's confirmation re-read (IB's historical value of the finished
+    minute) has arrived too - unless unconfirmed streamed values are accepted.
+    """
+    stored = conn.execute("SELECT 1 FROM bars WHERE contract_id = %s AND interval = '1m' "
+                          "AND timestamp_utc = %s;", (contract_id, bar_start)).fetchone()
+    if not stored:
+        return False
+    if accept_unconfirmed:
+        return True
+    receipts = [r["finalised_by"] for r in get_bar_receipts(conn, contract_id, bar_start)]
+    return not receipts or "confirm_fetch" in receipts
+
+
 def cmd_live(conn, md, args):
     today = datetime.now(cal.NY_TZ).date()
     s = cal.session(today)
@@ -164,16 +182,24 @@ def cmd_live(conn, md, args):
         logger.info(f"Waiting for T ({s.cutoff_at.astimezone(cal.NY_TZ):%H:%M:%S} ET).")
         time.sleep((s.cutoff_at - now).total_seconds())
     deadline = cal.ny_instant(today, datetime.strptime(args.wait_until, "%H:%M:%S").time())
-    nq = md.active_contract("NQ", today) or {"contract_id": md.fallback_contract("NQ")}
     last_bar = s.cutoff_at - timedelta(minutes=1)
-    while datetime.now(timezone.utc) < deadline:
-        row = conn.execute("SELECT 1 FROM bars WHERE contract_id = %s AND interval = '1m' "
-                           "AND timestamp_utc = %s;", (nq["contract_id"], last_bar)).fetchone()
-        if row:
-            break
-        time.sleep(1.0)
-    else:
-        logger.warning("The NQ 09:28 bar is not in the store; freezing without it (P will be null).")
+    pending = {}
+    for symbol in [x.strip().upper() for x in args.wait_for.split(",") if x.strip()]:
+        a = md.active_contract(symbol, today)
+        cid = a["contract_id"] if a else md.fallback_contract(symbol)
+        if cid is None:
+            logger.warning(f"{symbol}: no contract known for {today}; not waiting for it.")
+        else:
+            pending[symbol] = cid
+    while pending and datetime.now(timezone.utc) < deadline:
+        for symbol, cid in list(pending.items()):
+            if _last_bar_ready(conn, cid, last_bar, args.accept_unconfirmed):
+                del pending[symbol]
+        if pending:
+            time.sleep(0.5)
+    if pending:
+        logger.warning(f"The 09:28 bar of {', '.join(pending)} is not ready by {args.wait_until} ET; "
+                       f"freezing with what the store holds.")
     md = DbMarketData(conn)   # no cache from before the wait
     try:
         snapshot_id = take_snapshot(conn, md, today, "live_capture")
@@ -233,7 +259,11 @@ def main(argv=None):
     p.add_argument("--model", default="nq_climatology_v1", choices=sorted(models_v2.MODELS))
     p = sub.add_parser("live", help="Live capture and forecast before 09:30 ET")
     p.add_argument("--model", default="nq_climatology_v1", choices=sorted(models_v2.MODELS))
-    p.add_argument("--wait-until", default="09:29:45", help="ET time to stop waiting for the 09:28 bar")
+    p.add_argument("--wait-until", default="09:29:45", help="ET time to stop waiting for the 09:28 bars")
+    p.add_argument("--wait-for", default="NQ,ES",
+                   help="Symbols whose 09:28 bar must be stored before freezing (P and the ES leg)")
+    p.add_argument("--accept-unconfirmed", action="store_true",
+                   help="Do not wait for the streamer's confirm_fetch of a streamed 09:28 bar")
     p = sub.add_parser("evaluate", help="Score predictions against a chosen outcome revision")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--outcome-revision", type=int)

@@ -16,8 +16,10 @@ Collection is organised strictly by NY trading day. Every run:
 
 A future with a RollRule (config.INSTRUMENTS) is collected as a chain: each
 trading day is fetched from the contract that is front on that day, plus the
-day before each contract becomes active so its first day has a same-contract
-reference close (collector/rolls.py). The day -> contract choice is recorded in
+ROLL_WARMUP_SESSIONS (7) trading days before each contract becomes active, so its
+first day has a same-contract reference close and enough same-contract history
+for intraday indicators (collector/rolls.py). The next contract's warm-up days
+are collected as they happen, ahead of the roll. The day -> contract choice is recorded in
 active_contracts. Indices and stocks have a single contract. The logical-asset
 source map (config.ASSET_SOURCES) is registered in asset_sources on every run.
 
@@ -26,6 +28,8 @@ Run from the project root:
     python -m collector.ib_collector --start 2026-06-01 --end 2026-09-25
     python -m collector.ib_collector --days 30 --plan-only
     python -m collector.ib_collector --expiry 202609 --days 5 --symbol NQ   # pin one contract
+
+Real-time bars (with a receive time per bar) come from collector/live_stream.py.
 """
 
 import os
@@ -61,7 +65,7 @@ from collector.pacing import IBKRPacer, format_ibkr_datetime
 from collector.coverage import (
     plan_trading_days, days_to_fetch, summarise, expected_trading_days, previous_trading_day,
 )
-from collector.rolls import front_contracts, segments
+from collector.rolls import front_contracts, segments, upcoming_roll
 
 # Bars whose timestamp is within this window of "now" may still be revised by IB
 # or belong to a session that has not fully closed -> stored as is_completed=0.
@@ -140,6 +144,50 @@ def _parse_ib_timestamp(raw) -> str:
         raise ValueError(f"Unrecognised IB timestamp format: {raw!r}")
 
     return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def bar_to_dict(bar) -> Optional[dict]:
+    """
+    An IB BarData as a bar dict (UTC start timestamp, OHLCV, session scope and
+    NY trading day), or None if its date cannot be parsed. Shared by the
+    historical download and the real-time stream.
+    """
+    try:
+        timestamp_utc = _parse_ib_timestamp(bar.date)
+    except Exception as e:
+        logger.error(f"Skipping bar with unparseable date {bar.date!r}: {e}")
+        return None
+
+    try:
+        volume = int(float(bar.volume)) if float(bar.volume) > 0 else 0
+    except (TypeError, ValueError):
+        volume = 0
+
+    raw_wap = getattr(bar, "wap", getattr(bar, "average", None))
+    try:
+        wap = float(raw_wap) if raw_wap not in (None, "", -1) and float(raw_wap) > 0 else None
+    except (TypeError, ValueError):
+        wap = None
+
+    raw_count = getattr(bar, "barCount", getattr(bar, "count", None))
+    try:
+        bar_count = int(raw_count) if raw_count not in (None, "", -1) else None
+    except (TypeError, ValueError):
+        bar_count = None
+
+    ny = convert_utc_to_ny(timestamp_utc)
+    return {
+        "timestamp_utc": timestamp_utc,
+        "open": bar.open,
+        "high": bar.high,
+        "low": bar.low,
+        "close": bar.close,
+        "volume": volume,
+        "wap": wap,
+        "bar_count": bar_count,
+        "session_scope": classify_session_scope(ny),
+        "trading_day": get_trading_day_date(ny),
+    }
 
 
 class IBCollectorApp(EWrapper, EClient):
@@ -243,42 +291,9 @@ class IBCollectorApp(EWrapper, EClient):
     # --- Historical data ---
     def historicalData(self, reqId: int, bar: BarData):
         super().historicalData(reqId, bar)
-        try:
-            timestamp_utc = _parse_ib_timestamp(bar.date)
-        except Exception as e:
-            logger.error(f"Skipping bar with unparseable date {bar.date!r}: {e}")
-            return
-
-        try:
-            volume = int(float(bar.volume)) if float(bar.volume) > 0 else 0
-        except (TypeError, ValueError):
-            volume = 0
-
-        raw_wap = getattr(bar, "wap", None)
-        try:
-            wap = float(raw_wap) if raw_wap not in (None, "", -1) and float(raw_wap) > 0 else None
-        except (TypeError, ValueError):
-            wap = None
-
-        raw_count = getattr(bar, "barCount", getattr(bar, "count", None))
-        try:
-            bar_count = int(raw_count) if raw_count not in (None, "", -1) else None
-        except (TypeError, ValueError):
-            bar_count = None
-
-        ny = convert_utc_to_ny(timestamp_utc)
-        self.collected_bars.setdefault(reqId, []).append({
-            "timestamp_utc": timestamp_utc,
-            "open": bar.open,
-            "high": bar.high,
-            "low": bar.low,
-            "close": bar.close,
-            "volume": volume,
-            "wap": wap,
-            "bar_count": bar_count,
-            "session_scope": classify_session_scope(ny),
-            "trading_day": get_trading_day_date(ny),
-        })
+        parsed = bar_to_dict(bar)
+        if parsed is not None:
+            self.collected_bars.setdefault(reqId, []).append(parsed)
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
         super().historicalDataEnd(reqId, start, end)
@@ -350,11 +365,9 @@ class IBCollectorApp(EWrapper, EClient):
         logger.info(f"{label}: {len(details)} contract(s).")
         return details
 
-    def fetch_historical_bars(self, contract, end_dt, duration_str, what_to_show=PRICE_TYPE):
-        req_id = self.get_next_req_id()
-        self.historical_events[req_id] = threading.Event()
-        self.collected_bars[req_id] = []
-
+    @staticmethod
+    def ib_contract_from_info(contract):
+        """An IB Contract for a resolved contract dict (conId plus routing fields)."""
         ib_contract = Contract()
         ib_contract.conId = contract["con_id"]
         ib_contract.symbol = contract["symbol"]
@@ -365,10 +378,18 @@ class IBCollectorApp(EWrapper, EClient):
             ib_contract.primaryExchange = contract["primary_exchange"]
         if contract["sec_type"] == "FUT":
             ib_contract.includeExpired = True
+        return ib_contract
 
+    def fetch_historical_bars(self, contract, end_dt, duration_str, what_to_show=PRICE_TYPE,
+                              min_spacing=None, timeout=60.0):
+        req_id = self.get_next_req_id()
+        self.historical_events[req_id] = threading.Event()
+        self.collected_bars[req_id] = []
+
+        ib_contract = self.ib_contract_from_info(contract)
         end_str = format_ibkr_datetime(end_dt)
 
-        self.pacer.wait_if_necessary(contract["con_id"], duration_str, BAR_SIZE, end_str)
+        self.pacer.wait_if_necessary(contract["con_id"], duration_str, BAR_SIZE, end_str, min_spacing)
         self.reqHistoricalData(
             reqId=req_id,
             contract=ib_contract,
@@ -383,7 +404,7 @@ class IBCollectorApp(EWrapper, EClient):
         )
         self.pacer.register_request(contract["con_id"], duration_str, BAR_SIZE, end_str)
 
-        if not self.historical_events[req_id].wait(timeout=60.0):
+        if not self.historical_events[req_id].wait(timeout=timeout):
             logger.error(f"Timeout waiting for historical data (ReqID {req_id})")
             return None
         if req_id in self.request_failed:
@@ -587,7 +608,8 @@ def _plan_rolling(conn, work, start_day, end_day, gap_fill, allow_gaps=False):
     """
     rule = work.instrument.roll
     days = expected_trading_days(start_day, end_day)
-    assignment = front_contracts(list_future_chain(conn, work.symbol), days, rule)
+    chain = list_future_chain(conn, work.symbol)
+    assignment = front_contracts(chain, days, rule)
     missing = [d.isoformat() for d in days if d not in assignment]
     if missing and not allow_gaps:
         return False
@@ -596,16 +618,30 @@ def _plan_rolling(conn, work, start_day, end_day, gap_fill, allow_gaps=False):
         logger.warning(f"{work.symbol}: no contract in the chain covers {len(missing)} day(s) "
                        f"({missing[0]} .. {missing[-1]}); they are skipped.")
 
+    warmup = Config.ROLL_WARMUP_SESSIONS
     work.rule = rule.describe()
     work.assignment = {d.isoformat(): row["contract_id"] for d, row in assignment.items()}
     work.jobs = []
-    for seg in segments(assignment):
+    for seg in segments(assignment, warmup):
         row = seg.contract
         logger.info(f"{work.symbol}: {row['expiry']} active {seg.first_day} -> {seg.last_day} "
-                    f"(reference day {seg.reference_day}).")
+                    f"(+{len(seg.warmup_days)} warm-up day(s) from {seg.warmup_days[0]}).")
         targets = _plan(conn, row["contract_id"], work.instrument, seg.first_day, seg.last_day,
-                        gap_fill, [seg.reference_day])
+                        gap_fill, seg.warmup_days)
         work.jobs.append((_contract_info(row), targets))
+
+    # The next contract's warm-up days that have already happened are collected
+    # now, as they occur, rather than all on the roll morning.
+    if assignment:
+        nxt = upcoming_roll(chain, max(assignment), rule, warmup)
+        if nxt is not None:
+            row = nxt.contract
+            logger.info(f"{work.symbol}: {row['expiry']} becomes front on {nxt.first_day}; "
+                        f"collecting {len(nxt.warmup_days)} warm-up day(s) ahead of it.")
+            targets = _plan(conn, row["contract_id"], work.instrument, nxt.warmup_days[0],
+                            nxt.warmup_days[-1], gap_fill)
+            work.jobs.append((_contract_info(row), [d for d in targets
+                                                    if date.fromisoformat(d) in set(nxt.warmup_days)]))
     return True
 
 

@@ -69,6 +69,15 @@ def previous_trading_day(d: date) -> date:
     return d
 
 
+def previous_trading_days(d: date, n: int) -> List[date]:
+    """The ``n`` trading days strictly before ``d``, oldest first."""
+    out = []
+    while len(out) < n:
+        d = previous_trading_day(d)
+        out.append(d)
+    return out[::-1]
+
+
 def plan_trading_days(
     conn,
     contract_id: int,

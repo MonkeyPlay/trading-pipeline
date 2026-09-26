@@ -72,6 +72,11 @@ class MarketData:
         """(coverage row vouching for ``day`` or None, events scheduled in (start, end))."""
         raise NotImplementedError
 
+    def bar_receipt(self, contract_id: int, bar_start: datetime, price_type: str) -> Optional[Dict]:
+        """The latest real-time receipt of one minute (``received_at``, ``revision``,
+        ``finalised_by``, ``close``) from bar_receipts, or None if it was never streamed."""
+        return None
+
     def latest_bar_start(self, contract_id: int, before: datetime, price_type: str,
                          lookback: timedelta = timedelta(days=7)) -> Optional[datetime]:
         """Start of the last bar with bar_start_at < ``before`` (within ``lookback``).
@@ -125,6 +130,19 @@ class DbMarketData(MarketData):
             (contract_id, price_type, before, before - lookback),
         ).fetchone()
         return pd.Timestamp(row[0], tz="UTC").to_pydatetime() if row and row[0] else None
+
+    def bar_receipt(self, contract_id, bar_start, price_type):
+        row = self.conn.execute(
+            "SELECT received_at, revision, finalised_by, close FROM bar_receipts "
+            "WHERE contract_id = %s AND interval = '1m' AND price_type = %s AND bar_start_at = %s "
+            "ORDER BY revision DESC LIMIT 1;",
+            (contract_id, price_type, bar_start),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"received_at": pd.Timestamp(row["received_at"], tz="UTC").to_pydatetime(),
+                "revision": int(row["revision"]), "finalised_by": row["finalised_by"],
+                "close": float(row["close"])}
 
     def active_contract(self, symbol, day):
         row = self.conn.execute(
@@ -189,11 +207,13 @@ class FrameMarketData(MarketData):
       contracts : {contract_id: {'symbol', 'expiry', ...}}
       fallback  : {symbol: contract_id}
       fetched_at: {(contract_id, 'YYYY-MM-DD'): datetime}; missing days report None
+      receipts  : {(contract_id, bar_start UTC Timestamp): receipt dict} (see bar_receipt)
     """
 
     def __init__(self, bars: pd.DataFrame, active=None, contracts=None, fallback=None,
-                 fetched_at=None, events=None, event_coverage=None):
+                 fetched_at=None, events=None, event_coverage=None, receipts=None):
         super().__init__()
+        self._receipts = receipts or {}
         df = bars.copy()
         df["bar_start_at"] = pd.to_datetime(df["bar_start_at"], utc=True)
         if "price_type" not in df:
@@ -213,6 +233,9 @@ class FrameMarketData(MarketData):
             return _empty()
         s, e = pd.Timestamp(start), pd.Timestamp(end)
         return g[(g["bar_start_at"] >= s) & (g["bar_start_at"] < e)][BAR_COLUMNS].copy()
+
+    def bar_receipt(self, contract_id, bar_start, price_type):
+        return self._receipts.get((contract_id, pd.Timestamp(bar_start)))
 
     def active_contract(self, symbol, day):
         cid = self._active.get((symbol, str(day)))

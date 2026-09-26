@@ -321,8 +321,8 @@ class SnapshotBuilder:
                 info["validity"] = "stale" if info.get("bar_start_at") else "missing"
                 out[label] = _bad("stale" if info.get("bar_start_at") else "missing")
             if record:
-                led = self.md.ledger(cid, day, pt)
-                info["available_at"] = _iso(led["fetched_at"]) if led else None
+                info.update(self._availability(cid, day, pt, info.get("bar_start_at"),
+                                               out[label].value))
             status["observation" if label == "now" else "reference"] = info
 
         if record:
@@ -556,31 +556,55 @@ class SnapshotBuilder:
         status["events"] = [{"name": e["name"], "tier": e["tier"], "scheduled_at": _iso(e["scheduled_at"]),
                              "source": e["source"]} for e in events]
 
+    def _availability(self, cid, day, pt, bar_start_iso, value) -> Dict[str, Any]:
+        """
+        When the value used became available: the real-time receipt of that exact
+        bar (collector/live_stream.py) if one recorded the same close, else the day's
+        ledger write time - a weaker, day-level proof.
+        """
+        if bar_start_iso is not None and value is not None:
+            start = datetime.strptime(bar_start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            receipt = self.md.bar_receipt(cid, start, pt)
+            if receipt is not None and receipt["close"] == value:
+                return {"available_at": _iso(receipt["received_at"]), "evidence": "bar_receipt",
+                        "receipt_revision": receipt["revision"], "finalised_by": receipt["finalised_by"]}
+        led = self.md.ledger(cid, day, pt)
+        return {"available_at": _iso(led["fetched_at"]) if led else None,
+                "evidence": "day_ledger" if led else None}
+
     def _nq_status(self, nq, st, d_prev):
         c = self.md.contract(nq) or {}
-        led = self.md.ledger(nq, self.sess.session_date, "TRADES")
-        led_prev = self.md.ledger(nq, self.prev.session_date, "TRADES")
         P_ok = st["P"].ok
+        obs_start = _iso(self.T - ONE_MIN) if P_ok else None
+        ref_start = _iso(self.prev.scheduled_close_at - ONE_MIN) if d_prev else None
         return {
             "asset": "nq", "symbol": NQ, "contract_id": nq, "local_symbol": c.get("local_symbol"),
             "expiry": c.get("expiry"), "rule": self.contracts_used[f"{NQ}/{self.sess.session_date}"]["rule"],
             "observation": {"instant": _iso(self.T),
-                            "bar_start_at": _iso(self.T - ONE_MIN) if P_ok else None,
+                            "bar_start_at": obs_start,
                             "bar_end_at": _iso(self.T) if P_ok else None,
                             "age_minutes": 0.0 if P_ok else None,
                             "validity": "valid" if P_ok else "missing",
-                            "available_at": _iso(led["fetched_at"]) if led else None},
+                            **self._availability(nq, self.sess.session_date, "TRADES", obs_start,
+                                                 st["P"].value)},
             "reference": {"instant": _iso(self.prev.scheduled_close_at),
-                          "bar_start_at": _iso(self.prev.scheduled_close_at - ONE_MIN) if d_prev else None,
+                          "bar_start_at": ref_start,
                           "bar_end_at": _iso(self.prev.scheduled_close_at) if d_prev else None,
                           "validity": "valid" if d_prev else "missing",
-                          "available_at": _iso(led_prev["fetched_at"]) if led_prev else None},
+                          **self._availability(nq, self.prev.session_date, "TRADES", ref_start,
+                                               d_prev["close"] if d_prev else None)},
             "overnight_coverage": st["on_coverage"].value,
             "window_60m_complete": st["high60"].ok,
             "validity": "valid" if P_ok and d_prev else "missing",
         }
 
     def _pit_status(self) -> str:
+        """
+        ``verified`` only for a live capture where every included source's
+        current-session observation has a real-time receipt of the exact value
+        used, received by the freeze, and every reference value was in the store
+        by then. Anything else is ``unverified_historical``.
+        """
         if self.data_mode != "live_capture":
             return "unverified_historical"
         frozen = _iso(self.frozen_at)
@@ -592,6 +616,8 @@ class SnapshotBuilder:
                 if info is None:
                     continue
                 if info.get("available_at") is None or info["available_at"] > frozen:
+                    return "unverified_historical"
+                if leg == "observation" and info.get("evidence") != "bar_receipt":
                     return "unverified_historical"
         return "verified"
 
