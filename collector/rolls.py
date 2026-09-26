@@ -56,19 +56,59 @@ def eligible_chain(chain, rule: RollRule) -> list:
     return sorted(out, key=expiry_date)
 
 
+# Slack on a missing contract's estimated expiry: equity quarterlies expire on a
+# third Friday (day 15-21), so the same day-of-month can be off by up to a week.
+_EXPIRY_SLACK = timedelta(days=7)
+
+
+def _shift_months(d: date, months: int) -> date:
+    """``d`` moved by whole months, the day clamped to the target month's length."""
+    y, m = divmod(d.year * 12 + d.month - 1 + months, 12)
+    m += 1
+    last = (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)).day
+    return date(y, m, min(d.day, last))
+
+
+def _previous_cycle_month(month: str, rule: RollRule) -> str:
+    """The contract month ('YYYYMM') before ``month`` in the rule's listing cycle."""
+    y, m = int(month[:4]), int(month[4:6])
+    for _ in range(12):
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+        if MONTH_CODES[m - 1] in rule.months:
+            return f"{y:04d}{m:02d}"
+    raise ValueError(f"no contract month of {rule.months} before {month}")
+
+
 def front_contracts(chain, days: Iterable[date], rule: RollRule) -> Dict[date, object]:
     """
     ``{day: contract row}`` - for each day, the nearest eligible contract whose
     expiry is more than ``rule.days_before_expiry`` calendar days away. A day the
     chain cannot cover is left out; the caller treats that as "discover the chain".
+
+    The chain may lack expired contracts (a store that only ever saw the current
+    ones). The nearest contract it *does* hold is then only accepted when the
+    contract before it in the cycle has certainly rolled off by that day - its
+    expiry, estimated from the chosen contract's, plus a week of slack. Otherwise
+    the day is left out, so a May 2025 day is never filed under September 2026
+    just because the June 2025 contract has not been discovered.
     """
     ordered = eligible_chain(chain, rule)
+    held = {contract_month(row) for row in ordered}
     out = {}
     for d in days:
         for row in ordered:
-            if expiry_date(row) - timedelta(days=rule.days_before_expiry) > d:
-                out[d] = row
-                break
+            expiry = expiry_date(row)
+            if expiry - timedelta(days=rule.days_before_expiry) <= d:
+                continue
+            month = contract_month(row)
+            prev = _previous_cycle_month(month, rule)
+            if prev not in held:
+                gap = (int(month[:4]) * 12 + int(month[4:6])) - (int(prev[:4]) * 12 + int(prev[4:6]))
+                prev_expiry = _shift_months(expiry, -gap) + _EXPIRY_SLACK
+                if prev_expiry - timedelta(days=rule.days_before_expiry) > d:
+                    break          # the missing contract may have been front: leave the day out
+            out[d] = row
+            break
     return out
 
 

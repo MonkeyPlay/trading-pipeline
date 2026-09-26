@@ -212,6 +212,21 @@ def set_active_contracts(conn: Database, symbol: str, assignments: Dict[str, int
     return len(rows)
 
 
+def clear_active_contracts(conn: Database, symbol: str, days) -> int:
+    """
+    Forgets the recorded contract of ``symbol`` for ``days`` (no contract is
+    known to have stood for them), so an assignment made from an incomplete
+    chain cannot outlive the plan that replaced it.
+    """
+    days = [_validate_day(d) for d in days]
+    if not days:
+        return 0
+    with conn:
+        cur = conn.execute("DELETE FROM active_contracts WHERE symbol = %s AND trading_day = ANY(%s);",
+                           (symbol, days))
+    return cur.rowcount or 0
+
+
 def get_active_contract(conn: Database, symbol: str, trading_day: str) -> Optional[Row]:
     """
     The contract that stood for ``symbol`` on ``trading_day`` (joined with its
