@@ -36,6 +36,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 NQ_DEC = 201            # the next NQ contract: only its warm-up days are stored
+NQ_JUN = 202            # the expiring June contract, still holding the first sessions
 LAST_DAY = "2026-06-12"
 
 
@@ -53,12 +54,15 @@ def market():
     md, sessions = make_market(last_day=LAST_DAY, n_sessions=8)
     upsert_contract(conn, NQ_CID, "NQ", "20260918", "CME")
     upsert_contract(conn, NQ_DEC, "NQ", "20261218", "CME")
+    upsert_contract(conn, NQ_JUN, "NQ", "20260619", "CME")
     upsert_contract(conn, ES_CID, "ES", "20260918", "CME")
     nq = md._bars[(NQ_CID, "TRADES")]
     _store(conn, nq, NQ_CID)
     warmup = [s for s in sessions[-3:]]
     start = warmup[0].overnight_start_at
     _store(conn, nq[nq["bar_start_at"] >= start].assign(close=lambda d: d["close"] + 50.0), NQ_DEC)
+    _store(conn, nq[nq["bar_start_at"] < sessions[2].overnight_start_at].assign(open=lambda d: d["open"] - 30.0),
+           NQ_JUN)
     _store(conn, md._bars[(ES_CID, "TRADES")], ES_CID)
     days = [s.session_date.isoformat() for s in sessions]
     set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
@@ -122,7 +126,7 @@ def test_analogue_session_is_the_regular_session(market):
     conn, md, sessions = market
     from dashboard.views.candles import load_analogue_session
     s, prev = sessions[-4], sessions[-5]
-    out = load_analogue_session(conn, "NQ", s.session_date.isoformat(), NQ_CID)
+    out = load_analogue_session(conn, "NQ", s.session_date.isoformat())
     assert out["contract"]["contract_id"] == NQ_CID
     bars = out["bars"]
     assert len(bars) == 390 and set(bars["session_scope"]) == {"RTH"}
@@ -140,19 +144,33 @@ def test_analogue_session_is_the_regular_session(market):
     assert out["stats"]["close"] == pytest.approx(rth["close"].iloc[-1])
     assert out["stats"]["high"] == pytest.approx(rth["high"].max())
 
-    five = load_analogue_session(conn, "NQ", s.session_date.isoformat(), NQ_CID, timeframe="5m")
+    five = load_analogue_session(conn, "NQ", s.session_date.isoformat(), timeframe="5m")
     assert len(five["bars"]) == 78
 
 
-def test_analogue_session_falls_back_to_a_contract_holding_the_day(market):
+def test_analogue_day_uses_the_closest_higher_contract(market):
     conn, _, sessions = market
     from dashboard.views.candles import load_analogue_session
-    # A forecast made on December matched a day before December's stored history.
-    old = sessions[-5].session_date.isoformat()
-    out = load_analogue_session(conn, "NQ", old, NQ_DEC)
-    assert out["contract"]["contract_id"] == NQ_CID and len(out["bars"]) == 390
-    # A December day uses December's own bars.
+    # Held by September and December (warm-up): September expires first after the day.
     recent = sessions[-1].session_date.isoformat()
-    assert load_analogue_session(conn, "NQ", recent, NQ_DEC)["contract"]["contract_id"] == NQ_DEC
+    assert load_analogue_session(conn, "NQ", recent)["contract"]["contract_id"] == NQ_CID
+    # Held by June, September: June is the closest contract expiring after it.
+    first = sessions[0].session_date.isoformat()
+    assert load_analogue_session(conn, "NQ", first)["contract"]["contract_id"] == NQ_JUN
+    # Only September holds this one.
+    mid = sessions[-5].session_date.isoformat()
+    assert load_analogue_session(conn, "NQ", mid)["contract"]["contract_id"] == NQ_CID
     missing = load_analogue_session(conn, "NQ", (sessions[0].session_date - timedelta(days=30)).isoformat())
     assert missing["bars"] is None and missing["stats"] is None
+
+
+def test_contract_order_for_a_day(monkeypatch):
+    from dashboard.views import candles
+    held = [{"contract_id": i, "expiry": e} for i, e in
+            ((1, "20260320"), (2, "202606"), (3, "20260918"), (4, "20261218"))]   # nearest expiry first
+    monkeypatch.setattr(candles, "contracts_with_day", lambda conn, symbol, day: held)
+    order = lambda day: [c["contract_id"] for c in candles.analogue_contracts(None, "NQ", day)]
+    assert order("2026-08-07") == [3, 4, 2, 1]      # Sep, then Dec; expired ones last, closest first
+    assert order("2026-06-15") == [2, 3, 4, 1]      # a contract month counts through its month
+    assert order("2026-09-18") == [3, 4, 2, 1]      # expiry day itself
+    assert order("2026-12-21") == [4, 3, 2, 1]      # nothing later holds it: closest earlier first

@@ -137,7 +137,8 @@ Two pages:
   the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
   historical day — RTH** charts the regular session (09:30–16:00 ET) of the best-matching
   earlier day, with that day's own previous close, overnight range and VWAP; the dropdown
-  switches to the other matches.
+  switches to the other matches. A matched day is drawn from the closest contract expiring on
+  or after it (an August day comes from September even when the page shows December).
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   every stored prediction joined against its realized outcome, so you can see whether the
   bias calls were right.
