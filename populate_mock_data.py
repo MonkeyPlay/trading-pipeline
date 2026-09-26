@@ -38,6 +38,7 @@ from database.queries import (
 )
 from features.session_windows import convert_utc_to_ny, get_trading_day_date
 from config import Config
+from forecaster.client import MODEL_VERSION, PROMPT_VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -292,8 +293,8 @@ def _populate_instrument(conn, contract_id, symbol, base_price, vol_multiplier,
 
         prediction_id = save_prediction(
             conn, contract_id=contract_id, forecast_cutoff=cutoff_utc,
-            snapshot_id=snapshot_id, model_version=Config.LLM_MODEL,
-            prompt_version=Config.PROMPT_VERSION, opening_bias=bias,
+            snapshot_id=snapshot_id, model_version=MODEL_VERSION,
+            prompt_version=PROMPT_VERSION, opening_bias=bias,
             scenarios=scenarios, probabilities=probabilities,
             raw_response=raw_resp, created_at=cutoff_utc,
         )

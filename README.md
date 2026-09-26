@@ -2,10 +2,11 @@
 
 A local, end-to-end research pipeline for the **CME equity-index futures opening**:
 it collects 1-minute bars from Interactive Brokers, freezes a pre-open feature snapshot
-at 09:30 ET, finds volatility-normalized historical analogues, asks an LLM (or a
-deterministic baseline) for an opening forecast, scores that forecast against what
-actually happened, and serves the whole thing in a NiceGUI dashboard drawn with
-TradingView's Lightweight Charts.
+at 09:29 ET, forecasts the NQ opening and session with a **scikit-learn model trained
+walk-forward on earlier sessions**, scores that forecast against what actually happened,
+and serves the whole thing in a NiceGUI dashboard drawn with TradingView's Lightweight
+Charts. No language model and no external API is involved: every forecast is computed
+locally from typed feature values.
 
 Ten instruments are collected out of the box:
 
@@ -197,7 +198,8 @@ For each symbol in turn ([scripts/daily_forecast.py](scripts/daily_forecast.py))
 2. backfills realized `outcomes` for every session that has already closed,
 3. computes the target session's pre-open snapshot → `feature_snapshots`,
 4. finds the top-5 analogue sessions,
-5. asks the forecaster for an opening bias + scenarios → `predictions`,
+5. turns the analogues' realised outcomes into an opening bias + scenarios (offline,
+   deterministic) → `predictions`,
 6. stores which historical days it leaned on → `analogue_matches`.
 
 ### Both together
@@ -224,7 +226,7 @@ is final, with the time it was received:
 
 ```cron
 0  9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.live_stream >> logs/live_stream.log 2>&1
-29 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python scripts/nq_forecast_v2.py live >> logs/pipeline_run.log 2>&1
+25 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python scripts/nq_forecast_v2.py live >> logs/pipeline_run.log 2>&1
 ```
 
 The streamer ([collector/live_stream.py](collector/live_stream.py)) runs until `--until`
@@ -234,7 +236,9 @@ so the historical collector can run beside it. Each bar goes to `bars` (as not y
 completed, so the regular collector re-downloads the day later) and, append-only, to
 `bar_receipts` with its `received_at` - the per-bar point-in-time proof a `verified`
 live snapshot cites. `nq_forecast_v2.py live` waits (until 09:29:45) for the confirmed
-NQ and ES 09:28 bars, then freezes and forecasts before 09:30.
+NQ and ES 09:28 bars, then freezes and forecasts before 09:30. It starts at 09:25 so the
+model is trained (on every outcome recorded so far) before T, leaving only prediction for
+the last minute.
 
 Collecting after the open adds no look-ahead: features select bars by timestamp
 (`get_last_bar_at_or_before`), never by what happens to be stored.
@@ -260,9 +264,6 @@ Settings come from environment variables or a local `.env`, read by
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
 | `IB_CLIENT_ID` | `1` | IB socket client id (the real-time streamer uses this + 1) |
 | `ROLL_WARMUP_SESSIONS` | `7` | Trading days of a future's next contract stored before it becomes front |
-| `GEMINI_API_KEY` | — | Enables Google Gemini-backed forecasts (the default provider; `GOOGLE_API_KEY` also works) |
-| `ANTHROPIC_API_KEY` | — | Enables Anthropic-backed forecasts |
-| `LLM_MODEL` | `gemini-2.5-flash` | Model name; a name containing `claude` selects Anthropic, anything else Gemini |
 | `DASHBOARD_HOST` | `127.0.0.1` | Interface the dashboard binds to |
 | `DASHBOARD_PORT` | `8080` | Port the dashboard listens on |
 
@@ -271,8 +272,6 @@ Settings come from environment variables or a local `.env`, read by
 SYMBOLS=ES,NQ,RTY
 CONTEXT_SYMBOLS=VIX,VXN,TNX,DX,SMH,10Y,2YY
 EXPIRY=202612
-LLM_MODEL=gemini-2.5-flash
-GEMINI_API_KEY=...
 ```
 
 **Adding another instrument** means one entry in `INSTRUMENTS` in [config.py](config.py)
@@ -284,10 +283,9 @@ size and multiplier back from IB. A non-CME or non-equity-index future would als
 session windows and holiday calendar checked, since those assume the 18:00 ET roll and the
 CME equity calendar.
 
-**Without an API key the pipeline still works.** `ForecastClient`
-([forecaster/client.py](forecaster/client.py)) falls back to a deterministic,
-analogue-driven baseline engine, so you can develop and evaluate offline. The shipped
-`.env` is empty, which is exactly this case.
+**No API keys are needed.** Forecasts are computed locally: the v2 model with
+scikit-learn ([forecaster/models_v2.py](forecaster/models_v2.py)), the v1 dashboard
+forecast with a deterministic analogue engine ([forecaster/client.py](forecaster/client.py)).
 
 Check what config resolves to:
 
@@ -357,10 +355,11 @@ day". That makes 2023 sessions comparable to 2026 ones at different price levels
 volatility regimes. Nearest neighbours by Euclidean distance on
 `[gap, overnight_range, direction]`.
 
-**Forecasting** ([forecaster/prompts.py](forecaster/prompts.py),
-[forecaster/client.py](forecaster/client.py)) hands the model the target snapshot plus each
-analogue *with its realized outcome*, and requires strict JSON back: `opening_bias`,
-`scenarios`, `probabilities`, `forecast_horizon`.
+**Forecasting** ([forecaster/client.py](forecaster/client.py)) counts how the closest
+analogues actually ended (bullish, bearish, mean-reverting) and turns that into an
+`opening_bias`, two `scenarios` with triggers and invalidations, `probabilities` and a
+`forecast_horizon`. It is deterministic and offline. The trained model is the v2 pipeline
+below.
 
 **Evaluation** ([forecaster/evaluator.py](forecaster/evaluator.py)) computes what actually
 happened once a session closes — first 15/30 minutes, the 60-minute Initial Balance, and
@@ -378,11 +377,30 @@ point-in-time flag. Forecast runs, per-target probability distributions (with
 abstention), realised labels and continuous outcome metrics are separate, append-only
 records; corrections become new versions or revisions, never overwrites.
 
+It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v2_candidate`):
+`first_move_5m`, `opening_type_15m`, `direction_15m`, `direction_rth` and
+`session_type_rth`, each labelled afterwards by deterministic rules from the realised
+minute bars.
+
+**The model** (`nq_sklearn_v1`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+scikit-learn classifier per target over an explicit allowlist of snapshot features
+(median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
+session it trains only on earlier sessions whose outcome was knowable before that
+session's 09:29 cutoff. For each target it scores the class prior, two L2 logistic
+regressions and a gradient-boosted tree ensemble by chronological cross-validation
+(`TimeSeriesSplit`, log loss) and refits the winner. A feature model is used only when it
+beats the prior out of sample. `nq_climatology_v2` (label frequencies) is kept as the
+baseline to compare against.
+
 ```bash
-python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + backtest
-python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
-python scripts/nq_forecast_v2.py live        # 09:29 ET, once the 09:28 bars are stored
+python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + walk-forward backtest (both models)
+python scripts/nq_forecast_v2.py train                                          # fit for today: CV report + data/models/ artifact
+python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # accuracy, log loss, Brier per model/target
+python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
+
+The model needs at least 60 labelled sessions per target (earlier forecasts are recorded as
+`unavailable`), so backfill history first.
 
 Tests: `pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable
 database whose name contains `test`; they reset it).
@@ -395,7 +413,7 @@ database whose name contains `test`; they reset it).
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools |
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
-| [forecaster/](forecaster/) | Prompts, LLM client + offline baseline, outcome evaluator |
+| [forecaster/](forecaster/) | v2 labels + scikit-learn model, v1 analogue forecast, outcome evaluator |
 | [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
 | [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
 | [tests/](tests/) | Calendar, feature-indicator, v2 snapshot and forecast-record tests |

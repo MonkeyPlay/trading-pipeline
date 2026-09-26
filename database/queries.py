@@ -1192,7 +1192,7 @@ def save_prediction(
     raw_response: str,
     created_at: str,
 ) -> int:
-    """Saves the LLM prediction run. Scenarios and probabilities are stored as JSON."""
+    """Saves a v1 prediction run. Scenarios and probabilities are stored as JSON."""
     query = """
     INSERT INTO predictions (
         contract_id, forecast_cutoff, snapshot_id, model_version, prompt_version,
@@ -1213,7 +1213,7 @@ def save_prediction(
 
 
 def get_prediction(conn: Database, prediction_id: int) -> Optional[Row]:
-    """Retrieves an LLM prediction by its ID."""
+    """Retrieves a v1 prediction by its ID."""
     try:
         return conn.execute(
             "SELECT * FROM predictions WHERE prediction_id = %s;", (prediction_id,)

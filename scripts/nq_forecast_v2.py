@@ -7,12 +7,18 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py forecast --date 2026-09-24
     python scripts/nq_forecast_v2.py outcomes --start 2026-09-01 --end 2026-09-24
     python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-24
+    python scripts/nq_forecast_v2.py train --date 2026-09-25      # fit + CV report + saved artifact
     python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
+
+Forecasts come from the trained scikit-learn model (nq_sklearn_v1, the default)
+or the climatology baseline (nq_climatology_v2); ``--model`` takes one or a
+comma-separated list. No language model or external API is called.
 
 Every command registers the feature, label and model definitions first; a
 changed definition under an existing version name stops the run.
 
-``live`` is the only path that produces ``live_capture`` snapshots. It waits
+``live`` is the only path that produces ``live_capture`` snapshots. It trains
+the model(s) first, on every outcome already recorded, then waits
 (until 09:29:45 ET by default) for the NQ and ES bars starting 09:28 - as
 confirmed by the real-time streamer, collector/live_stream.py - freezes the
 snapshot, and forecasts; both must be complete before 09:30:00 ET or nothing is
@@ -55,6 +61,15 @@ def _code_revision():
         return None
 
 
+def _models(arg):
+    names = [m.strip() for m in arg.split(",") if m.strip()]
+    unknown = [m for m in names if m not in models_v2.MODELS]
+    if unknown or not names:
+        raise SystemExit(f"unknown model(s) {', '.join(unknown) or arg!r}; choose from "
+                         f"{', '.join(sorted(models_v2.MODELS))}")
+    return names
+
+
 def register(conn):
     store.register_feature_version(conn, catv2.registry_record())
     store.register_label_version(conn, labels_v2.label_registry_record())
@@ -78,12 +93,15 @@ def take_snapshot(conn, md, day, data_mode="historical_reconstruction"):
     return snapshot_id
 
 
-def run_forecast(conn, snapshot_id, model_version):
+def run_forecast(conn, snapshot_id, model_version, fitted=None):
     snapshot = store.get_feature_snapshot(conn, snapshot_id)
     run, predictions = models_v2.predict(conn, snapshot, models_v2.MODELS[model_version],
-                                         code_revision=_code_revision())
+                                         code_revision=_code_revision(), fitted=fitted)
     run_id = store.save_forecast_run(conn, run, predictions)
-    summary = ", ".join(f"{p['target_id']}={p.get('predicted_label') or 'ABSTAIN'}" for p in predictions)
+    summary = ", ".join(
+        f"{p['target_id']}=" + (p["predicted_label"] if p["prediction_status"] == "issued"
+                                else f"{p['prediction_status'].upper()}({p['decision_reason']})")
+        for p in predictions)
     logger.info(f"{snapshot['session_date']}: run {run_id} [{model_version}, input "
                 f"{run['input_quality_status']}] {summary}")
     return run_id
@@ -97,13 +115,14 @@ def record_outcomes(conn, md, snapshot, now=None):
     mrev, _ = store.save_outcome_metrics(conn, snapshot["snapshot_id"], labels_v2.METRIC_VERSION,
                                          out["metrics"], out["metric_status"], out["available_at"],
                                          out["digest"])
-    for target, (label, reason, available_at) in out["labels"].items():
+    for target, o in out["labels"].items():
         rev, created = store.save_realised_outcome(
-            conn, snapshot["snapshot_id"], labels_v2.LABEL_VERSION, target, label, reason, available_at,
-            out["digest"], labels_v2.METRIC_VERSION, mrev)
+            conn, snapshot["snapshot_id"], labels_v2.LABEL_VERSION, target, o["label"],
+            None if o["label"] is not None else o["status"], o["available_at"], out["digest"],
+            labels_v2.METRIC_VERSION, mrev, o["window_start_at"], o["window_end_at"])
         if created and rev > 1:
             logger.warning(f"{snapshot['session_date']} {target}: outcome revised to revision {rev} "
-                           f"({label or reason}).")
+                           f"({o['label'] or o['status']}).")
     return True
 
 
@@ -123,6 +142,11 @@ def cmd_snapshot(conn, md, args):
 
 
 def cmd_forecast(conn, md, args):
+    fitted = None
+    if args.artifact:
+        if len(_models(args.model)) != 1:
+            raise SystemExit("--artifact belongs to exactly one --model")
+        fitted = models_v2.load_artifact(args.artifact)   # refused for sessions it could not have forecast
     status = 0
     for s in _sessions(args):
         snaps = store.find_snapshots(conn, s.session_date.isoformat(), catv2.FEATURE_VERSION)
@@ -130,7 +154,12 @@ def cmd_forecast(conn, md, args):
             logger.error(f"{s.session_date}: no {catv2.FEATURE_VERSION} snapshot; run 'snapshot' first.")
             status = 1
             continue
-        run_forecast(conn, snaps[0]["snapshot_id"], args.model)
+        for model in _models(args.model):
+            try:
+                run_forecast(conn, snaps[0]["snapshot_id"], model, fitted=fitted)
+            except ValueError as e:   # an artifact that is not point-in-time for this session
+                logger.error(f"{s.session_date}: {e}")
+                status = 1
     return status
 
 
@@ -143,15 +172,56 @@ def cmd_outcomes(conn, md, args):
 
 
 def cmd_backfill(conn, md, args):
-    """In session order: reconstruct, forecast (seeing only earlier outcomes), score."""
+    """
+    In session order: reconstruct, forecast, then score - a walk-forward
+    backtest. Each model is retrained every ``--retrain-every`` sessions on the
+    outcomes of earlier sessions only; in between, the last fit is reused, which
+    has seen strictly less, so the backtest stays point-in-time.
+    """
+    models = _models(args.model)
+    fits = {}   # model -> (fitted, sessions since it was fitted)
     for s in _sessions(args):
         try:
             snapshot_id = take_snapshot(conn, md, s.session_date)
         except SnapshotError as e:
             logger.error(f"{s.session_date}: {e}")
             continue
-        run_forecast(conn, snapshot_id, args.model)
+        for model in models:
+            fitted, age = fits.get(model, (None, None))
+            if fitted is None or age >= args.retrain_every:
+                fitted, age = models_v2.fit(conn, models_v2.MODELS[model], s.session_date, s.cutoff_at), 0
+            run_forecast(conn, snapshot_id, model, fitted=fitted)
+            fits[model] = (fitted, age + 1)
         record_outcomes(conn, md, store.get_feature_snapshot(conn, snapshot_id))
+    return 0
+
+
+def cmd_train(conn, md, args):
+    """Fits the model(s) for one session, prints the selection report, saves the artifact."""
+    day = cal.session(args.date) if args.date else cal.session(datetime.now(cal.NY_TZ).date())
+    while not day.is_open:
+        day = cal.session(day.session_date + timedelta(days=1))
+    for name in _models(args.model):
+        fitted = models_v2.fit(conn, models_v2.MODELS[name], day.session_date, day.cutoff_at)
+        report = models_v2.training_report(fitted)
+        print(f"\n{name} for {day.session_date} (outcomes knowable by "
+              f"{day.cutoff_at.astimezone(cal.NY_TZ):%Y-%m-%d %H:%M} ET)")
+        for target, t in report["targets"].items():
+            head = f"  {target:18} n={t['n']:<5}"
+            if t["status"] != "ok":
+                print(f"{head} {t['status']}")
+                continue
+            print(f"{head} selected={t['selected']}  ({t['first_session']} .. {t['last_session']}, "
+                  f"{t.get('cv_folds', 0)} CV folds)")
+            for cand, sc in (t.get("cv") or {}).items():
+                mark = "*" if cand == t["selected"] else " "
+                print(f"      {mark} {cand:24} logloss {sc['log_loss']:.4f}  acc {sc['accuracy']:.3f}  "
+                      f"(n={sc['n_validation']})")
+        if args.out:
+            os.makedirs(os.path.join(args.out, name), exist_ok=True)
+            path = os.path.join(args.out, name, f"{day.session_date}.joblib")
+            models_v2.save_artifact(fitted, path)
+            print(f"  saved {path} (+ .json report)")
     return 0
 
 
@@ -177,6 +247,15 @@ def cmd_live(conn, md, args):
     if not s.is_open:
         logger.info(f"{today} is not a scheduled session; nothing to do.")
         return 0
+    # Train before T so only prediction is left for the 09:29-09:30 window. Only
+    # outcomes already recorded now (and knowable by T) are used.
+    fitted = {}
+    for name in _models(args.model):
+        fitted[name] = models_v2.fit(conn, models_v2.MODELS[name], today, s.cutoff_at,
+                                     computed_by=datetime.now(timezone.utc))
+        logger.info(f"Trained {name}: " + ", ".join(
+            f"{t}={f.get('selected') if f['status'] == 'ok' else f['status']} (n={f['n']})"
+            for t, f in fitted[name]["targets"].items()))
     now = datetime.now(timezone.utc)
     if now < s.cutoff_at:
         logger.info(f"Waiting for T ({s.cutoff_at.astimezone(cal.NY_TZ):%H:%M:%S} ET).")
@@ -203,7 +282,8 @@ def cmd_live(conn, md, args):
     md = DbMarketData(conn)   # no cache from before the wait
     try:
         snapshot_id = take_snapshot(conn, md, today, "live_capture")
-        run_forecast(conn, snapshot_id, args.model)
+        for name, f in fitted.items():
+            run_forecast(conn, snapshot_id, name, fitted=f)
     except SnapshotError as e:
         logger.error(str(e))
         return 1
@@ -214,6 +294,11 @@ def cmd_live(conn, md, args):
 
 
 def cmd_evaluate(conn, md, args):
+    """
+    Per model, target and data mode: how many predictions were issued, abstained
+    or unavailable; accuracy of the issued labels; and log loss and Brier score of
+    every probability distribution (issued or abstained) with an eligible outcome.
+    """
     rows = store.get_prediction_outcomes(conn, outcome_revision=args.outcome_revision,
                                          outcomes_as_of=args.outcomes_as_of, model_version=args.model)
     groups = {}
@@ -222,16 +307,19 @@ def cmd_evaluate(conn, md, args):
     if not groups:
         print("No predictions with realised outcomes for that revision.")
         return 0
-    print(f"{'model':22} {'target':22} {'mode':26} {'n':>5} {'abst':>5} {'inel':>5} "
-          f"{'acc':>6} {'logloss':>8} {'brier':>6}")
+    print(f"{'model':20} {'target':18} {'mode':25} {'n':>5} {'issued':>6} {'abst':>5} {'unav':>5} "
+          f"{'inel':>5} {'acc':>6} {'logloss':>8} {'brier':>6}")
     for (model, target, mode), rs in sorted(groups.items()):
-        scored = [r for r in rs if not r["abstained"] and r["eligible"]]
-        acc = sum(r["predicted_label"] == r["actual_label"] for r in scored) / len(scored) if scored else math.nan
-        ll = (sum(-math.log(max(r["probabilities"][r["actual_label"]], 1e-15)) for r in scored) / len(scored)
-              if scored else math.nan)
+        status = [r["prediction_status"] for r in rs]
+        issued = [r for r in rs if r["prediction_status"] == "issued" and r["eligible"]]
+        probs = [r for r in rs if r["probabilities"] is not None and r["eligible"]]
+        acc = sum(r["predicted_label"] == r["actual_label"] for r in issued) / len(issued) if issued else math.nan
+        ll = (sum(-math.log(max(r["probabilities"][r["actual_label"]], 1e-15)) for r in probs) / len(probs)
+              if probs else math.nan)
         br = (sum(sum((p - (lab == r["actual_label"])) ** 2 for lab, p in r["probabilities"].items())
-                  for r in scored) / len(scored) if scored else math.nan)
-        print(f"{model:22} {target:22} {mode:26} {len(rs):5d} {sum(r['abstained'] for r in rs):5d} "
+                  for r in probs) / len(probs) if probs else math.nan)
+        print(f"{model:20} {target:18} {mode:25} {len(rs):5d} {status.count('issued'):6d} "
+              f"{status.count('abstained'):5d} {status.count('unavailable'):5d} "
               f"{sum(not r['eligible'] for r in rs):5d} {acc:6.3f} {ll:8.4f} {br:6.4f}")
     return 0
 
@@ -249,16 +337,26 @@ def main(argv=None):
 
     p = sub.add_parser("snapshot", help="Reconstruct historical snapshot(s)")
     dates(p)
-    p = sub.add_parser("forecast", help="Run a model on stored snapshot(s)")
+    model_help = f"model version(s), comma-separated: {', '.join(sorted(models_v2.MODELS))}"
+    p = sub.add_parser("forecast", help="Run model(s) on stored snapshot(s)")
     dates(p)
-    p.add_argument("--model", default="nq_climatology_v1", choices=sorted(models_v2.MODELS))
+    p.add_argument("--model", default=models_v2.DEFAULT_MODEL, help=model_help)
+    p.add_argument("--artifact", help="Use a model saved by 'train' instead of training now (only for its "
+                                      "session or later ones)")
     p = sub.add_parser("outcomes", help="Record outcome metrics and labels for closed sessions")
     dates(p, single=False)
     p = sub.add_parser("backfill", help="Snapshot + forecast + outcomes, session by session")
     dates(p, single=False)
-    p.add_argument("--model", default="nq_climatology_v1", choices=sorted(models_v2.MODELS))
+    p.add_argument("--model", default=",".join(models_v2.MODELS), help=model_help)
+    p.add_argument("--retrain-every", type=int, default=5,
+                   help="Sessions between refits (1 = refit every session); reuse is point-in-time safe")
+    p = sub.add_parser("train", help="Fit model(s) for a session and print the cross-validation report")
+    p.add_argument("--date", help="Session to train for (default: today, or the next session)")
+    p.add_argument("--model", default=models_v2.DEFAULT_MODEL, help=model_help)
+    p.add_argument("--out", default=os.path.join(_PROJECT_ROOT, "data", "models"),
+                   help="Directory for the fitted artifact and its JSON report ('' to skip saving)")
     p = sub.add_parser("live", help="Live capture and forecast before 09:30 ET")
-    p.add_argument("--model", default="nq_climatology_v1", choices=sorted(models_v2.MODELS))
+    p.add_argument("--model", default=models_v2.DEFAULT_MODEL, help=model_help)
     p.add_argument("--wait-until", default="09:29:45", help="ET time to stop waiting for the 09:28 bars")
     p.add_argument("--wait-for", default="NQ,ES",
                    help="Symbols whose 09:28 bar must be stored before freezing (P and the ES leg)")
@@ -279,6 +377,8 @@ def main(argv=None):
         parser.error("give --start and --end")
     if args.command == "backfill":
         args.date = None
+        if args.retrain_every < 1:
+            parser.error("--retrain-every must be >= 1")
 
     init_database(args.db)
     conn = get_db_connection(args.db)
@@ -286,7 +386,7 @@ def main(argv=None):
         register(conn)
         md = DbMarketData(conn)
         handler = {"snapshot": cmd_snapshot, "forecast": cmd_forecast, "outcomes": cmd_outcomes,
-                   "backfill": cmd_backfill, "live": cmd_live, "evaluate": cmd_evaluate,
+                   "backfill": cmd_backfill, "train": cmd_train, "live": cmd_live, "evaluate": cmd_evaluate,
                    "register": lambda *a: 0}[args.command]
         return handler(conn, md, args)
     finally:

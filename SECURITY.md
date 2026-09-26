@@ -39,11 +39,11 @@ disclose publicly after 90 days, or sooner once a fix is on `main`.
 Findings that break the trusted-local model, or that harm a user who followed the README:
 
 - remote code execution, SQL injection, or path traversal reachable from collected data,
-  IB API responses, LLM responses, or dashboard input,
+  IB API responses, stored model artifacts, or dashboard input,
 - a default or documented configuration that exposes the dashboard or database beyond
   `localhost` without saying so,
-- secrets (API keys, `DATABASE_URL` passwords) leaking into logs, the database, LLM
-  prompts, backups, or committed files,
+- secrets (`DATABASE_URL` passwords) leaking into logs, the database, backups, or
+  committed files,
 - a dependency vulnerability that is actually reachable from this code,
 - data-destroying behaviour that bypasses the existing guards — for example
   `populate_mock_data.py --reset` touching a store that holds non-`MOCK` bars, or
@@ -66,7 +66,7 @@ Findings that break the trusted-local model, or that harm a user who followed th
 
 | Where secrets live | How it is handled |
 |---|---|
-| `.env` | Git-ignored, never committed. Holds `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` and any real `DATABASE_URL` password. |
+| `.env` | Git-ignored, never committed. Holds any real `DATABASE_URL` password. |
 | `config.py` | Reads environment variables only — no key is ever hardcoded. Defaults are non-secret localhost values. |
 | `python config.py` | Prints a redacted DSN via `describe_dsn()`, not the password. |
 | `data/backups/*.dump` | Git-ignored, **unencrypted** `pg_dump` output with 30-day retention. Encrypt the directory or the volume if the host is not trusted. |
@@ -75,11 +75,9 @@ Findings that break the trusted-local model, or that harm a user who followed th
 If you ever commit a key by accident, treat it as compromised: revoke and reissue it at the
 provider, then rewrite history. Rotating alone is not enough once it has been pushed.
 
-**Third-party data flow.** With `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) or `ANTHROPIC_API_KEY` set, the forecaster
-sends the pre-open feature snapshot and analogue sessions to that provider's API. Those are
-derived market statistics, not personal data, but it is an outbound network call to a third
-party. Leave all keys unset and `ForecastClient` uses the offline deterministic baseline
-instead, and the pipeline makes no LLM calls at all.
+**Third-party data flow.** None. Forecasts are computed locally (scikit-learn and a
+deterministic analogue engine); the pipeline calls no language model or other external
+API. Its only outbound connection is to your own IB Gateway/TWS.
 
 ## Hardening if you run it beyond your laptop
 

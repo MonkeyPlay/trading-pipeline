@@ -23,6 +23,7 @@ from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
+from forecaster.client import MODEL_VERSION as FORECAST_MODEL
 
 _PAGE_BACKGROUND = "#131722"
 
@@ -71,7 +72,7 @@ def chrome(active: str, conn) -> None:
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
         ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
-        ui.label(f"model {Config.LLM_MODEL}").classes("text-xs").style("color:#787b86")
+        ui.label(f"model {FORECAST_MODEL}").classes("text-xs").style("color:#787b86")
 
 
 @ui.page("/")

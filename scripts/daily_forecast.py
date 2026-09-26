@@ -7,7 +7,7 @@ Ties the pieces together and PERSISTS the results, once per instrument:
   2. evaluate realized outcomes for every completed prior session   -> outcomes
   3. compute the pre-open feature snapshot for the target session   -> feature_snapshots
   4. find volatility-normalized historical analogues
-  5. request an LLM (or baseline) opening forecast                  -> predictions
+  5. build the analogue-baseline opening forecast (offline)         -> predictions
   6. store the analogue matches                                     -> analogue_matches
 
 Each instrument is forecast independently: analogues for ES are drawn only from
@@ -45,7 +45,7 @@ from database.queries import (
 from features.calculations import calculate_pre_open_snapshot
 from features.session_windows import enrich_candle_timezones, NY_TZ
 from forecaster.evaluator import evaluate_session_outcomes
-from forecaster.client import ForecastClient
+from forecaster.client import MODEL_VERSION, PROMPT_VERSION, ForecastClient
 from matching.normalizer import find_analogues
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -183,7 +183,7 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
 
         prediction_id = save_prediction(
             conn, contract_id=contract_id, forecast_cutoff=cutoff, snapshot_id=snapshot_id,
-            model_version=client.model_name, prompt_version=Config.PROMPT_VERSION,
+            model_version=client.model_name, prompt_version=PROMPT_VERSION,
             opening_bias=forecast.get("opening_bias"),
             scenarios=forecast.get("scenarios", {}),
             probabilities=forecast.get("probabilities", {}),
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--expiry", default=None,
                         help="Contract expiry YYYYMM applied to every symbol "
                              "(default: the configured EXPIRY, with per-symbol overrides)")
-    parser.add_argument("--model", default=Config.LLM_MODEL)
+    parser.add_argument("--model", default=MODEL_VERSION, help="Model version recorded with the forecast")
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--date", default=None, help="Target session YYYY-MM-DD (default: latest available)")
     args = parser.parse_args()

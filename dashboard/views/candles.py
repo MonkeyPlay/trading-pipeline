@@ -42,7 +42,7 @@ from features.calculations import (
     enrich_candle_timezones,
 )
 from features.session_windows import NY_TZ
-from forecaster.client import ForecastClient
+from forecaster.client import PROMPT_VERSION, ForecastClient
 from matching.normalizer import find_analogues
 
 _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
@@ -424,7 +424,7 @@ class SessionExplorer:
             hist_snapshots.append(hist)
 
         analogues = find_analogues(self.snapshot, hist_snapshots, k=3)
-        client = ForecastClient(model_name=Config.LLM_MODEL)
+        client = ForecastClient()
         forecast = client.get_forecast(
             self.date, self.snapshot, analogues,
             instrument=Config.describe_instrument(self.contract["symbol"]),
@@ -458,7 +458,7 @@ class SessionExplorer:
         prediction_id = save_prediction(
             conn=self.conn, contract_id=contract_id, forecast_cutoff=cutoff,
             snapshot_id=snapshot_id, model_version=client.model_name,
-            prompt_version=Config.PROMPT_VERSION,
+            prompt_version=PROMPT_VERSION,
             opening_bias=forecast.get("opening_bias"),
             scenarios=forecast.get("scenarios", {}),
             probabilities=forecast.get("probabilities", {}),
