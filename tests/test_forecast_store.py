@@ -238,3 +238,22 @@ def test_sklearn_forecast_end_to_end(conn):
     run, default = models_v2.predict(conn, target, models_v2.SKLEARN)
     assert {p["prediction_status"] for p in default} == {"unavailable"}   # < 60 training sessions
     store.save_forecast_run(conn, run, default)
+
+
+def test_day_forecast_for_the_dashboard(conn):
+    """The newest run of a model for a session, its predictions and realised outcomes."""
+    assert store.get_day_forecast(conn, "2026-06-12", "nq_climatology_v2", catv2.FEATURE_VERSION) is None
+    day = store.get_day_forecast(conn, "2026-06-12", "nq_sklearn_test", catv2.FEATURE_VERSION)
+    assert day is not None and day["run"]["model_version"] == "nq_sklearn_test"
+    assert set(day["predictions"]) == set(labels_v2.TARGETS)
+    p = day["predictions"]["direction_15m"]
+    assert p["prediction_status"] == "issued" and set(p["probabilities"]) == {"up", "down", "flat"}
+    assert set(day["outcomes"]) == set(labels_v2.TARGETS)          # recorded by the end-to-end test
+    assert "training" in day["run"]["calibration"]
+    # A later run of the same model supersedes it on screen.
+    target = store.find_snapshots(conn, "2026-06-12", catv2.FEATURE_VERSION)[0]
+    small = dict(models_v2.SKLEARN, model_version="nq_sklearn_test")
+    small["parameters"] = dict(small["parameters"], min_training_sessions=3)
+    run_id = store.save_forecast_run(conn, *models_v2.predict(conn, target, small))
+    assert store.get_day_forecast(conn, "2026-06-12", "nq_sklearn_test",
+                                  catv2.FEATURE_VERSION)["run"]["forecast_run_id"] == run_id

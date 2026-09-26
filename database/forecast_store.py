@@ -357,3 +357,42 @@ def get_prediction_outcomes(conn: Database, outcome_revision: Optional[int] = No
         d["probabilities"] = _load(d["probabilities"])
         out.append(d)
     return out
+
+
+def get_day_forecast(conn: Database, session_date: str, model_version: str, feature_version: str,
+                     symbol: str = "NQ") -> Optional[Dict[str, Any]]:
+    """
+    The newest run of ``model_version`` for ``symbol``'s session ``session_date``
+    (on its live capture when there is one), with its predictions and, per
+    target, the latest realised outcome recorded so far:
+    ``{'run', 'snapshot', 'predictions': {target: row}, 'outcomes': {target: row}}``.
+    """
+    run = conn.execute(
+        "SELECT r.*, s.data_mode, s.pit_availability_status, s.data_quality_status, s.features_frozen_at "
+        "FROM forecast.forecast_runs r "
+        "JOIN forecast.feature_snapshots s ON s.snapshot_id = r.snapshot_id "
+        "JOIN contracts c ON c.contract_id = s.instrument_id "
+        "WHERE s.session_date = %s AND r.model_version = %s AND s.feature_version = %s AND c.symbol = %s "
+        "ORDER BY (s.data_mode = 'live_capture') DESC, r.generated_at DESC LIMIT 1;",
+        (session_date, model_version, feature_version, symbol),
+    ).fetchone()
+    if run is None:
+        return None
+    run = dict(zip(run.keys(), run))
+    run["snapshot_id"], run["forecast_run_id"] = str(run["snapshot_id"]), str(run["forecast_run_id"])
+    run["calibration"] = _load(run["calibration"])
+    predictions = {}
+    for r in conn.execute("SELECT * FROM forecast.predictions WHERE forecast_run_id = %s;",
+                          (run["forecast_run_id"],)).fetchall():
+        d = dict(zip(r.keys(), r))
+        d["probabilities"] = _load(d["probabilities"])
+        predictions[d["target_id"]] = d
+    outcomes = {}
+    for r in conn.execute(
+        "SELECT DISTINCT ON (target_id) * FROM forecast.realised_outcomes "
+        "WHERE snapshot_id = %s AND label_version = %s ORDER BY target_id, outcome_revision DESC;",
+        (run["snapshot_id"], run["label_version"]),
+    ).fetchall():
+        d = dict(zip(r.keys(), r))
+        outcomes[d["target_id"]] = d
+    return {"run": run, "predictions": predictions, "outcomes": outcomes}
