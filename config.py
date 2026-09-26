@@ -217,11 +217,6 @@ class Config:
     IB_PORT = int(os.getenv("IB_PORT", "4002"))
     IB_CLIENT_ID = int(os.getenv("IB_CLIENT_ID", "1"))
 
-    # LLM Settings
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")  # e.g. gpt-4o-mini, claude-3-5-sonnet-latest
-
     # Instrument Settings
     #   SYMBOLS         - instruments that are forecast (and therefore collected)
     #   CONTEXT_SYMBOLS - collected only as intermarket context for those forecasts;
@@ -246,7 +241,6 @@ class Config:
     # Application Settings
     TIMEZONE = "America/New_York"
     FEATURE_VERSION = "v1.0"
-    PROMPT_VERSION = "v1.0"
 
     @classmethod
     def collect_symbols(cls):
@@ -295,10 +289,6 @@ class Config:
     @classmethod
     def validate(cls):
         """Validates critical config values."""
-        # Check LLM keys (optional warnings rather than hard crashes)
-        if not cls.OPENAI_API_KEY and not cls.ANTHROPIC_API_KEY:
-            print("WARNING: Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY found in environment variables.")
-
         unknown = [s for s in cls.collect_symbols() if s not in INSTRUMENTS]
         if unknown:
             print(f"WARNING: unknown instrument(s) configured: {', '.join(unknown)}. "

@@ -1,54 +1,45 @@
 # forecaster/client.py
 """
-LLM Client and Forecasting Engine for the Opening Forecast System.
-Handles communication with LLM endpoints (OpenAI/Anthropic) and provides
-a deterministic, analogue-driven fallback engine when running offline.
+The v1 opening forecast used by the dashboard's Session Explorer and
+scripts/daily_forecast.py: a deterministic, analogue-driven engine that turns
+the realised outcomes of the closest historical sessions into an opening bias,
+two scenarios and outcome frequencies.
+
+It runs entirely offline: no language model and no external API is called. The
+trained per-target forecasts of the v2 contract live in forecaster/models_v2.py
+(scripts/nq_forecast_v2.py).
 """
 
-import os
-import json
 import logging
-
-from forecaster.prompts import construct_forecast_prompt, _fmt
 
 logger = logging.getLogger(__name__)
 
+MODEL_VERSION = "analogue_baseline_v1"
+# The v1 predictions table records a prompt version; no prompt exists any more.
+PROMPT_VERSION = "none"
 REQUIRED_FORECAST_KEYS = ["opening_bias", "scenarios", "probabilities", "forecast_horizon"]
 
 
+def _fmt(value, spec=".2f"):
+    """Formats a number, returning 'N/A' for None / non-numeric values."""
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 class ForecastClient:
-    def __init__(self, model_name=None, api_key=None, provider=None):
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-4o-mini")
-
-        openai_key = os.getenv("OPENAI_API_KEY")
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-
-        # Infer provider from an explicit arg, then the model name, then whichever key exists.
-        if provider:
-            self.provider = provider
-        elif "claude" in self.model_name.lower():
-            self.provider = "anthropic"
-        elif anthropic_key and not openai_key:
-            self.provider = "anthropic"
-        else:
-            self.provider = "openai"
-
-        if api_key:
-            self.api_key = api_key
-        elif self.provider == "anthropic":
-            self.api_key = anthropic_key
-        else:
-            self.api_key = openai_key
+    def __init__(self, model_name=None):
+        self.model_name = model_name or MODEL_VERSION
 
     # ------------------------------------------------------------------
-    # Offline / deterministic fallback
+    # Analogue engine
     # ------------------------------------------------------------------
-    def _generate_mock_or_baseline_forecast(self, target_day, target_features, analogues):
+    def _analogue_forecast(self, target_day, target_features, analogues):
         """
         Generates a mathematically grounded baseline forecast using the historical
-        analogues' actual outcomes. Used whenever the LLM path is unavailable.
+        analogues' actual outcomes.
         """
-        logger.info("Using analogue-driven deterministic baseline forecast engine.")
         tf = target_features or {}
         analogues = analogues or []
 
@@ -151,58 +142,9 @@ class ForecastClient:
     # ------------------------------------------------------------------
     def get_forecast(self, target_day, target_features, analogues, instrument=None):
         """
-        Requests a forecast from the configured LLM. Falls back to the baseline
-        statistical matching engine on any failure (no key, import error, bad JSON).
-
-        ``instrument`` is a display label ('S&P 500 E-mini (ES)') naming which
-        contract the snapshot belongs to, so the model is not told the wrong index.
+        The analogue forecast for ``target_day``. ``instrument`` (a display label
+        such as 'S&P 500 E-mini (ES)') is accepted for interface compatibility;
+        analogues are already drawn from that instrument's own history.
         """
-        try:
-            prompt = construct_forecast_prompt(target_day, target_features, analogues, instrument)
-        except Exception as e:  # never let prompt assembly kill the pipeline
-            logger.warning(f"Prompt construction failed ({e}); using baseline engine.")
-            return self._generate_mock_or_baseline_forecast(target_day, target_features, analogues)
-
-        if not self.api_key:
-            return self._generate_mock_or_baseline_forecast(target_day, target_features, analogues)
-
-        try:
-            if self.provider == "openai":
-                from openai import OpenAI
-
-                client = OpenAI(api_key=self.api_key)
-                response = client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": "You are a quantitative market research analyst. Always respond with a single JSON object."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                )
-                raw_text = response.choices[0].message.content
-
-            elif self.provider == "anthropic":
-                import anthropic
-
-                client = anthropic.Anthropic(api_key=self.api_key)
-                response = client.messages.create(
-                    model=self.model_name,
-                    max_tokens=1200,
-                    system="You are a quantitative market research analyst. Always respond with a single JSON object and nothing else.",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
-                )
-                raw_text = response.content[0].text
-            else:
-                raise ValueError(f"Unsupported provider: {self.provider}")
-
-            parsed_json = json.loads(raw_text)
-            for rk in REQUIRED_FORECAST_KEYS:
-                if rk not in parsed_json:
-                    raise KeyError(f"Missing required key '{rk}' in LLM forecast response.")
-            return parsed_json
-
-        except Exception as e:
-            logger.warning(f"LLM forecast failed ({e}). Falling back to baseline matching engine.")
-            return self._generate_mock_or_baseline_forecast(target_day, target_features, analogues)
+        logger.info(f"Analogue baseline forecast for {instrument or 'instrument'} {target_day}.")
+        return self._analogue_forecast(target_day, target_features, analogues)

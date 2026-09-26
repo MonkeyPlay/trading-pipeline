@@ -206,23 +206,30 @@ def list_snapshots(conn: Database, start: str, end: str, feature_version: str,
 # --------------------------------------------------------------------------
 
 def save_forecast_run(conn: Database, run: Dict[str, Any], predictions: List[Dict[str, Any]]) -> str:
-    """Inserts a run and all its predictions in one transaction; returns the run id."""
+    """
+    Inserts a run and all its predictions in one transaction; returns the run id.
+    A prediction carries ``prediction_status`` (issued | abstained | unavailable),
+    ``decision_reason`` and ``calibration_status``; ``abstained`` is True unless
+    it was issued, and ``abstention_reason`` then holds the detail.
+    """
     run_id = str(uuid.uuid4())
     with conn:
         conn.execute(
             "INSERT INTO forecast.forecast_runs (forecast_run_id, snapshot_id, model_version, label_version, "
-            "generated_at, calibration, input_quality_status, code_revision, supersedes_run_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            "generated_at, calibration, input_quality_status, code_revision, supersedes_run_id, "
+            "calibration_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
             (run_id, run["snapshot_id"], run["model_version"], run["label_version"], run["generated_at"],
              _json(run["calibration"]), run["input_quality_status"], run.get("code_revision"),
-             run.get("supersedes_run_id")),
+             run.get("supersedes_run_id"), run.get("calibration_version")),
         )
         conn.executemany(
             "INSERT INTO forecast.predictions (forecast_run_id, target_id, predicted_label, probabilities, "
-            "abstained, abstention_reason) VALUES (%s, %s, %s, %s, %s, %s);",
+            "abstained, abstention_reason, prediction_status, decision_reason, calibration_status) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
             [(run_id, p["target_id"], p.get("predicted_label"),
               _json(p["probabilities"]) if p.get("probabilities") is not None else None,
-              p["abstained"], p.get("abstention_reason")) for p in predictions],
+              p["abstained"], p.get("abstention_reason"), p.get("prediction_status"),
+              p.get("decision_reason"), p.get("calibration_status")) for p in predictions],
         )
     return run_id
 
@@ -261,8 +268,13 @@ def save_outcome_metrics(conn: Database, snapshot_id: str, metric_version: str, 
 def save_realised_outcome(conn: Database, snapshot_id: str, label_version: str, target_id: str,
                           actual_label: Optional[str], ineligibility_reason: Optional[str], available_at,
                           source_digest: str, metric_version: Optional[str] = None,
-                          metric_outcome_revision: Optional[int] = None) -> Tuple[int, bool]:
-    """``(outcome_revision, created)``: a new revision only when the label or its eligibility changed."""
+                          metric_outcome_revision: Optional[int] = None, window_start_at=None,
+                          window_end_at=None) -> Tuple[int, bool]:
+    """
+    ``(outcome_revision, created)``: a new revision only when the label or its
+    eligibility changed. ``ineligibility_reason`` is the label status of an
+    ineligible label (missing_bars, ambiguous_intrabar, ...).
+    """
     eligible = actual_label is not None
     with conn:
         _lock(conn, "realised_outcomes", snapshot_id, label_version, target_id)
@@ -276,10 +288,11 @@ def save_realised_outcome(conn: Database, snapshot_id: str, label_version: str, 
         conn.execute(
             "INSERT INTO forecast.realised_outcomes (snapshot_id, label_version, target_id, outcome_revision, "
             "actual_label, eligible, ineligibility_reason, available_at, outcome_source_digest, "
-            "metric_version, metric_outcome_revision) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            "metric_version, metric_outcome_revision, window_start_at, window_end_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
             (snapshot_id, label_version, target_id, rev, actual_label, eligible,
              None if eligible else ineligibility_reason, available_at, source_digest, metric_version,
-             metric_outcome_revision),
+             metric_outcome_revision, window_start_at, window_end_at),
         )
         return rev, True
 
@@ -291,12 +304,14 @@ def training_outcomes(conn: Database, label_version: str, target_id: str, featur
     Eligible realised labels of earlier sessions that were knowable by
     ``available_by`` (market time) and, when given, already computed by
     ``computed_by`` - one per session (its live capture if any), newest first.
-    Each session contributes its latest qualifying outcome revision.
+    Each session contributes its latest qualifying outcome revision, with the
+    features of the snapshot that outcome belongs to.
     """
     computed = "" if computed_by is None else " AND o.computed_at <= %(computed_by)s"
     rows = conn.execute(
-        "SELECT session_date, actual_label, outcome_revision FROM ("
-        "  SELECT DISTINCT ON (s.session_date) s.session_date, o.actual_label, o.outcome_revision "
+        "SELECT session_date, snapshot_id, actual_label, outcome_revision, features FROM ("
+        "  SELECT DISTINCT ON (s.session_date) s.session_date, s.snapshot_id, o.actual_label, "
+        "         o.outcome_revision, s.features "
         "    FROM forecast.realised_outcomes o "
         "    JOIN forecast.feature_snapshots s ON s.snapshot_id = o.snapshot_id "
         "    JOIN contracts c ON c.contract_id = s.instrument_id "
@@ -309,7 +324,12 @@ def training_outcomes(conn: Database, label_version: str, target_id: str, featur
         {"lv": label_version, "t": target_id, "fv": feature_version, "sym": symbol,
          "before": before_session, "available_by": available_by, "computed_by": computed_by, "limit": limit},
     ).fetchall()
-    return [dict(zip(r.keys(), r)) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(zip(r.keys(), r))
+        d["features"], d["snapshot_id"] = _load(d["features"]), str(d["snapshot_id"])
+        out.append(d)
+    return out
 
 
 def get_prediction_outcomes(conn: Database, outcome_revision: Optional[int] = None,

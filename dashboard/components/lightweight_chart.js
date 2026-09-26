@@ -249,6 +249,10 @@ export default {
     volume_ratio: { type: Number, default: 0.22 },
     show_volume: { type: Boolean, default: true },
     show_candles: { type: Boolean, default: true },
+    // The spec to draw on mount. A chart created in response to a user action is
+    // not mounted yet when the server's first apply() would arrive, so that call
+    // would be lost; the server keeps this prop equal to the last spec it applied.
+    initial_spec: { type: Object, default: null },
   },
 
   data() {
@@ -314,9 +318,18 @@ export default {
     }
 
     this.chart.subscribeCrosshairMove(this.onCrosshair);
+    this.refitUntil = 0;
+    this.resizeObserver = new ResizeObserver(() => {
+      if (performance.now() < this.refitUntil) {
+        requestAnimationFrame(() => this.chart && this.chart.timeScale().fitContent());
+      }
+    });
+    this.resizeObserver.observe(this.$refs.chart);
+    if (this.initial_spec) this.apply(this.initial_spec);
   },
 
   beforeUnmount() {
+    if (this.resizeObserver) this.resizeObserver.disconnect();
     if (this.chart) {
       this.chart.remove();
       this.chart = null;
@@ -361,7 +374,13 @@ export default {
 
       // Frame the data the first time it arrives; afterwards leave the user's
       // viewport alone, which is the whole point of reconciling in place.
-      if (!hadData || spec.fit) this.chart.timeScale().fitContent();
+      if (!hadData || spec.fit) {
+        this.chart.timeScale().fitContent();
+        // A chart that has only just been laid out may still be growing to its
+        // final width; resizing keeps the bar spacing, which would leave the
+        // fitted data bunched at the right. Refit on resizes shortly after.
+        this.refitUntil = performance.now() + 1500;
+      }
     },
 
     reconcileSeries(wanted) {

@@ -4,7 +4,11 @@ This is the NQ pre-open contract: what a snapshot contains, when its inputs were
 knowable, how a forecast and its outcome are recorded, and how corrections are
 versioned instead of overwritten. The market-data store (`contracts`,
 `session_days`, `bars`, `active_contracts`, `asset_sources`) is unchanged; the v1
-LLM/analogue pipeline and its tables keep working beside it.
+analogue pipeline and its tables keep working beside it.
+
+It implements the *NASDAQ-100 prediction and classification schema* (`nq_schema_v2`):
+the predictor consumes typed feature values only - no chart images, no prompts, no
+language model - and a separate deterministic service labels completed outcomes.
 
 | Piece | Where |
 |---|---|
@@ -15,7 +19,8 @@ LLM/analogue pipeline and its tables keep working beside it.
 | Feature catalogue + version parameters | [features/catalogue.py](../features/catalogue.py) |
 | Snapshot builder | [features/nq_v2.py](../features/nq_v2.py), data access in [features/market_data.py](../features/market_data.py) |
 | Labels + outcome metrics | [forecaster/labels_v2.py](../forecaster/labels_v2.py) |
-| Model registry + baseline | [forecaster/models_v2.py](../forecaster/models_v2.py) |
+| Model registry: scikit-learn model + climatology baseline | [forecaster/models_v2.py](../forecaster/models_v2.py) |
+| Prediction status / outcome window columns | [database/migrations/0006_prediction_status.sql](../database/migrations/0006_prediction_status.sql) |
 | CLI | [scripts/nq_forecast_v2.py](../scripts/nq_forecast_v2.py) |
 
 ## 1. Records
@@ -27,9 +32,9 @@ the v1 tables of the same name in `public`, which the dashboard still reads.
 | Record | Key | Notes |
 |---|---|---|
 | `forecast.feature_snapshots` | `snapshot_id` UUID; unique on (instrument_id, session_date, cutoff_at, feature_version, source_revision_id) | metadata columns + `features` JSONB + `feature_status` + `source_status` + `reference_values` |
-| `forecast.forecast_runs` | `forecast_run_id` UUID | snapshot, model_version, label_version, generated_at, `calibration` (provenance), `input_quality_status`, git `code_revision` |
-| `forecast.predictions` | (forecast_run_id, target_id) | predicted_label, full `probabilities` object, `abstained` + reason |
-| `forecast.realised_outcomes` | (snapshot_id, label_version, target_id, outcome_revision) | actual_label, eligible + reason, `available_at`, `computed_at`, link to the metrics revision it came from |
+| `forecast.forecast_runs` | `forecast_run_id` UUID | snapshot, model_version, label_version, generated_at, `calibration` (provenance: training window, class counts, cross-validation scores, selected estimator), `calibration_version`, `input_quality_status`, git `code_revision` |
+| `forecast.predictions` | (forecast_run_id, target_id) | predicted_label, full `probabilities` object, `prediction_status` (issued / abstained / unavailable), `decision_reason`, `calibration_status`, `abstained` + detail |
+| `forecast.realised_outcomes` | (snapshot_id, label_version, target_id, outcome_revision) | actual_label, eligible + label status (`ineligibility_reason`), outcome window, `available_at`, `computed_at`, link to the metrics revision it came from |
 | `forecast.outcome_metrics` | (snapshot_id, metric_version, outcome_revision) | continuous metrics JSONB, per-metric status, `available_at` |
 
 Supporting registries: `feature_versions` / `feature_definitions` (the catalogue),
@@ -58,7 +63,9 @@ outcome, the latest revision computed by then).
 **Vocabulary.** Predictions and realised labels are both checked by trigger against the
 single `label_definitions` row of their (label_version, target_id): the label must be
 in the vocabulary, the probability object must have exactly the vocabulary's keys,
-each in [0, 1], summing to 1 (±1e-6).
+each in [0, 1], summing to 1 (±1e-6). An issued label must be the most probable one,
+ties going to the earliest label in the vocabulary; an unavailable prediction has no
+probabilities, an abstained one may keep them.
 
 ## 2. Time, units and calculations
 
@@ -142,36 +149,107 @@ event features are null with status `missing` — "no calendar" is never reporte
 event". A live capture only sees rows recorded before it froze. No loader for a
 particular vendor is included.
 
-## Labels, outcomes and the baseline model
+## Targets, labels and outcome metrics (`nq_labels_v2_candidate`)
 
-The specification leaves targets to the model; `nq_labels_v1` defines two so the
-records are exercised end to end — **replace or extend them with your own label
-version**:
+[forecaster/labels_v2.py](../forecaster/labels_v2.py) implements sections 8-11 of the
+schema. Every value is measured from the snapshot contract's RTH minute bars: O is the
+09:30 open, C5 / C15 / C the 09:34 / 09:44 / 15:59 closes, and every normalised value
+divides by the snapshot's frozen A. The opening labels use the snapshot's frozen ON
+high/low, never post-open bars.
 
-| target_id | vocabulary | definition |
+| target_id | vocabulary | window |
 |---|---|---|
-| `first_hour_direction` | down / flat / up | (close of the 10:29 bar − P) / A; flat within ±0.10 |
-| `session_direction` | down / flat / up | (last scheduled RTH close − P) / A; flat within ±0.20 |
+| `first_move_5m` | up_first, down_first, neither | [09:30, 09:35) |
+| `opening_type_15m` | drive_up, drive_down, sweep_low_rebound, sweep_high_reverse, two_sided, range, mixed | [09:30, 09:45) |
+| `direction_15m` | up, down, flat | [09:30, 09:45) |
+| `direction_rth` | up, down, flat | [09:30, 16:00) |
+| `session_type_rth` | bull_trend, bear_trend, reversal, two_sided_volatile, range, mixed | [09:30, 16:00) |
 
-`nq_outcome_metrics_v1` records, for the first 15/30/60 minutes and the whole RTH
-session: decimal and ATR returns from P, MFE/MAE, range, close location, path
-efficiency, the open gap, and the minutes at which the RTH high/low printed. Outcomes
-are only computed two hours after the scheduled close (the collector's revision window).
+`nq_outcome_metrics_v2` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
+`return_rth_atr`, excursions, ranges, `efficiency_15m`, `rth_close_location`,
+`first_hour_return_atr`, `efficiency_rth_5m`, first up/down touch minutes, the ON-low
+breach-and-reclaim / ON-high breach-and-reject flags) plus the first-move barrier and
+the open of a same-minute double touch. The label rules read only those metrics, with the
+section-11 starting thresholds; they are not tuned optima, and a change is a new label
+version.
 
-`nq_climatology_v1` is the baseline to beat: Laplace-smoothed label frequencies of
-earlier sessions whose outcome was knowable before the snapshot's cutoff (a live run
-also only uses outcome rows that existed when it ran). It abstains when its required
-inputs are invalid or it has fewer than 20 training sessions, and records the training
-window and counts as calibration provenance.
+- A window needs every one of its minute bars; otherwise the label is ineligible with
+  `missing_bars`. A missing A or ON extreme gives `invalid_reference`.
+- First move: both barriers first touched in the same minute is decided by that
+  minute's open when it lies beyond a barrier, else `ambiguous_intrabar`. The order
+  inside a minute is never guessed.
+- Rule lists are evaluated in order with three-valued logic: an unknown condition
+  that could have decided the label makes it ineligible; one that cannot (because
+  another part of the rule is false) does not.
+- On an early-close session the full-RTH targets are `shortened_session`; the opening
+  targets stay eligible. A missing later bar never invalidates a complete opening label.
+- The label status is stored in `realised_outcomes.ineligibility_reason` (NULL = valid)
+  and exposed as `label_status` in `forecast.prediction_outcomes`, together with the
+  outcome window. Outcomes are computed two hours after the scheduled close (the
+  collector's revision window).
+
+## Models
+
+Both models see a snapshot's typed feature payload and nothing else, and are trained
+**walk-forward**: to forecast session D they use only earlier sessions whose realised
+label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run also only
+uses outcome rows that already existed when it trained. One snapshot per session is
+used (the live capture if any).
+
+**`nq_sklearn_v1`** (the default) - one scikit-learn pipeline per target:
+
+- *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
+  whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
+  DXY), the optional GC/CL extensions and near-duplicate fields are left out.
+- *Preprocessing*, fitted on the training window only: numeric and boolean inputs are
+  median-imputed with a missing-indicator column and standard-scaled; categoricals are
+  one-hot encoded over the catalogue's allowed values plus `missing`. It is part of the
+  pipeline, so training and inference are identical.
+- *Model selection*: the class prior, L2 logistic regression (C = 0.05, 0.5) and a
+  shallow `HistGradientBoostingClassifier` are scored by `TimeSeriesSplit` (5 folds,
+  folds with fewer than 40 training sessions skipped) on log loss; the best is refitted
+  on the whole window, ties going to the simpler candidate. A feature model therefore
+  replaces the prior only when it predicts better out of sample.
+- *Probabilities* are shrunk toward the Laplace-smoothed class frequencies
+  (weight k·α / (n + k·α)), so a class unseen in training keeps a small probability,
+  then normalised over the full vocabulary. They are raw model probabilities, validated
+  out of sample: `calibration_status = validated_raw`, `calibration_version = NULL`.
+- *Status*: `unavailable` with `data_quality` when a required input (A, the gap) is not
+  valid, or with `uncertainty` below 60 training sessions; `abstained` (probabilities
+  kept) with `out_of_distribution` when at least 3 numeric inputs are more than 8
+  training standard deviations from the training mean, or with `shortened_session` for
+  the full-RTH targets on an early close; otherwise `issued` with the arg-max label.
+  `event_policy` and a minimum top probability are available as parameters, off by
+  default.
+
+**`nq_climatology_v2`** - Laplace-smoothed label frequencies of the same training
+sessions; the baseline the trained model has to beat.
+
+A run's `calibration` records the training window and class counts per target, every
+candidate's cross-validated log loss and accuracy, the selected estimator, the
+scikit-learn version and the outcome-selection bounds. Model parameters are part of the
+registered definition hash, so changing a feature list, a candidate or a threshold
+needs a new model version.
 
 ## Running it
 
 ```bash
-python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25   # reconstruct + backtest
+python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25   # reconstruct + walk-forward backtest
 python scripts/nq_forecast_v2.py outcomes --start 2026-06-01 --end 2026-09-25   # (re)score closed sessions
+python scripts/nq_forecast_v2.py train                                           # CV report + data/models/ artifact
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
 python scripts/nq_forecast_v2.py live                                            # at 09:29 ET
 ```
+
+`backfill` runs both models by default and refits them every `--retrain-every` sessions
+(5; 1 refits daily). Reusing a fit is still point-in-time, as it has seen strictly
+fewer outcomes. `train` prints, per target, the training window, each candidate's
+cross-validated log loss and accuracy and the selected one, and saves the fitted
+pipelines (`joblib`) with a JSON report. `forecast --artifact <file>` forecasts with such a saved
+model instead of training; it is refused for any session before the one it was
+trained for, since it may have seen outcomes that were not yet knowable. `evaluate` lists issued / abstained /
+unavailable counts, the accuracy of issued labels, and log loss and Brier score of every
+probability distribution with an eligible outcome, per model, target and data mode.
 
 **History needed.** With the 5n warm-up rule, A needs 71 prior RTH sessions and
 `daily_volatility_ratio` (ATR63) 316 (about 15 months); divergence needs 61, RVOL 31.
@@ -181,6 +259,8 @@ Backfill accordingly (`--days 460` for everything).
 
 ```
 09:00      collector.live_stream starts: one keep-up-to-date 1m stream per instrument
+09:25      nq_forecast_v2.py live starts (cron), trains the model(s) on the outcomes
+           recorded so far, then sleeps until T
 09:29:00   the 09:28 minute ends; the stream finalises it (next_bar / timer, +5 s)
 09:29:01   confirm_fetch: one short historical request per instrument re-reads 09:28
 09:29:0x   nq_forecast_v2.py live sees the confirmed NQ and ES bars, freezes, forecasts
