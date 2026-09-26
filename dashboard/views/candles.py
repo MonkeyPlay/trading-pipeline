@@ -2,8 +2,11 @@
 """
 Candlestick exploration view for the NQ Opening Forecast System.
 
-Selectors load a stored session, the pre-open panel shows the feature snapshot,
-and the forecast panel runs the opening model against it.
+Selectors load a stored session (NQ's current contract by default), the
+pre-open panel shows the feature snapshot, and the forecast panel runs the
+opening model against it - or shows the forecast already stored for that day.
+Below it, a second chart replays the regular session of the best-matching
+historical day, and a dropdown switches between the other matches.
 
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing chart. The chart is created once per page
@@ -13,6 +16,8 @@ they were.
 
 from __future__ import annotations
 
+import ast
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -24,10 +29,16 @@ from config import Config
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
+    contracts_with_day,
+    get_active_contract,
+    get_analogue_matches,
     get_bars,
+    get_contract,
     get_contract_by_expiry,
     get_daily_rth_closes,
     get_day_bars,
+    get_day_prediction,
+    get_latest_contract,
     get_outcome,
     get_session_day,
     list_contracts,
@@ -49,6 +60,11 @@ _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
 
 # Earlier sessions the forecast searches for analogues (see ``_analogue_candidates``).
 _ANALOGUE_CANDIDATES = 60
+
+# The instrument the page opens on; its current contract is preselected.
+DEFAULT_SYMBOL = "NQ"
+
+_MUTED = "color:#787b86"
 
 
 def _resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -85,6 +101,105 @@ def _is_context_only(symbol: str) -> bool:
 
 def _safe(value, default=0.0):
     return default if value is None else value
+
+
+def _load_json(value) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+
+
+def stored_forecast(row) -> Dict[str, Any]:
+    """
+    A stored v1 prediction row as the forecast dict the panel renders. The
+    horizon and rationale are only in ``raw_response`` (the forecast's Python
+    repr), which is read as a literal - never evaluated - when it is one.
+    """
+    forecast: Dict[str, Any] = {
+        "opening_bias": row["opening_bias"],
+        "scenarios": _load_json(row["scenarios"]),
+        "probabilities": _load_json(row["probabilities"]),
+    }
+    try:
+        raw = ast.literal_eval(row["raw_response"] or "")
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        raw = None
+    if isinstance(raw, dict):
+        for key in ("forecast_horizon", "analogue_rationale"):
+            if raw.get(key):
+                forecast[key] = raw[key]
+    return forecast
+
+
+def _previous_rth_close(conn, contract_id: int, trading_day: str) -> Optional[float]:
+    """Close of the last RTH bar of the stored session before ``trading_day``."""
+    row = conn.execute(
+        "SELECT MAX(trading_day) FROM session_days WHERE contract_id = %s AND interval = '1m' "
+        "AND price_type = 'TRADES' AND bar_count > 0 AND trading_day < %s",
+        (contract_id, trading_day),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    rth = get_day_bars(conn, contract_id, str(row[0]), interval="1m", session_scope="RTH")
+    return float(rth[-1]["close"]) if rth else None
+
+
+def load_analogue_session(conn, symbol: str, match_date: str, contract_id: Optional[int] = None,
+                          timeframe: str = "1m") -> Dict[str, Any]:
+    """
+    The regular session of a matched historical day, ready to chart.
+
+    Bars come from the contract the analogue search used (``contract_id``) when
+    it holds the day, else the contract active for ``symbol`` that day, else any
+    of its contracts holding it - an older match can predate the current
+    contract's history. Returns ``{'contract', 'bars', 'levels', 'stats'}``:
+    RTH bars at ``timeframe`` with session VWAP, the day's own pre-open levels
+    (previous RTH close, overnight high/low) and its RTH open/high/low/close.
+    ``bars`` is None when no contract holds RTH bars for the day.
+    """
+    match_date = str(match_date)
+    candidates, seen = [], set()
+    for c in ([get_contract(conn, contract_id)] if contract_id is not None else []) + \
+             [get_active_contract(conn, symbol, match_date)] + list(contracts_with_day(conn, symbol, match_date)):
+        if c is not None and c["contract_id"] not in seen:
+            seen.add(c["contract_id"])
+            candidates.append(c)
+
+    for contract in candidates:
+        rows = get_day_bars(conn, contract["contract_id"], match_date, interval="1m")
+        if not rows:
+            continue
+        full = enrich_candle_timezones(pd.DataFrame([dict(r) for r in rows]))
+        rth = full[full["session_scope"] == "RTH"]
+        if rth.empty:
+            continue
+        pre_open = full[(full["session_scope"] == "ETH") & (full["timestamp_ny"] < rth["timestamp_ny"].iloc[0])]
+        levels = {
+            "previous_rth_close": _previous_rth_close(conn, contract["contract_id"], match_date),
+            "overnight_high": float(pre_open["high"].max()) if not pre_open.empty else None,
+            "overnight_low": float(pre_open["low"].min()) if not pre_open.empty else None,
+        }
+        # VWAP is anchored at the 18:00 ET session open like the main chart, then
+        # only the regular session is shown.
+        shown = calculate_vwap(_resample(full, timeframe))
+        shown = shown[shown["session_scope"] == "RTH"]
+        stats = {
+            "open": float(rth["open"].iloc[0]), "high": float(rth["high"].max()),
+            "low": float(rth["low"].min()), "close": float(rth["close"].iloc[-1]), "bars": int(len(rth)),
+        }
+        return {"contract": contract, "bars": shown, "levels": levels, "stats": stats}
+    return {"contract": None, "bars": None, "levels": {}, "stats": None}
+
+
+def _analogue_label(analogue: Dict[str, Any]) -> str:
+    rank = analogue.get("ranking")
+    prefix = f"#{rank} · " if rank is not None else ""
+    return f"{prefix}{analogue['match_date']} · {analogue['similarity_score'] * 100:.1f}% match"
 
 
 def _metric(label: str, value: str, *, hint: str = "", accent: str = "#d1d4dc") -> None:
@@ -127,6 +242,13 @@ class SessionExplorer:
 
         self.chart: Optional[LightweightChart] = None
         self.analogues: List[Dict[str, Any]] = []
+
+        # The matching-historical-day view, shown while a forecast is displayed.
+        self.analogue_chart: Optional[LightweightChart] = None
+        self.analogue_options: Dict[str, Dict[str, Any]] = {}
+        self.analogue_choice: Optional[str] = None
+        self.analogue_contract_id: Optional[int] = None
+        self.analogue_symbol: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Data loading
@@ -242,14 +364,22 @@ class SessionExplorer:
 
         self.chart.apply(build_chart_spec(self.day_df, features=self.snapshot, fit=True))
 
-    def refresh_session(self) -> None:
-        """Reloads the day from the database and redraws everything."""
+    def refresh_session(self, keep_forecast: bool = False) -> None:
+        """
+        Reloads the day from the database and redraws everything. A new day
+        shows the forecast stored for it, if any; ``keep_forecast`` (a display
+        change only) keeps the forecast on screen and redraws its matching day.
+        """
         if self.contract is None or self.date is None:
             return
         self.load_day()
         self._render_status()
         self._render_features()
         self.push()
+        if keep_forecast:
+            self._push_analogue()
+        else:
+            self._show_stored_forecast()
 
     # ------------------------------------------------------------------
     # Control handlers
@@ -260,6 +390,9 @@ class SessionExplorer:
         days = list_trading_days(self.conn, self.contract["contract_id"], limit=100)
         self.date_select.set_options(days, value=days[0] if days else None)
         self.date = days[0] if days else None
+        if self.date is None:
+            self.forecast_panel.clear()
+            self._render_analogue_view([], None, None)
         self.refresh_session()
 
     def on_date(self, event) -> None:
@@ -268,7 +401,11 @@ class SessionExplorer:
 
     def on_timeframe(self, event) -> None:
         self.timeframe = event.value
-        self.refresh_session()
+        self.refresh_session(keep_forecast=True)
+
+    def on_analogue(self, event) -> None:
+        self.analogue_choice = event.value
+        self._push_analogue()
 
     # ------------------------------------------------------------------
     # Layout
@@ -324,6 +461,16 @@ class SessionExplorer:
             )
             _metric("Overnight VWAP", f"{_safe(snapshot.get('vwap')):,.2f}")
 
+    def _default_label(self) -> str:
+        """NQ's current contract (see get_latest_contract), else any NQ contract, else the first."""
+        latest = get_latest_contract(self.conn, DEFAULT_SYMBOL)
+        if latest is not None:
+            for label, contract in self.contracts.items():
+                if contract["contract_id"] == latest["contract_id"]:
+                    return label
+        labels = [label for label, c in self.contracts.items() if c["symbol"] == DEFAULT_SYMBOL]
+        return labels[-1] if labels else next(iter(self.contracts))
+
     def build(self) -> None:
         if not self.contracts:
             with ui.card().classes("w-full"):
@@ -331,7 +478,7 @@ class SessionExplorer:
                 ui.label("Run the collector, or populate_mock_data.py, before opening this view.")
             return
 
-        first_label = next(iter(self.contracts))
+        first_label = self._default_label()
         self.contract = self.contracts[first_label]
         days = list_trading_days(self.conn, self.contract["contract_id"], limit=100)
         self.date = days[0] if days else None
@@ -385,6 +532,8 @@ class SessionExplorer:
                 "and the closest historical analogues."
             ).classes("text-sm").style("color:#787b86")
             self.forecast_panel = ui.column().classes("w-full")
+        # Below the forecast: the best-matching historical day's regular session.
+        self.analogue_section = ui.column().classes("w-full mt-2")
 
     async def generate_forecast(self) -> None:
         if self.day_df is None or self.day_df.empty:
@@ -392,8 +541,9 @@ class SessionExplorer:
             return
 
         self.forecast_panel.clear()
+        self._render_analogue_view([], None, None)
         with self.forecast_panel:
-            spinner = ui.spinner(size="lg")
+            ui.spinner(size="lg")
 
         try:
             forecast, analogues = await run.io_bound(self._run_forecast)
@@ -403,9 +553,8 @@ class SessionExplorer:
                 ui.label(f"Forecast failed: {e}").style("color:#ef5350")
             return
 
-        spinner.delete()
-        self.analogues = analogues
-        self._render_forecast(forecast, analogues)
+        self.forecast_panel.clear()
+        self._show_forecast(forecast, analogues, self.contract["contract_id"], self.contract["symbol"])
 
     def _run_forecast(self):
         """Analogue search plus the model call. Runs off the event loop."""
@@ -473,12 +622,43 @@ class SessionExplorer:
             ])
         self._saved_as = prediction_id
 
-    def _render_forecast(self, forecast: Dict[str, Any], analogues: List[Dict[str, Any]]) -> None:
+    def _show_stored_forecast(self) -> None:
+        """Shows the newest forecast stored for the selected day, or says there is none."""
+        self.forecast_panel.clear()
+        row = get_day_prediction(self.conn, self.contract["symbol"], self.date, self.contract["contract_id"])
+        if row is None:
+            self._render_analogue_view([], None, None)
+            with self.forecast_panel:
+                ui.label(
+                    f"No forecast stored for {self.date} yet. Generate one to see it and its "
+                    f"matching historical days."
+                ).classes("text-sm").style(_MUTED)
+            return
+        analogues = [
+            {"match_date": str(m["match_date"]), "similarity_score": float(m["similarity_score"]),
+             "ranking": int(m["ranking"])}
+            for m in get_analogue_matches(self.conn, row["prediction_id"])
+        ]
+        self._show_forecast(stored_forecast(row), analogues, int(row["contract_id"]), row["symbol"], stored=row)
+
+    def _show_forecast(self, forecast: Dict[str, Any], analogues: List[Dict[str, Any]], contract_id: int,
+                       symbol: str, stored=None) -> None:
+        self.analogues = analogues
+        self._render_forecast(forecast, analogues, stored)
+        self._render_analogue_view(analogues, contract_id, symbol)
+
+    def _render_forecast(self, forecast: Dict[str, Any], analogues: List[Dict[str, Any]], stored=None) -> None:
         probabilities = forecast.get("probabilities", {})
         primary = forecast.get("scenarios", {}).get("primary_scenario", {})
         bias = forecast.get("opening_bias", "UNKNOWN")
 
         with self.forecast_panel:
+            if stored is not None:
+                note = (f"Stored forecast #{stored['prediction_id']} · {stored['model_version']} · "
+                        f"made {str(stored['created_at'])[:16]} UTC")
+                if stored["contract_id"] != self.contract["contract_id"]:
+                    note += f" · on the {stored['symbol']} {stored['expiry']} contract"
+                ui.label(note).classes("text-xs").style(_MUTED)
             with ui.row().classes("w-full no-wrap gap-6 items-start"):
                 with ui.column().classes("grow gap-2"):
                     ui.label(f"Overall bias: {bias}").classes("text-xl font-medium").style(
@@ -524,11 +704,14 @@ class SessionExplorer:
                     for a in analogues:
                         with ui.row().classes("items-center w-full justify-between"):
                             ui.label(a["match_date"]).classes("text-sm font-mono")
-                            ui.label(
-                                f"{a['similarity_score'] * 100:.1f}% · d={a['distance']:.4f}"
-                            ).classes("text-xs").style("color:#787b86")
+                            detail = f"{a['similarity_score'] * 100:.1f}%"
+                            if a.get("distance") is not None:
+                                detail += f" · d={a['distance']:.4f}"
+                            ui.label(detail).classes("text-xs").style("color:#787b86")
 
             saved = getattr(self, "_saved_as", None)
+            if stored is not None:   # already in the database; the save notices are for new ones
+                return
             if self.persist.value and not self.snapshot_is_real:
                 ui.label("Not saved: the feature snapshot was approximate, not exact.").classes(
                     "text-xs mt-2"
@@ -536,6 +719,82 @@ class SessionExplorer:
             elif saved is not None:
                 ui.label(f"Saved as prediction #{saved}.").classes("text-xs mt-2").style("color:#787b86")
                 self._saved_as = None
+
+
+    # ------------------------------------------------------------------
+    # Matching historical day
+    # ------------------------------------------------------------------
+
+    def _render_analogue_view(self, analogues: List[Dict[str, Any]], contract_id: Optional[int],
+                              symbol: Optional[str]) -> None:
+        """The best match's regular session on its own chart, with a dropdown for the others."""
+        self.analogue_section.clear()
+        self.analogue_chart = None
+        ranked = sorted(analogues, key=lambda a: (-a["similarity_score"], a.get("ranking") or 0))
+        self.analogue_options = {a["match_date"]: a for a in ranked}
+        self.analogue_choice = ranked[0]["match_date"] if ranked else None
+        self.analogue_contract_id, self.analogue_symbol = contract_id, symbol
+        if not ranked:
+            return
+
+        session = self._analogue_session()
+        with self.analogue_section:
+            with ui.card().classes("w-full").style("background:#1c212e"):
+                with ui.row().classes("items-center w-full"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Matching historical day — RTH").classes("text-lg font-medium")
+                        ui.label(
+                            "The regular session (09:30–16:00 ET) of a day the forecast matched, with "
+                            "that day's own previous close and overnight range."
+                        ).classes("text-sm").style(_MUTED)
+                    ui.space()
+                    ui.select(
+                        {d: _analogue_label(a) for d, a in self.analogue_options.items()},
+                        value=self.analogue_choice, label="Matching day", on_change=self.on_analogue,
+                    ).classes("w-80")
+                self.analogue_summary = ui.row().classes("w-full gap-8 items-start")
+                self.analogue_chart = LightweightChart(height=420, spec=self._analogue_spec(session))
+        self._render_analogue_summary(session)
+
+    def _analogue_session(self) -> Dict[str, Any]:
+        return load_analogue_session(self.conn, self.analogue_symbol, self.analogue_choice,
+                                     self.analogue_contract_id, self.timeframe)
+
+    @staticmethod
+    def _analogue_spec(session: Dict[str, Any]) -> Dict[str, Any]:
+        return build_chart_spec(session["bars"], features=session["levels"], fit=True)
+
+    def _push_analogue(self) -> None:
+        """Redraws the matching-day chart for the current choice and timeframe."""
+        if self.analogue_chart is None or self.analogue_choice is None:
+            return
+        session = self._analogue_session()
+        self.analogue_chart.apply(self._analogue_spec(session))
+        self._render_analogue_summary(session)
+
+    def _render_analogue_summary(self, session: Dict[str, Any]) -> None:
+        self.analogue_summary.clear()
+        analogue = self.analogue_options[self.analogue_choice]
+        with self.analogue_summary:
+            stats = session["stats"]
+            if stats is None:
+                ui.label(f"No RTH bars are stored for {self.analogue_choice}.").classes("text-sm").style(
+                    "color:#ffa726")
+                return
+            contract = session["contract"]
+            change = stats["close"] - stats["open"]
+            prev_close = session["levels"].get("previous_rth_close")
+            _metric("Session", str(self.analogue_choice),
+                    hint=f"{contract['symbol']} {contract['expiry']}")
+            _metric("Match", f"{analogue['similarity_score'] * 100:.1f}%",
+                    hint=f"rank #{analogue['ranking']}" if analogue.get("ranking") is not None else "")
+            _metric("RTH open", f"{stats['open']:,.2f}",
+                    hint=f"gap {stats['open'] - prev_close:+,.2f} vs prev close" if prev_close else "")
+            _metric("RTH high / low", f"{stats['high']:,.2f} / {stats['low']:,.2f}",
+                    hint=f"range {stats['high'] - stats['low']:,.2f}")
+            _metric("RTH close", f"{stats['close']:,.2f}",
+                    hint=f"{change:+,.2f} ({change / stats['open'] * 100:+.2f}%) from the open",
+                    accent="#26a69a" if change > 0 else "#ef5350" if change < 0 else "#d1d4dc")
 
 
 def show_candles_page(conn) -> None:

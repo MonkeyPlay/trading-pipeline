@@ -137,6 +137,43 @@ def list_contracts(conn: Database, with_data_only: bool = False) -> List[Row]:
         raise
 
 
+def get_latest_contract(conn: Database, symbol: str) -> Optional[Row]:
+    """
+    The contract of ``symbol`` to show by default: the one the collector made
+    active for the most recent session it assigned (among contracts holding
+    bars), else the contract with the most recent stored day, the later expiry
+    winning a tie. The next contract's warm-up days are stored before the roll,
+    so the latest *expiry* alone would pick it a week early.
+    """
+    has_bars = ("EXISTS (SELECT 1 FROM session_days s WHERE s.contract_id = {} "
+                "AND s.bar_count > 0)")
+    row = conn.execute(
+        "SELECT c.* FROM active_contracts a JOIN contracts c ON c.contract_id = a.contract_id "
+        f"WHERE a.symbol = %s AND {has_bars.format('a.contract_id')} "
+        "ORDER BY a.trading_day DESC LIMIT 1;",
+        (symbol,),
+    ).fetchone()
+    if row is not None:
+        return row
+    return conn.execute(
+        "SELECT c.* FROM contracts c JOIN session_days s ON s.contract_id = c.contract_id "
+        "WHERE c.symbol = %s AND s.bar_count > 0 "
+        "GROUP BY c.contract_id ORDER BY MAX(s.trading_day) DESC, c.expiry DESC LIMIT 1;",
+        (symbol,),
+    ).fetchone()
+
+
+def contracts_with_day(conn: Database, symbol: str, trading_day: str, interval: str = "1m",
+                       price_type: str = "TRADES") -> List[Row]:
+    """Contracts of ``symbol`` holding bars for ``trading_day``, nearest expiry first."""
+    return conn.execute(
+        "SELECT c.* FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
+        "WHERE c.symbol = %s AND s.trading_day = %s AND s.interval = %s AND s.price_type = %s "
+        "AND s.bar_count > 0 ORDER BY c.expiry;",
+        (symbol, _validate_day(trading_day), interval, price_type),
+    ).fetchall()
+
+
 def list_future_chain(conn: Database, symbol: str) -> List[Row]:
     """Every stored contract of a futures symbol, nearest expiry first."""
     return conn.execute(
@@ -1220,6 +1257,27 @@ def get_prediction(conn: Database, prediction_id: int) -> Optional[Row]:
         ).fetchone()
     except Error as e:
         logger.error(f"Failed to get prediction {prediction_id}: {e}")
+        raise
+
+
+def get_day_prediction(conn: Database, symbol: str, session_date: str,
+                       prefer_contract_id: Optional[int] = None) -> Optional[Row]:
+    """
+    The newest v1 prediction for ``symbol``'s session ``session_date`` (the New
+    York date of its forecast cutoff), preferring one made on
+    ``prefer_contract_id``. Carries the contract's ``symbol`` and ``expiry``.
+    """
+    try:
+        return conn.execute(
+            "SELECT p.*, c.symbol, c.expiry FROM predictions p "
+            "JOIN contracts c ON c.contract_id = p.contract_id "
+            "WHERE c.symbol = %s "
+            "  AND (p.forecast_cutoff AT TIME ZONE 'America/New_York')::date = %s "
+            "ORDER BY (p.contract_id = %s) DESC, p.created_at DESC, p.prediction_id DESC LIMIT 1;",
+            (symbol, _validate_day(session_date), prefer_contract_id),
+        ).fetchone()
+    except Error as e:
+        logger.error(f"Failed to get the {symbol} prediction for {session_date}: {e}")
         raise
 
 

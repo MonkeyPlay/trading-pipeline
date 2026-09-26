@@ -128,10 +128,16 @@ python -m dashboard.app
 
 Two pages:
 
-- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — pick a
-  contract and trading day, plot the candles with the pre-open reference levels and session
-  VWAP drawn from the feature snapshot, and run a forecast for that session on demand. The
-  **Pre-open features** panel beside the chart shows the snapshot the forecast is built from.
+- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — opens
+  on NQ's current contract (the one active for the latest session) and its newest day; pick
+  another contract or trading day, plot the candles with the pre-open reference levels and
+  session VWAP drawn from the feature snapshot, and run a forecast for that session on
+  demand. A forecast already stored for the day (from the dashboard or
+  `scripts/daily_forecast.py`) is shown straight away. The **Pre-open features** panel beside
+  the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
+  historical day — RTH** charts the regular session (09:30–16:00 ET) of the best-matching
+  earlier day, with that day's own previous close, overnight range and VWAP; the dropdown
+  switches to the other matches.
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   every stored prediction joined against its realized outcome, so you can see whether the
   bias calls were right.
