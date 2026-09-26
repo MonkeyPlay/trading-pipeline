@@ -2,19 +2,18 @@
 """
 Candlestick exploration view for the NQ Opening Forecast System.
 
-Selectors load a stored session, indicator panels recompute overlays, and the
-forecast panel runs the opening model against the pre-open snapshot.
+Selectors load a stored session, the pre-open panel shows the feature snapshot,
+and the forecast panel runs the opening model against it.
 
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing chart. The chart is created once per page
-load, so changing an indicator length redraws that one series and leaves the
-user's zoom, scroll and crosshair exactly where they were.
+load, so a redraw leaves the user's zoom, scroll and crosshair exactly where
+they were.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -44,50 +43,12 @@ from features.calculations import (
 )
 from features.session_windows import NY_TZ
 from forecaster.client import ForecastClient
-from indicator import (
-    ANCHOR_PERIOD_OPTIONS,
-    CALC_MODE_OPTIONS,
-    LINE_STYLE_OPTIONS,
-    SOURCE_OPTIONS,
-    AutoAnchoredVwapSettings,
-    TemaSessionSettings,
-    compute_auto_anchored_vwap,
-    compute_tema_session,
-)
 from matching.normalizer import find_analogues
 
 _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
 
-# Sessions of 1-minute history fed to the indicator ahead of the displayed day, so the
-# EMAs are past their warm-up and the previous-RTH levels have a prior session to read.
-_INDICATOR_WARMUP_DAYS = 5
-
-# Anchor periods that can sit outside the warm-up window, so the history for them
-# is loaded back to the start of the period (see ``_period_start``).
-_LONG_ANCHORS = ("Week", "Month", "Quarter", "Year")
-
 # Earlier sessions the forecast searches for analogues (see ``_analogue_candidates``).
 _ANALOGUE_CANDIDATES = 60
-
-
-def _period_start(trading_day: str, period: str) -> str:
-    """First calendar day of the anchor period containing ``trading_day``.
-
-    Matches ``indicator.auto_anchored_vwap._period_keys``, which keys bars by
-    session date: ISO week, calendar month, quarter or year.
-    """
-    d = date.fromisoformat(trading_day)
-    if period == "Week":
-        start = d - timedelta(days=d.isoweekday() - 1)
-    elif period == "Month":
-        start = d.replace(day=1)
-    elif period == "Quarter":
-        start = d.replace(month=3 * ((d.month - 1) // 3) + 1, day=1)
-    elif period == "Year":
-        start = d.replace(month=1, day=1)
-    else:
-        raise ValueError(f"Not a long anchor period: {period!r}")
-    return start.isoformat()
 
 
 def _resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -154,12 +115,7 @@ class SessionExplorer:
         self.date: Optional[str] = None
         self.timeframe = "1m"
 
-        self.tema_on = True
-        self.tema = TemaSessionSettings()
-        self.aavwap_on = False
-        self.aavwap = AutoAnchoredVwapSettings()
-
-        # Loaded per session and reused across indicator changes.
+        # Loaded per session.
         self.day_df: Optional[pd.DataFrame] = None
         self.recent_bars: Optional[pd.DataFrame] = None
         self.vix_bars: Optional[pd.DataFrame] = None
@@ -168,7 +124,6 @@ class SessionExplorer:
         self.rth_closes: Dict[str, float] = {}
         self.snapshot: Dict[str, Any] = {}
         self.snapshot_is_real = False
-        self._warmup_cache: Dict[Any, pd.DataFrame] = {}
 
         self.chart: Optional[LightweightChart] = None
         self.analogues: List[Dict[str, Any]] = []
@@ -179,7 +134,6 @@ class SessionExplorer:
 
     def load_day(self) -> None:
         """Pulls the selected session and everything derived from it."""
-        self._warmup_cache.clear()
         contract_id = self.contract["contract_id"]
 
         rows = get_day_bars(self.conn, contract_id, self.date, interval="1m")
@@ -191,7 +145,7 @@ class SessionExplorer:
         self.day_df = calculate_vwap(_resample(df, self.timeframe))
 
         # The snapshot and the analogue search need earlier sessions: each candidate
-        # plus the session before it. That window also covers the indicator warm-up.
+        # plus the session before it.
         self.recent_bars = self._load_bars(self._history_start())
         self.rth_closes = get_daily_rth_closes(self.conn, contract_id, interval="1m", end_day=self.date)
         self.vix_bars = self._load_vix_bars(self._history_start())
@@ -274,114 +228,19 @@ class SessionExplorer:
             "vwap": float(df["vwap"].iloc[0]) if "vwap" in df.columns else prev_close,
         }
 
-    def _warmup_frame(self, sessions: Optional[int]) -> Optional[pd.DataFrame]:
-        """
-        The displayed session plus prior ones, resampled to the display interval.
-
-        ``sessions=None`` keeps every loaded session. Timezone enrichment walks
-        every row, so results are cached — indicator settings changes reuse the
-        frame instead of rebuilding it.
-        """
-        if self.recent_bars is None or self.recent_bars.empty:
-            return None
-
-        anchor = self.aavwap.anchor_period if sessions is None else None
-        cache_key = (self.date, self.timeframe, sessions, anchor)
-        if cache_key in self._warmup_cache:
-            return self._warmup_cache[cache_key]
-
-        bars = self.recent_bars
-        if sessions is None:
-            # A long anchor needs every bar since its period began, and one earlier
-            # bar so the boundary itself is visible; a week's margin covers holidays.
-            start = (date.fromisoformat(_period_start(self.date, self.aavwap.anchor_period))
-                     - timedelta(days=7)).isoformat()
-            loaded_from = bars["trading_day"].min()
-            if start < loaded_from:
-                earlier = get_bars(
-                    self.conn, self.contract["contract_id"], interval="1m",
-                    start_day=start, end_day=loaded_from,
-                )
-                earlier = pd.DataFrame([dict(r) for r in earlier if r["trading_day"] < loaded_from])
-                bars = pd.concat([earlier, bars], ignore_index=True) if not earlier.empty else bars
-
-        enriched = enrich_candle_timezones(bars)
-        enriched = enriched[enriched["trading_day"] <= self.date]
-        days = sorted(enriched["trading_day"].dropna().unique())
-        if not days:
-            return None
-        if sessions is not None:
-            enriched = enriched[enriched["trading_day"].isin(set(days[-(sessions + 1):]))]
-
-        frame = _resample(enriched, self.timeframe)
-        self._warmup_cache[cache_key] = frame
-        return frame
-
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
-    def _indicators(self) -> List[Any]:
-        """Recomputes whichever overlays are switched on."""
-        results = []
-        if self.day_df is None or self.day_df.empty:
-            return results
-
-        if self.tema_on:
-            try:
-                warmup = self._warmup_frame(_INDICATOR_WARMUP_DAYS)
-                if warmup is not None and not warmup.empty:
-                    results.append(
-                        compute_tema_session(warmup, self.tema)
-                        .reindex_lines(self.day_df["timestamp_ny"])
-                    )
-            except ValueError as e:
-                ui.notify(f"TEMA & Session Levels settings rejected: {e}", type="warning")
-
-        if self.aavwap_on:
-            try:
-                sessions = None if self.aavwap.anchor_period in _LONG_ANCHORS else _INDICATOR_WARMUP_DAYS
-                warmup = self._warmup_frame(sessions)
-                if warmup is not None and not warmup.empty:
-                    result = compute_auto_anchored_vwap(warmup, self.aavwap)
-                    self.anchor_label.set_text(
-                        f"Anchored VWAP: {result.meta['anchor_period']} anchor at "
-                        f"{result.meta['anchor_timestamp']:%Y-%m-%d %H:%M %Z} "
-                        f"({result.meta['anchor_bars_back']:,} bars back)."
-                    )
-                    self.anchor_label.set_visibility(True)
-                    results.append(result.reindex_lines(self.day_df["timestamp_ny"]))
-            except ValueError as e:
-                ui.notify(f"Auto Anchored VWAP settings rejected: {e}", type="warning")
-        else:
-            self.anchor_label.set_visibility(False)
-
-        return results
-
-    def push(self, *, reload_candles: bool = False) -> None:
-        """
-        Sends the current state to the chart.
-
-        ``reload_candles`` is false for indicator changes, which leaves the OHLC
-        payload out of the message entirely — only the overlay series that
-        actually changed travel over the socket.
-        """
+    def push(self) -> None:
+        """Sends the current state to the chart."""
         if self.chart is None:
             return
         if self.day_df is None or self.day_df.empty:
             self.chart.apply({"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []})
             return
 
-        spec = build_chart_spec(
-            self.day_df,
-            features=self.snapshot,
-            indicators=self._indicators(),
-            fit=reload_candles,
-        )
-        if not reload_candles:
-            spec.pop("candles", None)
-            spec.pop("volume", None)
-        self.chart.apply(spec)
+        self.chart.apply(build_chart_spec(self.day_df, features=self.snapshot, fit=True))
 
     def refresh_session(self) -> None:
         """Reloads the day from the database and redraws everything."""
@@ -390,7 +249,7 @@ class SessionExplorer:
         self.load_day()
         self._render_status()
         self._render_features()
-        self.push(reload_candles=True)
+        self.push()
 
     # ------------------------------------------------------------------
     # Control handlers
@@ -410,14 +269,6 @@ class SessionExplorer:
     def on_timeframe(self, event) -> None:
         self.timeframe = event.value
         self.refresh_session()
-
-    def on_tema(self, field: str, value) -> None:
-        self.tema = replace_setting(self.tema, field, value)
-        self.push()
-
-    def on_aavwap(self, field: str, value) -> None:
-        self.aavwap = replace_setting(self.aavwap, field, value)
-        self.push()
 
     # ------------------------------------------------------------------
     # Layout
@@ -485,18 +336,12 @@ class SessionExplorer:
         days = list_trading_days(self.conn, self.contract["contract_id"], limit=100)
         self.date = days[0] if days else None
 
-        # The drawer is a top-level layout element, so it has to be created as a
-        # direct child of the page rather than inside the body column.
-        self._build_indicator_drawer()
-
         with ui.column().classes("w-full p-4 gap-3"):
             self._build_controls(first_label, days)
 
             with ui.row().classes("w-full no-wrap gap-4 items-start"):
                 with ui.column().classes("grow gap-1 min-w-0"):
                     self.chart = LightweightChart(height=620)
-                    self.anchor_label = ui.label("").classes("text-xs").style("color:#787b86")
-                    self.anchor_label.set_visibility(False)
                 with ui.card().classes("w-72 shrink-0").style("background:#1c212e"):
                     ui.label("Pre-open features").classes("text-sm font-medium")
                     self.features_panel = ui.column().classes("gap-3 w-full")
@@ -522,106 +367,6 @@ class SessionExplorer:
                 ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
             ).props("dense")
             self.status = ui.row().classes("items-center gap-2")
-            ui.space()
-            ui.button("Indicators", icon="tune", on_click=lambda: self.drawer.toggle()).props("flat")
-
-    def _build_indicator_drawer(self) -> None:
-        self.drawer = ui.right_drawer(value=False).classes("p-3").style("background:#1c212e")
-        with self.drawer:
-            ui.label("Indicators").classes("text-lg font-medium")
-            self._tema_controls()
-            self._aavwap_controls()
-
-    def _tema_controls(self) -> None:
-        d = self.tema
-        with ui.expansion("TEMA & Session Levels", icon="show_chart", value=True).classes("w-full"):
-            ui.checkbox(
-                "Overlay on candles", value=self.tema_on,
-                on_change=lambda e: (setattr(self, "tema_on", e.value), self.push()),
-            )
-
-            ui.label("Moving averages").classes("text-xs uppercase mt-2").style("color:#787b86")
-            for label, field, lo, hi in (
-                ("TEMA length", "tema_length", 1, 500),
-                ("TEMA smoothing", "tema_smoothing_length", 1, 100),
-                ("Trigger EMA length", "trigger_ema_length", 1, 500),
-                ("EMA9 smoothing", "ema9_smoothing_length", 1, 100),
-                ("Trend EMA length", "trend_ema_length", 1, 1000),
-            ):
-                ui.number(
-                    label, value=getattr(d, field), min=lo, max=hi, precision=0,
-                    on_change=lambda e, f=field: self.on_tema(f, int(e.value or 1)),
-                ).props("dense outlined").classes("w-full")
-
-            ui.label("Sessions").classes("text-xs uppercase mt-2").style("color:#787b86")
-            ui.input("Timezone", value=d.timezone,
-                     on_change=lambda e: self.on_tema("timezone", e.value)).props("dense outlined")
-            for label, field in (
-                ("RTH session", "rth_session"),
-                ("Overnight session", "overnight_session"),
-                ("Premarket session", "premarket_session"),
-            ):
-                ui.input(label, value=getattr(d, field),
-                         on_change=lambda e, f=field: self.on_tema(f, e.value)).props("dense outlined")
-
-            ui.label("Levels").classes("text-xs uppercase mt-2").style("color:#787b86")
-            for label, field in (
-                ("Previous RTH high/low/open", "show_prev_rth"),
-                ("Overnight high/low/open", "show_overnight"),
-                ("Premarket high/low", "show_premarket"),
-                ("Price labels on the axis", "show_labels"),
-            ):
-                ui.checkbox(label, value=getattr(d, field),
-                            on_change=lambda e, f=field: self.on_tema(f, e.value))
-
-            ui.label("Line width").classes("text-xs mt-2").style("color:#787b86")
-            ui.slider(min=1, max=4, value=d.line_width,
-                      on_change=lambda e: self.on_tema("line_width", int(e.value))).props("label-always")
-            ui.select(list(LINE_STYLE_OPTIONS), value=d.line_style, label="Line style",
-                      on_change=lambda e: self.on_tema("line_style", e.value)).props("dense outlined")
-
-    def _aavwap_controls(self) -> None:
-        d = self.aavwap
-        with ui.expansion("Auto Anchored VWAP", icon="anchor").classes("w-full"):
-            ui.checkbox(
-                "Overlay on candles", value=self.aavwap_on,
-                on_change=lambda e: (setattr(self, "aavwap_on", e.value), self.push()),
-            )
-
-            ui.select(
-                list(ANCHOR_PERIOD_OPTIONS), value=d.anchor_period, label="Anchor period",
-                on_change=lambda e: self.on_aavwap("anchor_period", e.value),
-            ).props("dense outlined").tooltip(
-                "Auto resolves to Session on the intraday timeframes this view shows."
-            )
-            ui.number(
-                "Lookback (for HH / LL / HV)", value=d.lookback_length, min=2, max=5000, precision=0,
-                on_change=lambda e: self.on_aavwap("lookback_length", int(e.value or 2)),
-            ).props("dense outlined")
-            ui.select(list(SOURCE_OPTIONS), value=d.source, label="Source",
-                      on_change=lambda e: self.on_aavwap("source", e.value)).props("dense outlined")
-            ui.select(list(CALC_MODE_OPTIONS), value=d.calc_mode, label="Bands calculation",
-                      on_change=lambda e: self.on_aavwap("calc_mode", e.value)).props("dense outlined")
-
-            ui.label("VWAP line width").classes("text-xs mt-2").style("color:#787b86")
-            ui.slider(min=1, max=4, value=d.vwap_width,
-                      on_change=lambda e: self.on_aavwap("vwap_width", int(e.value))).props("label-always")
-
-            ui.label("Bands").classes("text-xs uppercase mt-2").style("color:#787b86")
-            for number in (1, 2, 3):
-                with ui.row().classes("items-center gap-2 w-full no-wrap"):
-                    ui.checkbox(
-                        f"Band {number}", value=getattr(d, f"show_band{number}"),
-                        on_change=lambda e, n=number: self.on_aavwap(f"show_band{n}", e.value),
-                    )
-                    ui.number(
-                        value=getattr(d, f"mult{number}"), min=0.0, max=10.0, step=0.5, precision=1,
-                        on_change=lambda e, n=number: self.on_aavwap(f"mult{n}", float(e.value or 0)),
-                    ).props("dense outlined").classes("w-24")
-            ui.checkbox(
-                "Fill inner band", value=d.fill_bands,
-                on_change=lambda e: self.on_aavwap("fill_bands", e.value),
-            )
 
     # ------------------------------------------------------------------
     # Forecasting
@@ -791,11 +536,6 @@ class SessionExplorer:
             elif saved is not None:
                 ui.label(f"Saved as prediction #{saved}.").classes("text-xs mt-2").style("color:#787b86")
                 self._saved_as = None
-
-
-def replace_setting(settings, field: str, value):
-    """Returns a copy of a settings dataclass with one field changed."""
-    return replace(settings, **{field: value})
 
 
 def show_candles_page(conn) -> None:

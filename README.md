@@ -128,9 +128,9 @@ python -m dashboard.app
 Two pages:
 
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — pick a
-  contract and trading day, plot the candles with indicator overlays (Auto Anchored VWAP,
-  TEMA & Session Levels), and run a forecast for that session on demand. The indicator
-  settings live in the right-hand drawer behind the **Indicators** button.
+  contract and trading day, plot the candles with the pre-open reference levels and session
+  VWAP drawn from the feature snapshot, and run a forecast for that session on demand. The
+  **Pre-open features** panel beside the chart shows the snapshot the forecast is built from.
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   every stored prediction joined against its realized outcome, so you can see whether the
   bias calls were right.
@@ -396,10 +396,9 @@ database whose name contains `test`; they reset it).
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
 | [forecaster/](forecaster/) | Prompts, LLM client + offline baseline, outcome evaluator |
-| [indicator/](indicator/) | Pine v6 indicator ports (VWAP, TEMA & session levels) + chart serialisation |
 | [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
 | [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
-| [tests/](tests/) | Calendar, indicator, v2 snapshot and forecast-record tests |
+| [tests/](tests/) | Calendar, feature-indicator, v2 snapshot and forecast-record tests |
 | [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [v2 forecast contract](docs/forecast_contract_v2.md) |
 
 ## Database
@@ -441,18 +440,6 @@ Never edit an applied migration or the generated `database/schema.sql` — add a
 migration file in `database/migrations/`. Read
 [docs/data_store.md](docs/data_store.md) before changing anything about how days are stored.
 
-## Indicators
-
-[indicator/](indicator/) holds faithful Python ports of two Pine v6 TradingView indicators,
-with the original `.pine` sources kept alongside for reference.
-[indicator/pine.py](indicator/pine.py) reimplements the TradingView built-ins they need
-(`ema`, `sma`, session parsing) preserving Pine's warm-up and `na`-propagation semantics
-rather than the pandas defaults, so the Python output matches the chart it came from.
-
-Each indicator computes over an OHLC frame and returns an `IndicatorResult`, which
-[indicator/lwc.py](indicator/lwc.py) turns into Lightweight Charts series, bands and
-levels. Nothing in the indicator package knows about the chart or the web framework.
-
 ## Charting
 
 The dashboard is [NiceGUI](https://nicegui.io) serving TradingView's
@@ -476,23 +463,19 @@ reconciles that against what it has already drawn, picking the cheapest operatio
 | values recomputed across the window | `series.setData()` on the **existing** series |
 
 Because no series or chart object is ever recreated, your zoom, scroll and crosshair
-survive every settings change. Changing one indicator's length touches exactly one series;
-switching timeframes leaves the overlay series in place. `update()` cannot rewrite a bar
-before the series' last one, so it is used only where the replacement data is provably not
-older — recomputing an indicator falls back to `setData` on the live series.
+survive a redraw. `update()` cannot rewrite a bar before the series' last one, so it is
+used only where the replacement data is provably not older.
 
-Indicator-only changes omit the OHLC payload from the message entirely, so tweaking a
-setting sends the overlay series and nothing else.
+One thing Lightweight Charts has no native support for is supplied here:
 
-Two things Lightweight Charts has no native support for are supplied here:
-
-- **Band fills.** There is no fill-between-series, so the component carries a small canvas
-  series primitive that shades the channel between two price arrays — that is what draws
-  the Auto Anchored VWAP bands. It paints beneath the candles and breaks the polygon across
-  gaps rather than closing over them.
 - **Timezones.** The library always renders UTC. Timestamps are therefore converted to New
-  York *wall clock* before being handed over ([indicator/lwc.py](indicator/lwc.py)), so the
-  axis reads ET with DST handled per bar. A session runs 18:00 the prior evening → 17:00.
+  York *wall clock* before being handed over (`to_epoch` in
+  [dashboard/components/spec.py](dashboard/components/spec.py)), so the axis reads ET with
+  DST handled per bar. A session runs 18:00 the prior evening → 17:00.
+
+The component also carries a canvas primitive for filling the channel between two price
+series. Nothing draws bands since the indicator overlays were removed, so it currently sits
+unused — kept because it is the only way to shade between series in this library.
 
 Horizontal levels are sent as their two endpoints rather than one point per bar: the value
 is constant, so a dozen levels would otherwise ship tens of thousands of identical numbers

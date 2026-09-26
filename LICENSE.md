@@ -26,9 +26,9 @@ SOFTWARE.
 
 ## Third-party notices
 
-The MIT grant above covers the original code in this repository. Some files are
-derived from, or vendored from, third-party work and carry their own terms. Those
-terms govern those files and are **not** superseded by the MIT license above.
+The MIT grant above covers the original code in this repository. One vendored file
+carries its own terms, which govern that file and are **not** superseded by the MIT
+license above.
 
 ### TradingView Lightweight Charts™ — Apache-2.0
 
@@ -41,33 +41,18 @@ build of TradingView's Lightweight Charts v5.2.1.
 "TradingView" and "Lightweight Charts" are trademarks of TradingView, Inc. Nothing in
 this project is affiliated with or endorsed by TradingView.
 
-### "TEMA & Session Levels" indicator — MPL-2.0
+### Removed: the Pine indicator ports
 
-`indicator/TEMA & Session Levels.pine` and its Python port `indicator/tema_session.py`
-are derived from a Pine Script® indicator by **© Ununseptium**, licensed under the
-Mozilla Public License 2.0.
+Earlier versions carried Python ports of two TradingView Pine indicators, which
+brought two obligations with them: an MPL-2.0 file-level copyleft on the "TEMA &
+Session Levels" port (© Ununseptium), and a script of unverifiable provenance behind
+"Auto Anchored VWAP". Both were deleted along with the `indicator/` package, so
+neither applies to this project any more. Every remaining source file is original work
+under the MIT license above.
 
-> This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
-> If a copy of the MPL was not distributed with this file, you can obtain one at
-> https://mozilla.org/MPL/2.0/
-
-MPL-2.0 is file-level copyleft. These two files remain under MPL-2.0 even though the
-rest of the project is MIT: if you distribute a modified version of either file, you
-must make that file's source available under the MPL. The MPL explicitly permits
-combining these files with the MIT-licensed code around them, so the project as a
-whole can still be used and redistributed — only those files carry the obligation.
-
-### "Auto Anchored VWAP [v6]" indicator — no stated license
-
-`indicator/Auto Anchored VWAP.pine` was obtained as a Pine v6 script that carries no
-copyright, author, or license notice of its own, and `indicator/auto_anchored_vwap.py`
-is a Python port of it. Its provenance therefore cannot be verified, and no license
-grant for it is claimed here.
-
-It is retained for personal research reference. If you intend to redistribute this
-project or use it commercially, establish the origin and licensing of that script
-first, or replace the port with an independent implementation. If you are the author
-and want it attributed differently or removed, please open an issue.
+If you are working from an older checkout or a fork that still contains
+`indicator/tema_session.py`, that file remains MPL-2.0 there and its terms still apply
+to it.
 
 ---
 

@@ -3,8 +3,7 @@
 Builds Lightweight Charts specs from the pipeline's own data structures.
 
 Everything the chart shows is described here as plain JSON-able dicts: candles,
-the volume pane, pre-open reference levels and any number of
-:class:`~indicator.types.IndicatorResult` overlays. The component diffs the spec
+the volume pane and the pre-open reference levels. The component diffs the spec
 against what it has already drawn, so building a *whole* spec on every
 interaction is the intended usage — it is the component, not the caller, that
 decides what needs to change on the chart.
@@ -17,9 +16,6 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from indicator import indicator_payload, level_points, to_epoch
-from indicator.types import IndicatorResult
-
 _UP = "rgba(38, 166, 154, 0.5)"
 _DOWN = "rgba(239, 83, 80, 0.5)"
 
@@ -29,6 +25,37 @@ _FEATURE_LEVELS = (
     ("overnight_high", "Overnight High", "#ffa726", 1, 1),
     ("overnight_low", "Overnight Low", "#ffa726", 1, 1),
 )
+
+
+def to_epoch(timestamps) -> np.ndarray:
+    """
+    Converts timestamps to the integer seconds Lightweight Charts expects.
+
+    The library has no timezone support and always renders UTC, so a tz-aware
+    index is flattened to its *wall clock* first. The axis then reads New York
+    time, and because the offset is taken per timestamp, DST changes land in the
+    right place instead of shifting a whole session by an hour.
+    """
+    index = pd.DatetimeIndex(timestamps)
+    if index.tz is not None:
+        index = index.tz_localize(None)
+    # A DatetimeIndex may carry any resolution, so normalise the unit rather
+    # than assuming asi8 counts nanoseconds.
+    return index.as_unit("s").asi8
+
+
+def level_points(start: int, end: int, value: float) -> List[Dict[str, Any]]:
+    """
+    A horizontal level as the two endpoints of its segment.
+
+    Lightweight Charts joins consecutive points with a straight line, so a
+    constant series needs no intermediate points at all — a dozen levels would
+    otherwise ship tens of thousands of identical numbers to the browser.
+    """
+    point = round(float(value), 2)
+    if start >= end:
+        return [{"time": int(end), "value": point}]
+    return [{"time": int(start), "value": point}, {"time": int(end), "value": point}]
 
 
 def _times(df: pd.DataFrame) -> np.ndarray:
@@ -84,16 +111,10 @@ def build_chart_spec(
     df: pd.DataFrame,
     *,
     features: Optional[Dict[str, Any]] = None,
-    indicators: Sequence[IndicatorResult] = (),
     show_vwap: bool = True,
     fit: bool = False,
 ) -> Dict[str, Any]:
-    """
-    Assembles the full chart spec for one session.
-
-    ``indicators`` are keyed by position, so switching one off simply drops its
-    series from the spec and the component removes them.
-    """
+    """Assembles the full chart spec for one session."""
     if df is None or df.empty:
         return {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []}
 
@@ -128,14 +149,6 @@ def build_chart_spec(
             },
         }
         legend.append({"key": "features:vwap", "label": "Session VWAP", "color": "#ab47bc"})
-
-    for position, result in enumerate(indicators):
-        if result is None:
-            continue
-        ind_series, ind_bands, ind_legend = indicator_payload(result, f"ind{position}")
-        series.update(ind_series)
-        bands.update(ind_bands)
-        legend.extend(ind_legend)
 
     return {
         "candles": candle_points(df),
