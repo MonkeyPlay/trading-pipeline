@@ -58,6 +58,7 @@ from database.queries import (
     create_collection_run,
     update_collection_run,
     set_active_contracts,
+    clear_active_contracts,
     register_asset_sources,
 )
 from features.session_windows import convert_utc_to_ny, classify_session_scope, get_trading_day_date
@@ -113,6 +114,18 @@ PRICE_TYPE = "TRADES"   # default whatToShow; each Instrument names its own
 _BENIGN_CODES = {2104, 2106, 2158, 2107, 2100, 2119, 2110}
 # Codes that indicate server-side pacing/rate-limit violations.
 _RATE_LIMIT_CODES = {162, 420}
+
+
+def is_pacing_violation(error_code: int, error_string: str) -> bool:
+    """
+    Whether an IB error means "slow down". Code 162 is the historical-data
+    service's catch-all: besides pacing violations it also reports "HMDS query
+    returned no data", cancelled queries and missing permissions, none of which
+    a back-off can help - those just fail their request.
+    """
+    if error_code == 162:
+        return "pacing violation" in (error_string or "").lower()
+    return error_code in _RATE_LIMIT_CODES
 
 
 def _parse_ib_timestamp(raw) -> str:
@@ -241,7 +254,7 @@ class IBCollectorApp(EWrapper, EClient):
         if error_code in _BENIGN_CODES:
             return
 
-        if error_code in _RATE_LIMIT_CODES:
+        if is_pacing_violation(error_code, error_string):
             logger.warning(f"IB pacing violation [code {error_code}]: {error_string}")
             self.pacer.handle_rate_limit_error()
 
@@ -567,6 +580,7 @@ class _Work:
     rolling: bool
     jobs: Optional[List[tuple]] = None             # [(contract_info, [day, ...])]
     assignment: Dict[str, int] = field(default_factory=dict)   # day -> contract_id
+    uncovered: List[str] = field(default_factory=list)         # days no known contract covers
     rule: str = ""
 
     @property
@@ -621,6 +635,7 @@ def _plan_rolling(conn, work, start_day, end_day, gap_fill, allow_gaps=False):
     warmup = Config.ROLL_WARMUP_SESSIONS
     work.rule = rule.describe()
     work.assignment = {d.isoformat(): row["contract_id"] for d, row in assignment.items()}
+    work.uncovered = missing
     work.jobs = []
     for seg in segments(assignment, warmup):
         row = seg.contract
@@ -649,6 +664,11 @@ def _record_assignment(conn, work):
     if work.assignment:
         n = set_active_contracts(conn, work.symbol, work.assignment, work.rule)
         logger.info(f"{work.symbol}: active contract recorded for {n} trading day(s) ({work.rule}).")
+    if work.uncovered:
+        # An earlier plan from an incomplete chain may have assigned these days.
+        n = clear_active_contracts(conn, work.symbol, work.uncovered)
+        if n:
+            logger.info(f"{work.symbol}: cleared {n} stale active-contract assignment(s).")
 
 
 def _resolve_online(app, conn, work, start_day, end_day, gap_fill):
