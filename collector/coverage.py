@@ -11,8 +11,8 @@ A day is judged as a whole. Minute-level gap filling is deliberately not
 attempted: thin overnight periods legitimately have no trades, so a missing
 minute is not a reliable signal — day-level bar counts are.
 
-Upgrade path for the holiday calendar: replace ``_CME_HOLIDAYS`` /
-``expected_trading_days`` with ``pandas_market_calendars`` (``CME_Equity``).
+The holiday list is the versioned calendar in ``features/calendar.py``; extend
+it there (and bump its ``CALENDAR_VERSION``) rather than here.
 """
 
 from dataclasses import dataclass
@@ -20,17 +20,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
 from database.queries import expected_bars_for, get_stored_trading_days
+from features.calendar import RTH_HOLIDAYS
 
-# Minimal hand-maintained list of full CME holidays (equity-index).
-# Half-days (early closes) are intentionally not modelled here.
-_CME_HOLIDAYS = {
-    date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
-    date(2025, 5, 26), date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1),
-    date(2025, 11, 27), date(2025, 12, 25),
-    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16), date(2026, 4, 3),
-    date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7),
-    date(2026, 11, 26), date(2026, 12, 25),
-}
+# Full holidays of the US equity cash session. One list for the whole project:
+# the versioned calendar in features/calendar.py (which also knows early closes).
+_CME_HOLIDAYS = RTH_HOLIDAYS
 
 # Re-fetch the trailing N sessions every run: the vendor revises recent bars and
 # the most recent session may have been partial when it was last stored.

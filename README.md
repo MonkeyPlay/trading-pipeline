@@ -159,10 +159,12 @@ same-contract previous close. The choice is recorded per day in `active_contract
 
 **Backfill before relying on standardized features.** The z-scored intermarket features
 need the prior 60 same-window returns, i.e. about three months of history for every
-context instrument. Once:
+context instrument, and the v2 daily ATRs need more (A: 71 RTH sessions, ATR63: 316 -
+see [docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). Once:
 
 ```bash
 python -m collector.ib_collector --days 100      # ~70 trading days, across the last roll
+python -m collector.ib_collector --days 460      # everything nq_features_v2 can use
 ```
 
 That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
@@ -212,7 +214,8 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
-**The intermarket features read the 09:28 ET closes**, which a 09:15 run has not seen yet.
+**The intermarket features read the bars ending at 09:29 ET** (the v2 cutoff T), which a
+09:15 run has not seen yet.
 To have them in the store, also collect once they exist:
 
 ```cron
@@ -292,7 +295,8 @@ version a feature could have used stays on record). `python config.py` prints it
 | `vxn` | VXN spot index | index points | 15 min | may print in RTH only — then pre-open is null, not carried |
 | `us10y` | TNX | percent × 10 (1 unit = 10 bps) | 30 min | |
 | `us2y` | — | | | **unmapped**: IB has no spot 2-year yield history, so this stays null |
-| `dxy` | DX front future | price | 30 min | **proxy**: ICE does not license the DXY index to IB |
+| `dxy` | — | | | **unmapped**: ICE does not license the cash DXY index to IB, so `dxy_preopen_return` stays null |
+| `dx_fut` | DX front future | price | 30 min | **proxy** for DXY, under its own feature names (`dx_fut_*`) |
 | `smh` | SMH | price | 30 min | premarket trades included (`useRTH=0`) |
 | `us10y_yield_fut`, `us2y_yield_fut` | 10Y / 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset names |
 | `gc`, `cl` | GC / CL front future | price | 10 min | optional, not collected by default |
@@ -300,8 +304,9 @@ version a feature could have used stays on record). `python config.py` prints it
 What the store guarantees for these features:
 
 - **Only genuine prints.** Bars are stored exactly as IB sends them; a minute without a
-  print is absent, never forward-filled. `bars.timestamp_utc` is the bar's *open* time, so
-  the "09:28 close" is the close of the bar stamped 09:27, and a value's age is the
+  print is absent, never forward-filled. `bars.timestamp_utc` is the bar's *start* time
+  (`bar_start_at`). The v2 contract names a bar by its start: "the 09:28 close" is the bar
+  stamped 09:28, which ends at 09:29 = T. A value's age is the
   distance from its bar's close to the instant it stands for.
 - **One contract per future per day.** `active_contracts` says which contract stood for a
   symbol on each trading day, and the day before each activation is stored too, so a
@@ -346,6 +351,27 @@ analogue *with its realized outcome*, and requires strict JSON back: `opening_bi
 happened once a session closes — first 15/30 minutes, the 60-minute Initial Balance, and
 full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived first.
 
+## v2: versioned NQ forecast records
+
+A second, stricter pipeline runs beside the one above
+([docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). It freezes an
+`nq_features_v2` snapshot at **T = 09:29 ET** from bars ending by T only - NQ
+price/volume structure in ATR units, intermarket returns and yield/volatility changes
+with per-source freshness, calendar and event context - with a status for every feature
+and source, a content-addressed source revision, and a live/historical and
+point-in-time flag. Forecast runs, per-target probability distributions (with
+abstention), realised labels and continuous outcome metrics are separate, append-only
+records; corrections become new versions or revisions, never overwrites.
+
+```bash
+python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + backtest
+python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
+python scripts/nq_forecast_v2.py live        # 09:29 ET, once the 09:28 bars are stored
+```
+
+Tests: `pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable
+database whose name contains `test`; they reset it).
+
 ## Layout
 
 | Path | What lives there |
@@ -357,8 +383,9 @@ full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived
 | [forecaster/](forecaster/) | Prompts, LLM client + offline baseline, outcome evaluator |
 | [indicator/](indicator/) | Pine v6 indicator ports (VWAP, TEMA & session levels) + chart serialisation |
 | [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
-| [scripts/](scripts/) | Daily runner, forecast entrypoint, DB backup |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md) |
+| [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
+| [tests/](tests/) | Calendar, indicator, v2 snapshot and forecast-record tests |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [v2 forecast contract](docs/forecast_contract_v2.md) |
 
 ## Database
 
@@ -369,8 +396,15 @@ is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `active_contracts` (the contract that stood for each symbol per day),
-`asset_sources` (the logical-asset source map, versioned), `feature_snapshots`,
-`predictions`, `analogue_matches`, `outcomes`.
+`asset_sources` (the logical-asset source map, versioned), `economic_events` /
+`economic_event_coverage` (an optional event calendar), and the v1 forecast tables
+`feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
+
+The v2 records (`0004`) live in their own schema, `forecast`: `feature_snapshots`,
+`forecast_runs`, `predictions`, `realised_outcomes`, `outcome_metrics`, their version
+registries and `source_revisions`. They are append-only - the database rejects UPDATE,
+DELETE and TRUNCATE - and are described in
+[docs/forecast_contract_v2.md](docs/forecast_contract_v2.md).
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
 ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll

@@ -179,6 +179,11 @@ print is absent, never forward-filled — so the age of any value is recoverable
 `get_last_bar_at_or_before(conn, contract_id, as_of_utc)` returns the last bar that had
 *closed* by an instant, with its `close_time_utc`.
 
+The v2 feature contract ([forecast_contract_v2.md](forecast_contract_v2.md)) calls this
+column `bar_start_at` and names bars by their start: its "09:28 close" is the bar stamped
+09:28, ending 09:29. The `bar_intervals` view exposes `bar_start_at` and `bar_end_at`
+explicitly.
+
 A day whose median close falls outside the instrument's `plausible_range` is refused
 (logged as a `FAILED` collection run), since it almost always means `value_unit` does not
 match what the source sends.

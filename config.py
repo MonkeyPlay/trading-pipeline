@@ -184,9 +184,11 @@ ASSET_SOURCES: Dict[str, AssetSource] = {a.asset: a for a in (
                 notes="No spot 2-year yield series is available through IB (it serves yield "
                       "history for corporate bonds only). Left unmapped so us2y_change_bps and "
                       "the 10y-2y curve change stay null; see us2y_yield_fut."),
-    AssetSource("dxy", "DX", "US Dollar Index", 30, is_proxy=True,
-                notes="Recorded as the front DX future: ICE does not license the DXY index to IB. "
-                      "Name features dx_fut_* if the proxy must be kept distinct from cash DXY."),
+    AssetSource("dxy", None, "US Dollar Index (cash DXY)",
+                notes="ICE does not license the cash DXY index to IB, so nothing is recorded and "
+                      "dxy_preopen_return stays null. The DX future is its own asset, dx_fut."),
+    AssetSource("dx_fut", "DX", "ICE US Dollar Index futures, front contract", 30, is_proxy=True,
+                notes="A futures proxy for DXY, kept under its own feature names (dx_fut_*)."),
     AssetSource("smh", "SMH", "VanEck Semiconductor ETF (regular close -> premarket)", 30),
     AssetSource("us10y_yield_fut", "10Y", "Micro 10-Year Yield futures, front month", 30,
                 is_proxy=True, notes="A futures yield, not the spot 10-year yield."),
