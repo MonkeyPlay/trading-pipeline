@@ -65,6 +65,10 @@ class Instrument:
     # A day whose median close falls outside this range is refused rather than
     # stored: it almost always means value_unit is wrong for what the source sends.
     plausible_range: Optional[Tuple[float, float]] = None
+    # True when every regular-session (09:30-16:00 ET) minute trades and the v2
+    # features and labels read those minutes one by one: a day then only counts as
+    # COMPLETE with its whole regular session stored (collector/coverage.py).
+    rth_complete: bool = False
 
     @property
     def is_index(self):
@@ -95,9 +99,14 @@ _MONTHLY_YIELD_ROLL = RollRule(MONTH_CODES, 3)
 # filed under the same 18:00 ET trading day as the futures, so "the bars of day D"
 # means the same wall-clock window for every instrument.
 INSTRUMENTS: Dict[str, Instrument] = {
-    "ES": Instrument("ES", "S&P 500 E-mini", "CME", 0.25, "50", roll=_EQUITY_ROLL),
-    "NQ": Instrument("NQ", "Nasdaq-100 E-mini", "CME", 0.25, "20", roll=_EQUITY_ROLL),
-    "RTY": Instrument("RTY", "Russell 2000 E-mini", "CME", 0.10, "50", roll=_EQUITY_ROLL),
+    # ES and NQ trade every minute of the 23-hour Globex day (18:00-17:00 ET, 1380
+    # minutes); RTY has genuinely quiet overnight minutes, so it keeps the lower bound.
+    "ES": Instrument("ES", "S&P 500 E-mini", "CME", 0.25, "50", roll=_EQUITY_ROLL,
+                     expected_bars=1380, rth_complete=True),
+    "NQ": Instrument("NQ", "Nasdaq-100 E-mini", "CME", 0.25, "20", roll=_EQUITY_ROLL,
+                     expected_bars=1380, rth_complete=True),
+    "RTY": Instrument("RTY", "Russell 2000 E-mini", "CME", 0.10, "50", roll=_EQUITY_ROLL,
+                      rth_complete=True),
 
     # Spot volatility indices (not VX futures). VIX is disseminated in Cboe's global
     # trading hours as well as RTH; VXN may only print in RTH, in which case its
@@ -176,8 +185,10 @@ ASSET_SOURCES: Dict[str, AssetSource] = {a.asset: a for a in (
     AssetSource("nq", "NQ", "Nasdaq-100 E-mini, front contract", 5),
     AssetSource("es", "ES", "S&P 500 E-mini, front contract", 5),
     AssetSource("rty", "RTY", "Russell 2000 E-mini, front contract", 5),
-    AssetSource("vix", "VIX", "Cboe VIX spot index", 15),
-    AssetSource("vxn", "VXN", "Cboe VXN spot index", 15,
+    # Cboe pauses spot-volatility dissemination between 09:15 and 09:30 ET, so at the
+    # 09:29 cutoff the freshest VIX print is already ~14 minutes old.
+    AssetSource("vix", "VIX", "Cboe VIX spot index", 20),
+    AssetSource("vxn", "VXN", "Cboe VXN spot index", 20,
                 notes="May be disseminated in RTH only; a stale pre-open value is null, not carried."),
     AssetSource("us10y", "TNX", "10-year Treasury yield (Cboe TNX, yield x10)", 30),
     AssetSource("us2y", None, "2-year Treasury yield",

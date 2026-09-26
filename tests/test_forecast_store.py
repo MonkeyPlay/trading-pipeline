@@ -59,7 +59,7 @@ def conn():
 def test_feature_matrix_view_matches_catalogue(conn):
     cols = [r[0] for r in conn.execute(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = 'forecast' "
-        "AND table_name = 'feature_matrix_nq_v2' ORDER BY ordinal_position;")]
+        "AND table_name = %s ORDER BY ordinal_position;", (catv2.FEATURE_MATRIX_VIEW,))]
     assert tuple(cols[cols.index("daily_atr_fraction"):]) == catv2.FEATURE_NAMES
 
 
@@ -92,7 +92,7 @@ def test_live_timing_is_enforced(conn):
 
     live = replace(base, data_mode="live_capture", features_frozen_at=s.cutoff_at + timedelta(seconds=20))
     sid, _ = store.save_feature_snapshot(conn, live)
-    run = {"snapshot_id": sid, "model_version": "nq_climatology_v2", "label_version": labels_v2.LABEL_VERSION,
+    run = {"snapshot_id": sid, "model_version": models_v2.CLIMATOLOGY["model_version"], "label_version": labels_v2.LABEL_VERSION,
            "calibration": {}, "input_quality_status": "invalid"}
     abstain = [{"target_id": t, "abstained": True, "abstention_reason": "test", "prediction_status": "unavailable",
                 "decision_reason": "data_quality", "calibration_status": "unvalidated"} for t in labels_v2.TARGETS]
@@ -104,7 +104,7 @@ def test_live_timing_is_enforced(conn):
 
 
 def _run(conn, sid):
-    return {"snapshot_id": sid, "model_version": "nq_climatology_v2", "label_version": labels_v2.LABEL_VERSION,
+    return {"snapshot_id": sid, "model_version": models_v2.CLIMATOLOGY["model_version"], "label_version": labels_v2.LABEL_VERSION,
             "generated_at": pd.Timestamp.now(tz="UTC").to_pydatetime(), "calibration": {},
             "input_quality_status": "valid"}
 
@@ -242,7 +242,7 @@ def test_sklearn_forecast_end_to_end(conn):
 
 def test_day_forecast_for_the_dashboard(conn):
     """The newest run of a model for a session, its predictions and realised outcomes."""
-    assert store.get_day_forecast(conn, "2026-06-12", "nq_climatology_v2", catv2.FEATURE_VERSION) is None
+    assert store.get_day_forecast(conn, "2026-06-12", models_v2.CLIMATOLOGY["model_version"], catv2.FEATURE_VERSION) is None
     day = store.get_day_forecast(conn, "2026-06-12", "nq_sklearn_test", catv2.FEATURE_VERSION)
     assert day is not None and day["run"]["model_version"] == "nq_sklearn_test"
     assert set(day["predictions"]) == set(labels_v2.TARGETS)

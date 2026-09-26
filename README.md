@@ -134,8 +134,8 @@ Two pages:
   session VWAP drawn from the feature snapshot, and run a forecast for that session on
   demand. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v1`, or the
-  `nq_climatology_v2` baseline): per target the status, predicted label, full probability
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v2`, or the
+  `nq_climatology_v3` baseline): per target the status, predicted label, full probability
   distribution, the method that won the model selection, and the actual outcome with a
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
   is stored. The **Pre-open features** panel beside
@@ -184,7 +184,7 @@ see [docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). Once:
 
 ```bash
 python -m collector.ib_collector --days 100      # ~70 trading days, across the last roll
-python -m collector.ib_collector --days 460      # everything nq_features_v2 can use
+python -m collector.ib_collector --days 460      # everything nq_features_v3 can use
 ```
 
 That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
@@ -324,8 +324,8 @@ version a feature could have used stays on record). `python config.py` prints it
 | Asset | Recorded as | Unit | Freshness | Notes |
 |---|---|---|---|---|
 | `nq`, `es`, `rty` | NQ / ES / RTY front future | price | 5 min | |
-| `vix` | VIX spot index | index points | 15 min | printed in Cboe's global hours and RTH |
-| `vxn` | VXN spot index | index points | 15 min | may print in RTH only — then pre-open is null, not carried |
+| `vix` | VIX spot index | index points | 20 min | printed in Cboe's global hours and RTH, paused 09:15–09:30 ET |
+| `vxn` | VXN spot index | index points | 20 min | may print in RTH only — then pre-open is null, not carried |
 | `us10y` | TNX | percent × 10 (1 unit = 10 bps) | 30 min | |
 | `us2y` | — | | | **unmapped**: IB has no spot 2-year yield history, so this stays null |
 | `dxy` | — | | | **unmapped**: ICE does not license the cash DXY index to IB, so `dxy_preopen_return` stays null |
@@ -389,7 +389,7 @@ full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived
 
 A second, stricter pipeline runs beside the one above
 ([docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). It freezes an
-`nq_features_v2` snapshot at **T = 09:29 ET** from bars ending by T only - NQ
+`nq_features_v3` snapshot at **T = 09:29 ET** from bars ending by T only - NQ
 price/volume structure in ATR units, intermarket returns and yield/volatility changes
 with per-source freshness, calendar and event context - with a status for every feature
 and source, a content-addressed source revision, and a live/historical and
@@ -402,25 +402,28 @@ It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v2_
 `session_type_rth`, each labelled afterwards by deterministic rules from the realised
 minute bars.
 
-**The model** (`nq_sklearn_v1`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+**The model** (`nq_sklearn_v2`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
 scikit-learn classifier per target over an explicit allowlist of snapshot features
 (median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
 session it trains only on earlier sessions whose outcome was knowable before that
-session's 09:29 cutoff. For each target it scores the class prior, two L2 logistic
-regressions and a gradient-boosted tree ensemble by chronological cross-validation
-(`TimeSeriesSplit`, log loss) and refits the winner. A feature model is used only when it
-beats the prior out of sample. `nq_climatology_v2` (label frequencies) is kept as the
-baseline to compare against.
+session's 09:29 cutoff. For each target it scores the class prior, sparse (L1) and L2
+logistic regressions and a gradient-boosted tree ensemble by chronological
+cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
+replaces the prior only from 120 training sessions on, and only when it beats the prior
+on the same validation sessions by a clear margin (more than one standard error of the
+per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v3`
+(label frequencies) is kept as the baseline to compare against.
 
 ```bash
 python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + walk-forward backtest (both models)
 python scripts/nq_forecast_v2.py train                                          # fit for today: CV report + data/models/ artifact
-python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # accuracy, log loss, Brier per model/target
+python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 
-The model needs at least 60 labelled sessions per target (earlier forecasts are recorded as
-`unavailable`), so backfill history first.
+The model needs at least 60 labelled sessions per target to issue a forecast (earlier ones
+are recorded as `unavailable`), and 120 before its features can outweigh the plain class
+frequencies, so backfill history first.
 
 Tests: `pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable
 database whose name contains `test`; they reset it).

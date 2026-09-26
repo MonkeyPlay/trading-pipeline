@@ -17,9 +17,10 @@ it there (and bump its ``CALENDAR_VERSION``) rather than here.
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional, Tuple
 
-from database.queries import expected_bars_for, get_stored_trading_days
+from database.queries import derive_day_status, expected_bars_for, get_stored_trading_days
+from features import calendar as cal
 from features.calendar import RTH_HOLIDAYS
 
 # Full holidays of the US equity cash session. One list for the whole project:
@@ -31,6 +32,39 @@ _CME_HOLIDAYS = RTH_HOLIDAYS
 REFRESH_TRAILING_DAYS = 2
 
 FETCH_ACTIONS = ("fetch", "refetch")
+
+REGULAR_SESSION_MINUTES = 390     # 09:30-16:00 ET
+
+
+def scheduled_rth_minutes(d: date) -> Optional[int]:
+    """Minutes of the scheduled regular session on ``d`` (210 on an early close, 0
+    when it is closed), or None outside the calendar's coverage."""
+    if not cal.is_covered(d):
+        return None
+    s = cal.session(d)
+    if not s.is_open:
+        return 0
+    return int((s.scheduled_close_at - s.rth_open_at).total_seconds() // 60)
+
+
+def day_expectation(instrument, d: date) -> Tuple[Optional[int], Optional[int]]:
+    """
+    ``(expected bars for the whole trading day, regular-session bars required)``
+    for ``instrument`` on ``d``.
+
+    Only an instrument flagged ``rth_complete`` - one whose every regular-session
+    minute trades and that the features and labels read minute by minute - must
+    hold its whole regular session; the others are judged by their day count
+    alone. For those, an early close (or a closed regular session) also lowers the
+    day's expected count by the regular-session minutes it loses.
+    """
+    expected = instrument.expected_bars
+    if not getattr(instrument, "rth_complete", False):
+        return expected, None
+    rth = scheduled_rth_minutes(d)
+    if rth is None:
+        return expected, None
+    return expected - (REGULAR_SESSION_MINUTES - rth), rth
 
 
 @dataclass
@@ -90,6 +124,7 @@ def plan_trading_days(
     trailing_days: int = REFRESH_TRAILING_DAYS,
     expected: Optional[int] = None,
     extra_days: Iterable[date] = (),
+    expectation: Optional[Callable[[date], Tuple[Optional[int], Optional[int]]]] = None,
 ) -> List[DayPlan]:
     """
     Decides, for every expected trading day in [start, end], whether it must be
@@ -105,6 +140,11 @@ def plan_trading_days(
     collector uses it for the reference day before a contract becomes active.
     A day the source had no data for is stored as 'EMPTY' and treated as ``ok``:
     we asked once, and asking again every run would just burn the pacing budget.
+
+    ``expectation(day) -> (expected bars, regular-session bars required)`` (see
+    ``day_expectation``) re-judges every stored day from its counts under the
+    current rule instead of trusting the status it was stored with, so a stricter
+    rule also reaches days stored before it existed.
     """
     extra = {d for d in extra_days if not (start <= d <= end)}
     ledger = get_stored_trading_days(
@@ -130,12 +170,17 @@ def plan_trading_days(
         have = int(row["bar_count"]) if row is not None else 0
         status = row["status"] if row is not None else None
 
+        exp_day, exp_rth = expectation(d) if expectation is not None else (expected, None)
+        short = _falls_short(row, exp_day, exp_rth) if expectation is not None else None
+
         if row is None:
             action, reason = "fetch", "not in database"
         elif force:
             action, reason = "refetch", "forced refresh"
+        elif short is not None:
+            action, reason, status = "refetch", short, "PARTIAL"
         elif status == "PARTIAL":
-            reason = f"incomplete ({have}/{expected} bars)" if expected else f"incomplete ({have} bars)"
+            reason = f"incomplete ({have}/{exp_day} bars)" if exp_day else f"incomplete ({have} bars)"
             action = "refetch"
         elif d >= trailing_cutoff:
             action, reason = "refetch", "trailing session (vendor may revise)"
@@ -144,8 +189,20 @@ def plan_trading_days(
         else:
             action, reason = "ok", f"{have} bars stored"
 
-        plan.append(DayPlan(key, action, reason, status, have, expected))
+        plan.append(DayPlan(key, action, reason, status, have, exp_day))
     return plan
+
+
+def _falls_short(row, expected: Optional[int], expected_rth: Optional[int]) -> Optional[str]:
+    """Why a day stored as COMPLETE falls short of the current rule, or None."""
+    if row is None or row["status"] != "COMPLETE":
+        return None
+    have, rth = int(row["bar_count"]), int(row["rth_bar_count"] or 0)
+    if derive_day_status(have, expected, int(row["open_bar_count"] or 0), rth, expected_rth) != "PARTIAL":
+        return None
+    if expected_rth and rth < expected_rth:
+        return f"regular session incomplete ({rth}/{expected_rth} bars)"
+    return f"incomplete ({have}/{expected} bars)"
 
 
 def days_to_fetch(plan: List[DayPlan]) -> List[str]:

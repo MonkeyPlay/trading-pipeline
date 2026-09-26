@@ -1,5 +1,5 @@
 # tests/test_nq_v2.py
-"""The nq_features_v2 builder against synthetic markets with known answers."""
+"""The NQ pre-open snapshot builder against synthetic markets with known answers."""
 
 import json
 from datetime import date, timedelta
@@ -211,3 +211,40 @@ def test_event_features_need_a_calendar(market):
     assert none.features["has_future_high_event"] is False
     assert none.features["remaining_event_risk"] == "none"
     assert none.feature_status["minutes_to_high_event"] == "not_applicable"
+
+
+def test_daily_atr_skips_a_session_without_rth_data():
+    """
+    A session whose RTH bars are missing no longer voids A for the next 70
+    sessions: its true range, and the next session's (whose previous close is
+    gone), are skipped - never bridged - and the window reaches further back.
+    """
+    full, _ = make_market(last_day=DAY, n_sessions=100)
+    df = _nq(full)
+    gap = cal.sessions_before(DAY, 30)[0]                      # well inside the 70-TR window
+    rth = df[(df["bar_start_at"] >= gap.rth_open_at) & (df["bar_start_at"] < gap.scheduled_close_at)]
+    md, _ = make_market(last_day=DAY, n_sessions=100, drop=[(NQ_CID, t) for t in rth["bar_start_at"]])
+    snap = build_snapshot(md, DAY)
+    assert snap.feature_status["daily_atr_fraction"] == "valid"
+    assert snap.reference_values["atr14_sessions_skipped"] == 2
+
+    # Independent: the 70 most recent true ranges whose session and previous session both have RTH.
+    sessions = cal.sessions_before(DAY, 99)
+    hlc = []
+    for s in sessions:
+        w = df[(df["bar_start_at"] >= s.rth_open_at) & (df["bar_start_at"] < s.scheduled_close_at)]
+        hlc.append(None if s == gap else (w["high"].max(), w["low"].min(), w["close"].iloc[-1]))
+    trs = [max(h[0] - h[1], abs(h[0] - p[2]), abs(h[1] - p[2]))
+           for p, h in zip(hlc[:-1], hlc[1:]) if p is not None and h is not None][-70:]
+    atr = np.mean(trs[:14])
+    for t in trs[14:]:
+        atr = (13 * atr + t) / 14
+    assert snap.reference_values["A"] == pytest.approx(atr)
+    assert snap.reference_values["A"] != pytest.approx(build_snapshot(full, DAY).reference_values["A"])
+
+
+def test_daily_atr_needs_enough_valid_sessions():
+    md, _ = make_market(last_day=DAY, n_sessions=60)            # < 71 sessions of history
+    snap = build_snapshot(md, DAY)
+    assert snap.feature_status["daily_atr_fraction"] == "insufficient_history"
+    assert snap.feature_status["gap_signed_atr"] == "insufficient_history"

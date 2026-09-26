@@ -53,14 +53,23 @@ timestamp, so one timestamp now maps to exactly one bar.
 
 | status     | meaning                                                        | collector |
 |------------|----------------------------------------------------------------|-----------|
-| `COMPLETE` | at least 90% of expected bars, none still open                 | skipped   |
-| `PARTIAL`  | fewer bars than expected, or bars flagged `is_completed = 0`    | re-fetched |
+| `COMPLETE` | at least 90% of expected bars, none still open, and - for a forecast target - its whole regular session | skipped   |
+| `PARTIAL`  | fewer bars than expected, a gap in a forecast target's regular session, or bars flagged `is_completed = 0` | re-fetched |
 | `EMPTY`    | the source returned nothing for this day — recorded, not guessed | skipped   |
 
 `EMPTY` matters: without it a day the market never traded would be requested on
-every single run. Expected counts live in `database/queries.EXPECTED_BARS_PER_SESSION`
-(~1290 one-minute bars for a full NQ electronic session), and the 90% threshold in
-`DAY_COMPLETE_RATIO`.
+every single run. Each instrument's expected count is its `expected_bars` in
+`config.INSTRUMENTS` (1380 one-minute bars for the 18:00–17:00 ET ES/NQ Globex day, a
+lower bound for thinner series), and the 90% threshold is `DAY_COMPLETE_RATIO`.
+
+Instruments flagged `rth_complete` (ES, NQ, RTY: every 09:30–16:00 minute trades, and the
+v2 features and labels read those minutes one by one) must also hold their whole regular
+session: 390 bars, 210 on an early close. An early close (or a closed regular session)
+lowers their day count by the regular-session minutes it loses
+(`collector.coverage.day_expectation`). The planner re-judges every stored day from its
+counts under this rule instead of trusting its stored status, so a day stored as
+`COMPLETE` under an older, looser rule but missing regular-session minutes is re-fetched
+the next time its window is collected.
 
 ### Writing a day
 

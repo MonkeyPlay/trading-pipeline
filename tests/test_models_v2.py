@@ -104,9 +104,21 @@ def test_learns_a_real_signal_and_keeps_the_prior_for_noise(store, fitted_cache)
     assert d15["status"] == "ok" and d15["selected"] != "prior"
     assert d15["cv"][d15["selected"]]["log_loss"] < d15["cv"]["prior"]["log_loss"] - 0.1
     assert d15["calibration_status"] == "validated_raw" and d15["cv_folds"] >= 3
-    # Pure-noise targets: no feature model beats the class prior out of sample, so the prior is kept.
+    # Pure-noise targets: the prior is kept, or a feature model that squeaked past the
+    # selection margin costs next to nothing out of sample (a sparse fit with nothing
+    # to find shrinks back to the class frequencies).
+    fresh_rng = np.random.default_rng(99)
+    fresh = [_features(fresh_rng) for _ in range(3000)]
     for t in ("first_move_5m", "opening_type_15m", "direction_rth", "session_type_rth"):
-        assert fitted["targets"][t]["selected"] == "prior"
+        tf = fitted["targets"][t]
+        if tf["selected"] == "prior":
+            continue
+        assert tf["cv"][tf["selected"]]["beats_prior"]
+        y = np.array([VOCAB[t].index(_label(t, f["gap_signed_atr"], fresh_rng)) for f in fresh])
+        p = models_v2._probabilities(tf["pipeline"], models_v2.design_matrix(fresh), tf["y"], VOCAB[t], 1.0)
+        prior = models_v2._laplace(tf["y"], VOCAB[t], 1.0)
+        cost = (-np.log(p[np.arange(len(y)), y])).mean() - (-np.log(prior[y])).mean()
+        assert cost < 0.01
 
     rng = np.random.default_rng(11)
     up = models_v2.predict(None, _snapshot(_features(rng, gap=2.5)), fitted=fitted)[1]
@@ -130,7 +142,7 @@ def test_distributions_are_complete_and_argmax(store, fitted_cache):
         best = max(labels, key=lambda lab: (p["probabilities"][lab], -labels.index(lab)))
         assert p["predicted_label"] == best
     assert run["calibration"]["training"]["direction_15m"]["n"] == 260
-    assert run["model_version"] == "nq_sklearn_v1" and run["calibration_version"] is None
+    assert run["model_version"] == "nq_sklearn_v2" and run["calibration_version"] is None
 
 
 def test_invalid_required_input_is_unavailable(store, fitted_cache):
@@ -210,4 +222,32 @@ def test_registry_records_are_hashable_and_distinct():
     recs = [models_v2.registry_record(m) for m in models_v2.MODELS.values()]
     assert len({r["definition_hash"] for r in recs}) == len(recs)
     assert all("kind" not in r for r in recs)
-    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v1"
+    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v2"
+
+
+def test_feature_models_need_enough_history(store):
+    """Below 120 training sessions only the prior is used - even with a strong signal - and
+    the prior equals the climatology's Laplace-smoothed frequencies exactly."""
+    day = DAY - timedelta(days=299)                 # the fake history starts 399 days back: 100 earlier sessions
+    fitted = models_v2.fit(None, models_v2.SKLEARN, day, cal.session(day).cutoff_at)
+    d15 = fitted["targets"]["direction_15m"]
+    assert d15["status"] == "ok" and d15["n"] < 120
+    assert d15["selected"] == "prior" and d15["selection_reason"].startswith("prior only")
+    assert set(d15["cv"]) == {"prior"}
+    rng = np.random.default_rng(1)
+    X = models_v2.design_matrix([_features(rng)])
+    p = models_v2._probabilities(d15["pipeline"], X, d15["y"], VOCAB["direction_15m"], 1.0)[0]
+    assert p == pytest.approx(models_v2._laplace(d15["y"], VOCAB["direction_15m"], 1.0))
+
+
+def test_selection_margin_is_recorded(store, fitted_cache):
+    fitted = _fit(store, fitted_cache)
+    for t, tf in fitted["targets"].items():
+        assert tf["selection_reason"]
+        for name, sc in tf["cv"].items():
+            if name != "prior":
+                assert {"gain_vs_prior", "gain_se", "beats_prior"} <= set(sc)
+                assert sc["beats_prior"] == (sc["gain_vs_prior"] > max(0.005, sc["gain_se"]))
+    report = models_v2.training_report(fitted)
+    import json
+    json.dumps(report, allow_nan=False)

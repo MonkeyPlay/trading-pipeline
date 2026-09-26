@@ -1,6 +1,6 @@
 # features/nq_v2.py
 """
-Builds one nq_features_v2 snapshot: every feature in features/catalogue.py,
+Builds one NQ pre-open snapshot (features/catalogue.py FEATURE_VERSION): every feature,
 its status, the per-source status, and the manifest its source revision is
 hashed from. See docs/forecast_contract_v2.md for the full contract.
 
@@ -13,7 +13,9 @@ Time rules, all enforced here:
     session's minute bars, [09:30, scheduled close): the 15:59 close normally,
     12:59 on an early-close day.
   * A (daily ATR14) runs through the previous session; no bar of the current
-    RTH session is ever read.
+    RTH session is ever read. It is built from the most recent 5n *valid* daily
+    true ranges (a session without complete RTH data is skipped, within a
+    bounded search), so one missing day does not void A for months.
 
 Quantities travel as ``Q(value, status)``. A derived feature is valid only when
 all its inputs are; otherwise it inherits the first failing input's status, so
@@ -23,6 +25,7 @@ all its inputs are; otherwise it inherits the first failing input's status, so
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -232,19 +235,37 @@ class SnapshotBuilder:
 
     # --------------------------------------------------------------- building
     def daily_atr(self, n: int) -> Q:
+        """
+        Wilder ATR(n) of RTH sessions through the previous session, over the most
+        recent ``warmup_multiple * n`` valid true ranges, oldest first.
+
+        A true range needs its session's complete RTH data and the previous
+        scheduled session's, on the contract active for that session (so a roll
+        never enters it). A session without them contributes no true range - it
+        is skipped, never bridged with an older close, which would inflate the
+        range - and the search reaches further back, at most
+        ``daily_atr_search_multiple`` times the window.
+        """
         k = WARMUP * n
-        sessions = cal.sessions_before(self.sess.session_date, k + 1)
-        if len(sessions) < k + 1:
-            return _bad("insufficient_history")
-        trs = []
-        for i in range(k, 0, -1):          # newest first: fail fast on short history
+        limit = int(math.ceil(k * P["daily_atr_search_multiple"]))
+        sessions = cal.sessions_before(self.sess.session_date, limit + 1)
+        trs, skipped = [], 0
+        for i in range(len(sessions) - 1, 0, -1):          # newest first
+            if len(trs) + i < k:                            # not enough sessions left to succeed
+                break
             s, sp = sessions[i], sessions[i - 1]
             cid = self.contract_for(NQ, s.session_date)
             d = self.daily(cid, s) if cid is not None else None
             dp = self.daily(cid, sp) if d is not None else None
             if d is None or dp is None:
-                return _bad("insufficient_history")
+                skipped += 1
+                continue
             trs.append(float(true_ranges([d["high"]], [d["low"]], [dp["close"]])[0]))
+            if len(trs) == k:
+                break
+        self.ref[f"atr{n}_sessions_skipped"] = skipped
+        if len(trs) < k:
+            return _bad("insufficient_history")
         atr = wilder_atr_trailing(trs[::-1], n, WARMUP)
         if atr is None:
             return _bad("insufficient_history")
@@ -671,7 +692,7 @@ class SnapshotBuilder:
 def build_snapshot(md, session_date, data_mode="historical_reconstruction",
                    frozen_at: Optional[datetime] = None) -> SnapshotResult:
     """
-    One nq_features_v2 snapshot. ``features_frozen_at`` is the moment the payload
+    One NQ pre-open snapshot. ``features_frozen_at`` is the moment the payload
     was complete (now, unless given). A ``live_capture`` must be frozen inside
     [T, 09:30 ET) of its own session; anything else is a historical
     reconstruction with unverified point-in-time availability.

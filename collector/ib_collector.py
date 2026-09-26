@@ -65,6 +65,7 @@ from features.session_windows import convert_utc_to_ny, classify_session_scope, 
 from collector.pacing import IBKRPacer, format_ibkr_datetime
 from collector.coverage import (
     plan_trading_days, days_to_fetch, summarise, expected_trading_days, previous_trading_day,
+    day_expectation,
 )
 from collector.rolls import front_contracts, segments, upcoming_roll
 
@@ -515,10 +516,11 @@ def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc)
             logger.error(f"{day_str}: {problem}")
             return None
 
+        expected, expected_rth = day_expectation(instrument, day)
         summary = save_trading_day(
             conn, contract_id=con_id, trading_day=day_str, bars=day_bars,
             interval=INTERVAL_LABEL, price_type=price_type, source="IBKR",
-            expected_bar_count=instrument.expected_bars,
+            expected_bar_count=expected, expected_rth_bar_count=expected_rth,
         )
         update_collection_run(
             conn, run_id, "COMPLETED",
@@ -597,6 +599,7 @@ def _plan(conn, contract_id, instrument, start, end, gap_fill, extra_days=()):
         conn, contract_id, start, end, interval=INTERVAL_LABEL,
         price_type=instrument.what_to_show, force=not gap_fill,
         expected=instrument.expected_bars, extra_days=extra_days,
+        expectation=lambda d: day_expectation(instrument, d),
     )
     _log_plan(plan)
     return days_to_fetch(plan)
