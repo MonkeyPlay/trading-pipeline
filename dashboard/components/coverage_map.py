@@ -17,18 +17,21 @@ Colour rule, over the week's scheduled trading days that have already ended:
 
 A day scores 1 when COMPLETE, its share of the expected bars (capped at 0.99)
 when PARTIAL, and 0 when EMPTY or not stored; the week's score is the mean.
+Each day is judged from its bar counts by the collector's current rule
+(collector/coverage.py ``day_expectation``) - so a forecast target whose regular
+session has gaps is not "complete" even if it was stored under an older rule.
 Several contracts can hold the same futures day (warm-up days before a roll):
 the best of them counts.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
-from collector.coverage import expected_trading_days
+from collector.coverage import day_expectation, expected_trading_days
 from config import Config
+from database.queries import derive_day_status
 from features.session_windows import NY_TZ
 
 MAX_WEEKS = 78            # about eighteen months; older weeks are not drawn
@@ -63,13 +66,19 @@ def _day(value) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
 
 
-def _day_score(row: Dict[str, Any], expected_bars: int) -> float:
-    if row["status"] == "COMPLETE":
-        return 1.0
-    if row["status"] == "PARTIAL":
-        expected = row.get("expected_bar_count") or expected_bars
-        return min(0.99, (row["bar_count"] or 0) / expected) if expected else 0.5
-    return 0.0
+def _judge(row: Dict[str, Any], inst, day: date) -> tuple:
+    """``(status, score)`` of one stored day under the collector's current rule."""
+    if row["status"] == "EMPTY" or not row["bar_count"]:
+        return "EMPTY", 0.0
+    expected, expected_rth = day_expectation(inst, day) if inst else (row.get("expected_bar_count"), None)
+    have, rth = row["bar_count"] or 0, row.get("rth_bar_count") or 0
+    status = derive_day_status(have, expected, row.get("open_bar_count") or 0, rth, expected_rth)
+    if status == "COMPLETE":
+        return status, 1.0
+    shares = [have / expected] if expected else [0.5]
+    if expected_rth:
+        shares.append(rth / expected_rth)
+    return status, min(0.99, *shares)
 
 
 def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
@@ -84,7 +93,8 @@ def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
     oldest = this_monday - timedelta(weeks=max_weeks - 1)
 
     rows = conn.execute(
-        "SELECT c.symbol, s.trading_day, s.price_type, s.status, s.bar_count, s.expected_bar_count "
+        "SELECT c.symbol, s.trading_day, s.price_type, s.status, s.bar_count, s.expected_bar_count, "
+        "       s.rth_bar_count, s.open_bar_count "
         "FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
         "WHERE s.interval = '1m' AND c.symbol = ANY(%s) AND s.trading_day >= %s;",
         (list(symbols), oldest),
@@ -97,9 +107,9 @@ def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
         if inst is not None and r["price_type"] != inst.what_to_show:
             continue
         key = (r["symbol"], _day(r["trading_day"]))
-        score = _day_score(r, inst.expected_bars if inst else 0)
+        status, score = _judge(r, inst, key[1])
         if key not in best or score > best[key]["score"]:
-            best[key] = {**r, "score": score}
+            best[key] = {**r, "status": status, "score": score}
 
     if not best:
         return {"weeks": [], "symbols": list(symbols), "cells": {}}

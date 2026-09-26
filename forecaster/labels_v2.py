@@ -1,6 +1,6 @@
 # forecaster/labels_v2.py
 """
-Realised outcomes for nq_features_v2 snapshots: the continuous outcome metrics
+Realised outcomes for the NQ pre-open snapshots: the continuous outcome metrics
 and the deterministic labels predictions are scored against (nq_schema_v2,
 sections 8-11).
 

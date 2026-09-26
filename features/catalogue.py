@@ -1,7 +1,13 @@
 # features/catalogue.py
 """
-The nq_features_v2 catalogue: every predictive feature, its type, unit, hard
-bounds and definition, plus the parameters the version fixes.
+The NQ pre-open feature catalogue (nq_features_v3): every predictive feature,
+its type, unit, hard bounds and definition, plus the parameters the version fixes.
+
+nq_features_v3 differs from nq_features_v2 in two parameters only: the daily
+ATRs skip sessions without complete RTH data instead of requiring an unbroken
+run of them (``daily_atr_window``), and the spot volatility indices may be up to
+20 minutes old (Cboe pauses VIX dissemination between 09:15 and 09:30 ET).
+The feature names and definitions are unchanged.
 
 A feature version is a contract. Changing a definition, a window, a warm-up, a
 roll or session policy, a coverage threshold or a source choice means a new
@@ -26,7 +32,9 @@ from features.calendar import CALENDAR_VERSION
 
 logger = logging.getLogger(__name__)
 
-FEATURE_VERSION = "nq_features_v2"
+FEATURE_VERSION = "nq_features_v3"
+# The typed-column view of this version's snapshots (database/migrations/0007).
+FEATURE_MATRIX_VIEW = "feature_matrix_nq_v3"
 TARGET_SYMBOL = "NQ"
 
 FEATURE_STATUSES = ("valid", "missing", "stale", "insufficient_history", "undefined", "not_applicable")
@@ -49,6 +57,12 @@ PARAMETERS = {
     "warmup_multiple": 5,
     "recursive_window": "fixed trailing window of warmup_multiple * n inputs, seeded with the first n",
     "daily_atr_periods": [14, 63],
+    "daily_atr_window": (
+        "the most recent warmup_multiple * n valid true ranges, found within daily_atr_search_multiple "
+        "times as many scheduled sessions; a session contributes a true range only when it and the "
+        "previous scheduled session both have complete RTH data on the session's active contract"
+    ),
+    "daily_atr_search_multiple": 1.5,
     "intraday_atr_period": 14,
     "aggregation": "fixed ET clock boundaries; only buckets with every constituent minute feed indicators",
     "overnight_window": "[18:00 ET previous calendar day, T)",

@@ -10,8 +10,8 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py train --date 2026-09-25      # fit + CV report + saved artifact
     python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
 
-Forecasts come from the trained scikit-learn model (nq_sklearn_v1, the default)
-or the climatology baseline (nq_climatology_v2); ``--model`` takes one or a
+Forecasts come from the trained scikit-learn model (nq_sklearn_v2, the default)
+or the climatology baseline (nq_climatology_v3); ``--model`` takes one or a
 comma-separated list. No language model or external API is called.
 
 Every command registers the feature, label and model definitions first; a
@@ -28,7 +28,6 @@ recorded as live. Only bars with a real-time receipt make a live capture
 
 import argparse
 import logging
-import math
 import os
 import subprocess
 import sys
@@ -47,7 +46,7 @@ from features import calendar as cal
 from features import catalogue as catv2
 from features.market_data import DbMarketData
 from features.nq_v2 import SnapshotError, build_snapshot
-from forecaster import labels_v2, models_v2
+from forecaster import labels_v2, models_v2, scoring_v2
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("nq_forecast_v2")
@@ -213,10 +212,14 @@ def cmd_train(conn, md, args):
                 continue
             print(f"{head} selected={t['selected']}  ({t['first_session']} .. {t['last_session']}, "
                   f"{t.get('cv_folds', 0)} CV folds)")
+            if t.get("selection_reason"):
+                print(f"      {t['selection_reason']}")
             for cand, sc in (t.get("cv") or {}).items():
                 mark = "*" if cand == t["selected"] else " "
+                gain = (f"  gain {sc['gain_vs_prior']:+.4f} ± {sc['gain_se']:.4f}"
+                        if sc.get("gain_se") is not None else "")
                 print(f"      {mark} {cand:24} logloss {sc['log_loss']:.4f}  acc {sc['accuracy']:.3f}  "
-                      f"(n={sc['n_validation']})")
+                      f"(n={sc['n_validation']}){gain}")
         if args.out:
             os.makedirs(os.path.join(args.out, name), exist_ok=True)
             path = os.path.join(args.out, name, f"{day.session_date}.joblib")
@@ -295,32 +298,41 @@ def cmd_live(conn, md, args):
 
 def cmd_evaluate(conn, md, args):
     """
-    Per model, target and data mode: how many predictions were issued, abstained
-    or unavailable; accuracy of the issued labels; and log loss and Brier score of
-    every probability distribution (issued or abstained) with an eligible outcome.
+    Per model, target and data mode: issued / abstained / unavailable counts,
+    accuracy of issued labels, log loss and Brier score of every distribution
+    with an eligible outcome. Then each model against the baseline on the same
+    sessions only, with skill scores - the rows above cover different sessions
+    whenever the models start issuing at different history lengths.
     """
     rows = store.get_prediction_outcomes(conn, outcome_revision=args.outcome_revision,
-                                         outcomes_as_of=args.outcomes_as_of, model_version=args.model)
-    groups = {}
-    for r in rows:
-        groups.setdefault((r["model_version"], r["target_id"], r["data_mode"]), []).append(r)
-    if not groups:
+                                         outcomes_as_of=args.outcomes_as_of)
+    if args.model:
+        wanted = {args.model, args.baseline}
+        rows = [r for r in rows if r["model_version"] in wanted]
+    if not rows:
         print("No predictions with realised outcomes for that revision.")
         return 0
     print(f"{'model':20} {'target':18} {'mode':25} {'n':>5} {'issued':>6} {'abst':>5} {'unav':>5} "
           f"{'inel':>5} {'acc':>6} {'logloss':>8} {'brier':>6}")
-    for (model, target, mode), rs in sorted(groups.items()):
-        status = [r["prediction_status"] for r in rs]
-        issued = [r for r in rs if r["prediction_status"] == "issued" and r["eligible"]]
-        probs = [r for r in rs if r["probabilities"] is not None and r["eligible"]]
-        acc = sum(r["predicted_label"] == r["actual_label"] for r in issued) / len(issued) if issued else math.nan
-        ll = (sum(-math.log(max(r["probabilities"][r["actual_label"]], 1e-15)) for r in probs) / len(probs)
-              if probs else math.nan)
-        br = (sum(sum((p - (lab == r["actual_label"])) ** 2 for lab, p in r["probabilities"].items())
-                  for r in probs) / len(probs) if probs else math.nan)
-        print(f"{model:20} {target:18} {mode:25} {len(rs):5d} {status.count('issued'):6d} "
-              f"{status.count('abstained'):5d} {status.count('unavailable'):5d} "
-              f"{sum(not r['eligible'] for r in rs):5d} {acc:6.3f} {ll:8.4f} {br:6.4f}")
+    for g in scoring_v2.score_groups(rows):
+        if args.model and g["model"] != args.model:
+            continue
+        print(f"{g['model']:20} {g['target']:18} {g['mode']:25} {g['n']:5d} {g['issued']:6d} "
+              f"{g['abstained']:5d} {g['unavailable']:5d} {g['ineligible']:5d} {g['accuracy']:6.3f} "
+              f"{g['log_loss']:8.4f} {g['brier']:6.4f}")
+
+    paired = scoring_v2.paired_comparison(rows, args.baseline, [args.model] if args.model else None)
+    if not paired:
+        print(f"\nNo sessions scored by both a model and the baseline {args.baseline}.")
+        return 0
+    print(f"\nAgainst {args.baseline} on the same sessions only "
+          f"(skill > 0: better than the baseline; gain = mean log-loss improvement per session ± SE):")
+    print(f"{'model':20} {'target':18} {'mode':25} {'n':>5} {'logloss':>8} {'base':>7} {'skill':>7} "
+          f"{'brier':>6} {'base':>6} {'skill':>7} {'gain':>16}")
+    for c in paired:
+        print(f"{c['model']:20} {c['target']:18} {c['mode']:25} {c['n']:5d} {c['log_loss']:8.4f} "
+              f"{c['baseline_log_loss']:7.4f} {c['log_loss_skill']:+7.3f} {c['brier']:6.4f} "
+              f"{c['baseline_brier']:6.4f} {c['brier_skill']:+7.3f} {c['gain']:+8.4f} ± {c['gain_se']:.4f}")
     return 0
 
 
@@ -366,7 +378,9 @@ def main(argv=None):
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--outcome-revision", type=int)
     g.add_argument("--outcomes-as-of", help="UTC timestamp: latest revision computed by then")
-    p.add_argument("--model", default=None)
+    p.add_argument("--model", default=None, help="Only this model (and the baseline it is compared with)")
+    p.add_argument("--baseline", default=models_v2.CLIMATOLOGY["model_version"],
+                   help="Model the others are compared with on the same sessions")
     sub.add_parser("register", help="Register definitions only")
 
     args = parser.parse_args(argv)

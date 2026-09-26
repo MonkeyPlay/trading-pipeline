@@ -12,18 +12,25 @@ predicts, its targets, its *required features* (which decide the run's
 explicit feature allowlist, the preprocessing, the candidate estimators and the
 selection rule, so training and inference are identical by construction.
 
-``nq_sklearn_v1``
+``nq_sklearn_v2``
     Trained walk-forward: to forecast session D it fits only on earlier sessions
     whose realised label was knowable before D's cutoff (and, live, already
-    computed). Per target, every candidate - the class prior, L2 logistic
-    regressions and a shallow gradient-boosted tree ensemble - is scored by
-    chronological cross-validation (TimeSeriesSplit, log loss); the best one is
-    refitted on the whole training window. A feature-based candidate is used
-    only when it beats the prior out of sample, so the model never does worse
-    than climatology on its own validation.
+    computed). Per target, every candidate - the class prior, sparse (L1) and L2
+    logistic regressions and a shallow gradient-boosted tree ensemble - is scored by
+    chronological cross-validation (TimeSeriesSplit, log loss) and the winner is
+    refitted on the whole training window. The sparse candidates let a few
+    informative inputs stand out among ~40 mostly uninformative ones.
 
-``nq_climatology_v2``
-    Laplace-smoothed label frequencies over the same training sessions.
+    Small samples make that choice noisy: with 60 sessions a feature model beat
+    the prior on pure-noise features one time in four and then did worse out of
+    sample. So a feature model is considered only from 120 training sessions,
+    with at least 3 validation folds, and it must beat the prior on the same
+    validation sessions by more than ``min_gain_nats`` and more than
+    ``gain_se_multiple`` standard errors of the per-session gain; otherwise the
+    prior is kept. (nq_sklearn_v1 took any improvement from 60 sessions on.)
+
+``nq_climatology_v3``
+    Laplace-smoothed label frequencies over earlier sessions - the baseline.
 
 Prediction status (section 7):
     issued       a label (the arg-max, ties by vocabulary order) + probabilities
@@ -90,7 +97,7 @@ MISSING_CATEGORY = "missing"
 _REQUIRED = ["daily_atr_fraction", "gap_signed_atr"]   # the labels are measured in units of A
 
 CLIMATOLOGY = {
-    "model_version": "nq_climatology_v2",
+    "model_version": "nq_climatology_v3",
     "kind": "climatology",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -102,7 +109,7 @@ CLIMATOLOGY = {
 }
 
 SKLEARN = {
-    "model_version": "nq_sklearn_v1",
+    "model_version": "nq_sklearn_v2",
     "kind": "sklearn",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -110,7 +117,8 @@ SKLEARN = {
     "required_features": _REQUIRED,
     "description": "scikit-learn classifier per target, trained walk-forward on earlier sessions' snapshots "
                    "and realised labels; the estimator is chosen by chronological cross-validated log loss "
-                   "among the class prior, logistic regression and gradient boosting.",
+                   "among the class prior, logistic regression and gradient boosting, and a feature model "
+                   "replaces the prior only with enough history and a clear, paired out-of-sample gain.",
     "parameters": {
         "features": SKLEARN_FEATURES,
         "preprocessing": {
@@ -119,18 +127,33 @@ SKLEARN = {
                                    "values; standard scaling",
             "categorical": "null -> 'missing'; one-hot over the catalogue's allowed values + 'missing'",
         },
+        # Sparse (L1) logistic fits pick out the few informative inputs among ~40 mostly
+        # uninformative ones; a weakly regularised L2 fit (C=0.5, in nq_sklearn_v1) spread
+        # weight over all of them and lost to the prior out of sample.
         "candidates": [
             {"name": "prior", "estimator": "DummyClassifier", "params": {"strategy": "prior"}},
+            {"name": "logistic_l1_c0.05", "estimator": "LogisticRegression",
+             "params": {"C": 0.05, "l1": True, "max_iter": 5000}},
+            {"name": "logistic_l1_c0.2", "estimator": "LogisticRegression",
+             "params": {"C": 0.2, "l1": True, "max_iter": 5000}},
             {"name": "logistic_c0.05", "estimator": "LogisticRegression", "params": {"C": 0.05, "max_iter": 2000}},
-            {"name": "logistic_c0.5", "estimator": "LogisticRegression", "params": {"C": 0.5, "max_iter": 2000}},
             {"name": "hist_gradient_boosting", "estimator": "HistGradientBoostingClassifier",
              "params": {"max_depth": 3, "learning_rate": 0.05, "max_iter": 150, "min_samples_leaf": 20,
                         "l2_regularization": 1.0, "early_stopping": False}},
         ],
-        "selection": {"metric": "log_loss", "cv": "TimeSeriesSplit", "n_splits": 5,
-                      "min_fold_train_sessions": 40, "ties": "earlier candidate wins"},
-        "probability_smoothing": "p = (1 - lam) * p_model + lam * laplace_prior, lam = k*alpha / (n + k*alpha); "
-                                 "gives unseen classes a non-zero probability",
+        "selection": {
+            "metric": "log_loss", "cv": "TimeSeriesSplit", "n_splits": 5, "min_fold_train_sessions": 40,
+            "min_sessions_for_features": 120, "min_cv_folds": 3,
+            "min_gain_nats": 0.005, "gain_se_multiple": 1.0,
+            "rule": "the prior (the first candidate) is kept unless a feature candidate, with at least "
+                    "min_sessions_for_features training sessions and min_cv_folds folds, lowers the "
+                    "validation log loss relative to the prior on the same sessions by more than "
+                    "min_gain_nats and more than gain_se_multiple standard errors of the per-session "
+                    "gain; among those, the lowest log loss wins (ties: earlier candidate)",
+        },
+        "probability_smoothing": "p = (1 - lam) * p_model + lam / k, lam = k*alpha / (n + k*alpha): the prior "
+                                 "candidate equals the Laplace-smoothed frequencies and a class unseen in "
+                                 "training keeps alpha / (n + k*alpha)",
         "alpha": 1.0,
         "min_training_sessions": 60,
         "max_training_sessions": 1500,
@@ -202,6 +225,14 @@ def _estimator(spec: Dict[str, Any], seed: int):
     cls = {"DummyClassifier": DummyClassifier, "LogisticRegression": LogisticRegression,
            "HistGradientBoostingClassifier": HistGradientBoostingClassifier}[spec["estimator"]]
     params = dict(spec["params"])
+    if cls is LogisticRegression and params.pop("l1", False):
+        # A sparse (L1) fit: scikit-learn >= 1.8 spells it l1_ratio=1 and deprecates
+        # ``penalty``; older versions need penalty="l1". Both use the saga solver.
+        params["solver"] = "saga"
+        if cls().get_params().get("penalty") == "deprecated":
+            params["l1_ratio"] = 1.0
+        else:
+            params["penalty"] = "l1"
     if "random_state" in cls().get_params():
         params.setdefault("random_state", seed)
     return cls(**params)
@@ -219,15 +250,21 @@ def _laplace(y: List[str], labels: List[str], alpha: float) -> np.ndarray:
 
 
 def _probabilities(pipe, X: pd.DataFrame, y_train: List[str], labels: List[str], alpha: float) -> np.ndarray:
-    """Rows of probabilities over ``labels`` (vocabulary order), shrunk toward the
-    Laplace prior of the training labels so that unseen classes stay possible."""
+    """
+    Rows of probabilities over ``labels`` (vocabulary order), shrunk toward the
+    uniform distribution by lam = k*alpha / (n + k*alpha). For the class prior
+    this is exactly the Laplace-smoothed frequency (n_c + alpha) / (n + k*alpha) -
+    the climatology - and a class unseen in training keeps alpha / (n + k*alpha).
+    (Shrinking toward the Laplace frequencies instead, as nq_sklearn_v1 did,
+    left an unseen class about k times too little probability.)
+    """
     raw = pipe.predict_proba(X)
     p = np.zeros((len(X), len(labels)))
     for j, c in enumerate(pipe.classes_):
         p[:, labels.index(c)] = raw[:, j]
     k, n = len(labels), len(y_train)
     lam = k * alpha / (n + k * alpha)
-    p = (1 - lam) * p + lam * _laplace(y_train, labels, alpha)
+    p = (1 - lam) * p + lam / k
     return p / p.sum(axis=1, keepdims=True)
 
 
@@ -273,24 +310,54 @@ def fit_target(rows: List[Dict[str, Any]], labels: List[str], params: Dict[str, 
 
     X = design_matrix([r["features"] for r in rows], params["features"])
     sel, seed, alpha = params["selection"], params["random_state"], params["alpha"]
+    prior_spec = params["candidates"][0]
+    if prior_spec["estimator"] != "DummyClassifier":
+        raise ValueError("the first candidate must be the class prior")
     n_splits = min(sel["n_splits"], len(rows) - 1)
     splits = ([(tr, te) for tr, te in TimeSeriesSplit(n_splits=n_splits).split(X)
                if len(tr) >= sel["min_fold_train_sessions"]] if n_splits >= 2 else [])
-    scores = {}
-    for spec in params["candidates"]:
-        loss = hits = count = 0.0
+    # Below the feature threshold only the prior is validated (and used).
+    features_allowed = len(rows) >= sel["min_sessions_for_features"] and len(splits) >= sel["min_cv_folds"]
+    candidates = params["candidates"] if features_allowed else [prior_spec]
+
+    scores, losses = {}, {}
+    for spec in candidates:
+        per_session, hits = [], 0.0
         for tr, te in splits:
             y_tr = [y[i] for i in tr]
             pipe = _fit_candidate(spec, X.iloc[tr], y_tr, seed)
             p = _probabilities(pipe, X.iloc[te], y_tr, labels, alpha)
             idx = np.array([labels.index(y[i]) for i in te])
-            loss += float(-np.log(np.clip(p[np.arange(len(te)), idx], 1e-15, 1.0)).sum())
+            per_session.extend(-np.log(np.clip(p[np.arange(len(te)), idx], 1e-15, 1.0)))
             hits += float((p.argmax(axis=1) == idx).sum())
-            count += len(te)
-        if count:
-            scores[spec["name"]] = {"log_loss": loss / count, "accuracy": hits / count, "n_validation": int(count)}
-    best = (min(params["candidates"], key=lambda c: scores[c["name"]]["log_loss"])
-            if scores else params["candidates"][0])   # min() keeps the earliest on ties
+        if per_session:
+            losses[spec["name"]] = np.asarray(per_session)
+            scores[spec["name"]] = {"log_loss": float(np.mean(per_session)), "accuracy": hits / len(per_session),
+                                    "n_validation": len(per_session)}
+
+    # A feature candidate must beat the prior on the same validation sessions, by a margin.
+    best, reason = prior_spec, None
+    base = losses.get(prior_spec["name"])
+    if not features_allowed:
+        reason = (f"prior only: {len(rows)} training sessions and {len(splits)} validation folds "
+                  f"(feature models need {sel['min_sessions_for_features']} and {sel['min_cv_folds']})")
+    elif base is not None:
+        eligible = []
+        for spec in candidates[1:]:
+            gain = base - losses[spec["name"]]
+            mean_gain = float(gain.mean())
+            se = float(gain.std(ddof=1) / np.sqrt(len(gain))) if len(gain) > 1 else None
+            ok = se is not None and mean_gain > max(sel["min_gain_nats"], sel["gain_se_multiple"] * se)
+            scores[spec["name"]].update({"gain_vs_prior": mean_gain, "gain_se": se, "beats_prior": ok})
+            if ok:
+                eligible.append(spec)
+        if eligible:
+            best = min(eligible, key=lambda c: scores[c["name"]]["log_loss"])   # earliest on ties
+            sc = scores[best["name"]]
+            reason = (f"{best['name']}: beat the prior by {sc['gain_vs_prior']:.4f} "
+                      f"± {sc['gain_se']:.4f} nats per session")
+        else:
+            reason = "prior: no feature model beat it by the required margin"
 
     pipe = _fit_candidate(best, X, y, seed)
     numeric = X[params["features"]["numeric"]]
@@ -298,7 +365,8 @@ def fit_target(rows: List[Dict[str, Any]], labels: List[str], params: Dict[str, 
         warnings.simplefilter("ignore")   # all-null columns
         mean, std = numeric.mean(), numeric.std(ddof=1)
     fit.update({
-        "status": "ok", "selected": best["name"], "cv": scores, "cv_folds": len(splits),
+        "status": "ok", "selected": best["name"], "selection_reason": reason, "cv": scores,
+        "cv_folds": len(splits),
         "calibration_status": "validated_raw" if scores else "unvalidated",
         "pipeline": pipe, "y": y,
         "numeric_mean": {k: finite(v) for k, v in mean.items()},
@@ -346,8 +414,8 @@ def fit(conn, model: Dict[str, Any], session_date, cutoff_at, computed_by=None) 
 
 def training_report(fitted: Dict[str, Any]) -> Dict[str, Any]:
     """The JSON-safe part of a fit: windows, class counts, CV scores, selection."""
-    keep = ("status", "n", "counts", "first_session", "last_session", "selected", "cv", "cv_folds",
-            "calibration_status")
+    keep = ("status", "n", "counts", "first_session", "last_session", "selected", "selection_reason", "cv",
+            "cv_folds", "calibration_status")
     return {**{k: v for k, v in fitted.items() if k != "targets"},
             "targets": {t: {k: f[k] for k in keep if k in f} for t, f in fitted["targets"].items()}}
 

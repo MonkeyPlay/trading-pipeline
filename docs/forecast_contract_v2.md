@@ -1,4 +1,11 @@
-# v2 forecast records & feature contract (`nq_features_v2`)
+# v2 forecast records & feature contract (`nq_features_v3`)
+
+The current feature version is `nq_features_v3`. It has the same features as
+`nq_features_v2` and changes two parameters: the daily ATRs skip sessions without
+complete RTH data instead of needing an unbroken run of them, and the spot
+volatility indices may be up to 20 minutes old. Records of both versions stay in the
+store; models are tied to one feature version (`nq_sklearn_v2` and
+`nq_climatology_v3` read `nq_features_v3`).
 
 This is the NQ pre-open contract: what a snapshot contains, when its inputs were
 knowable, how a forecast and its outcome are recorded, and how corrections are
@@ -40,7 +47,7 @@ the v1 tables of the same name in `public`, which the dashboard still reads.
 Supporting registries: `feature_versions` / `feature_definitions` (the catalogue),
 `label_versions` / `label_definitions` (each target's vocabulary), `model_versions`
 (targets and required features), and `source_revisions` (content-addressed
-manifests). Views: `forecast.feature_matrix_nq_v2` (typed feature columns),
+manifests). Views: `forecast.feature_matrix_nq_v3` (typed feature columns; `_v2` for the older snapshots),
 `forecast.prediction_outcomes` (the prediction/outcome join), and
 `public.bar_intervals` (bars with explicit `bar_start_at` / `bar_end_at`).
 
@@ -77,11 +84,11 @@ probabilities, an abstained one may keep them.
 | historical values are `historical_reconstruction` / `unverified_historical` | the only way to get `live_capture` is `nq_forecast_v2.py live`; `verified` is set only for a live capture where every included source's current-session observation has a real-time receipt (`bar_receipts`) of the exact value used, received by `features_frozen_at`, and every reference value was stored by then. |
 | P = close of the bar starting 09:28; missing → null | taken from exactly that minute; no substitution (`test_missing_p_is_null_not_substituted`). |
 | Cprev / PDH / PDL from the previous *scheduled* RTH session | `[09:30, scheduled close)` of `calendar.previous_session()`; the 12:59 bar on an early-close day. The open and closing minute must exist and ≥ 90 % of minutes. |
-| A = 14-session Wilder ATR through the previous session | TR with the same contract's previous close; seeded with 14 TRs, `(13·ATR + TR)/14`. No current-day RTH bar is read. A ≤ 0 → ATR-scaled features `undefined`. |
+| A = 14-session Wilder ATR through the previous session | TR with the same contract's previous close; seeded with 14 TRs, `(13·ATR + TR)/14`, over the most recent 70 **valid** TRs: a session without complete RTH data (or whose previous session lacks it) contributes none and is skipped - never bridged with an older close - within a search of at most 1.5 × 70 sessions (`daily_atr_search_multiple`). The number skipped is in `reference_values.atr14_sessions_skipped`. No current-day RTH bar is read. A ≤ 0 → ATR-scaled features `undefined`. |
 | ON = 18:00 ET previous calendar day → T | 929 expected minutes; Monday uses Sunday 18:00. Globex has no scheduled closure in that window, so every missing minute is a feed gap; below 90 % coverage the ON features are `missing`. |
 | Last 60m = [08:29, 09:29), return 09:28 vs 08:28 | all 60 bars plus the 08:28 bar are required. |
 | 5m / 15m on fixed ET clock boundaries | `indicators.aggregate_clock`; only buckets with every constituent minute feed an EMA. Latest 5m endpoint must be 09:25 and latest 15m 09:15, else `stale`. The 15m slope needs the five consecutive buckets ending 08:15…09:15. |
-| EMA: α = 2/(n+1), SMA seed, ≥ 5n warm-up | evaluated over a **fixed trailing window of exactly 5n complete buckets**, seeded with its first n, so the value never depends on how much history was loaded. Same for Wilder ATR (1m and daily). |
+| EMA: α = 2/(n+1), SMA seed, ≥ 5n warm-up | evaluated over a **fixed trailing window of exactly 5n complete buckets**, seeded with its first n, so the value never depends on how much history was loaded. Same for the 1m Wilder ATR; the daily ATRs use the most recent 5n valid sessions (above). |
 | Units | returns are decimal; ATR distances signed; yields in bps via each instrument's `bps_per_unit` (configured once in `config.INSTRUMENTS`); VIX/VXN in index points. |
 | RVOL 30 / divergence 60 previous eligible sessions, full baseline, current session excluded | `SnapshotBuilder.baseline()` searches back up to 90 scheduled sessions for that many *valid* values; fewer → `insufficient_history`. Sample SD; SD 0 → null. |
 | Null ≠ zero; finite only; path efficiency of a constant path = 0 | every value goes through `catalogue.check_value`; JSON is written with `allow_nan=False`. |
@@ -196,7 +203,7 @@ label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run a
 uses outcome rows that already existed when it trained. One snapshot per session is
 used (the live capture if any).
 
-**`nq_sklearn_v1`** (the default) - one scikit-learn pipeline per target:
+**`nq_sklearn_v2`** (the default) - one scikit-learn pipeline per target:
 
 - *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
   whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
@@ -205,14 +212,25 @@ used (the live capture if any).
   median-imputed with a missing-indicator column and standard-scaled; categoricals are
   one-hot encoded over the catalogue's allowed values plus `missing`. It is part of the
   pipeline, so training and inference are identical.
-- *Model selection*: the class prior, L2 logistic regression (C = 0.05, 0.5) and a
-  shallow `HistGradientBoostingClassifier` are scored by `TimeSeriesSplit` (5 folds,
-  folds with fewer than 40 training sessions skipped) on log loss; the best is refitted
-  on the whole window, ties going to the simpler candidate. A feature model therefore
-  replaces the prior only when it predicts better out of sample.
-- *Probabilities* are shrunk toward the Laplace-smoothed class frequencies
-  (weight k·α / (n + k·α)), so a class unseen in training keeps a small probability,
-  then normalised over the full vocabulary. They are raw model probabilities, validated
+- *Candidates*: the class prior, sparse (L1) logistic regressions (C = 0.05, 0.2), an
+  L2 logistic regression (C = 0.05) and a shallow `HistGradientBoostingClassifier`. The
+  sparse fits let the few informative inputs stand out among ~40 mostly uninformative
+  ones; a dense fit spreads weight over all of them and loses to the prior.
+- *Model selection*: candidates are scored by `TimeSeriesSplit` (5 folds, folds with
+  fewer than 40 training sessions skipped) on log loss. Below **120 training
+  sessions** (or with fewer than 3 folds) only the prior is used. Above it, a feature
+  model replaces the prior only when, on the same validation sessions, it lowers the
+  log loss by more than 0.005 nats **and** more than one standard error of the
+  per-session gain; among those the lowest log loss wins (ties: the simpler one). The
+  reason is recorded per target (`selection_reason`). In simulation this keeps the
+  prior on pure-noise inputs while still finding a one-feature signal of 0.035 nats
+  in 500 sessions and one of 0.1 nats in 250; `nq_sklearn_v1`, which took any
+  improvement from 60 sessions on, picked a feature model on pure noise one time in
+  four at 60 sessions.
+- *Probabilities* are shrunk toward the uniform distribution with weight
+  k·α / (n + k·α), so the prior candidate equals the Laplace-smoothed frequencies
+  (the climatology) and a class unseen in training keeps α / (n + k·α); then
+  normalised over the full vocabulary. They are raw model probabilities, validated
   out of sample: `calibration_status = validated_raw`, `calibration_version = NULL`.
 - *Status*: `unavailable` with `data_quality` when a required input (A, the gap) is not
   valid, or with `uncertainty` below 60 training sessions; `abstained` (probabilities
@@ -222,8 +240,8 @@ used (the live capture if any).
   `event_policy` and a minimum top probability are available as parameters, off by
   default.
 
-**`nq_climatology_v2`** - Laplace-smoothed label frequencies of the same training
-sessions; the baseline the trained model has to beat.
+**`nq_climatology_v3`** - Laplace-smoothed label frequencies of the earlier sessions;
+the baseline the trained model has to beat.
 
 A run's `calibration` records the training window and class counts per target, every
 candidate's cross-validated log loss and accuracy, the selected estimator, the
@@ -250,10 +268,17 @@ model instead of training; it is refused for any session before the one it was
 trained for, since it may have seen outcomes that were not yet knowable. `evaluate` lists issued / abstained /
 unavailable counts, the accuracy of issued labels, and log loss and Brier score of every
 probability distribution with an eligible outcome, per model, target and data mode.
+Those rows cover different sessions whenever the models start issuing at different
+history lengths, so `evaluate` then compares each model with the baseline
+(`--baseline`, the climatology by default) **on the same sessions only**: both log
+losses and Brier scores, the skill scores 1 − model / baseline, and the mean
+per-session log-loss gain with its standard error ([forecaster/scoring_v2.py](../forecaster/scoring_v2.py)).
 
-**History needed.** With the 5n warm-up rule, A needs 71 prior RTH sessions and
-`daily_volatility_ratio` (ATR63) 316 (about 15 months); divergence needs 61, RVOL 31.
-Backfill accordingly (`--days 460` for everything).
+**History needed.** With the 5n warm-up rule, A needs 70 valid daily true ranges
+(about 71 sessions; a few missing days only reach further back) and
+`daily_volatility_ratio` (ATR63) 315 (about 15 months); divergence needs 61, RVOL 31.
+The model then needs 60 labelled sessions to issue (the prior) and 120 before a feature
+model may replace the prior. Backfill accordingly (`--days 460` for everything).
 
 ### Live capture timing
 

@@ -329,12 +329,15 @@ def expected_bars_for(interval: str, rth_only: bool = False) -> Optional[int]:
     return table.get(interval)
 
 
-def derive_day_status(bar_count: int, expected_bar_count: Optional[int], open_bar_count: int = 0) -> str:
+def derive_day_status(bar_count: int, expected_bar_count: Optional[int], open_bar_count: int = 0,
+                      rth_bar_count: Optional[int] = None, expected_rth_bar_count: Optional[int] = None) -> str:
     """
     Classifies a stored day.
 
       EMPTY    - the source returned nothing for this day (recorded so we do not ask again)
-      PARTIAL  - fewer bars than expected, or bars still flagged is_completed = 0
+      PARTIAL  - fewer bars than expected, bars still flagged is_completed = 0, or -
+                 when ``expected_rth_bar_count`` is given - a regular session with
+                 fewer bars than that (features and labels need every RTH minute)
       COMPLETE - enough settled bars; the collector will skip it
     """
     if bar_count <= 0:
@@ -342,6 +345,8 @@ def derive_day_status(bar_count: int, expected_bar_count: Optional[int], open_ba
     if open_bar_count > 0:
         return "PARTIAL"
     if expected_bar_count and bar_count < expected_bar_count * DAY_COMPLETE_RATIO:
+        return "PARTIAL"
+    if expected_rth_bar_count and (rth_bar_count or 0) < expected_rth_bar_count:
         return "PARTIAL"
     return "COMPLETE"
 
@@ -616,6 +621,7 @@ def save_trading_day(
     source: str = "IBKR",
     expected_bar_count: Optional[int] = None,
     status: Optional[str] = None,
+    expected_rth_bar_count: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Writes exactly one trading day, atomically.
@@ -631,6 +637,9 @@ def save_trading_day(
     Each bar dict needs ``timestamp_utc``, ``trading_day`` (must equal
     ``trading_day``), OHLC, ``volume``, and optionally ``session_scope``, ``wap``,
     ``bar_count``, ``source``, ``is_completed``.
+
+    ``expected_rth_bar_count``, when given, is the number of regular-session bars
+    the day needs to count as COMPLETE (see ``derive_day_status``).
 
     Returns the stored day summary.
     """
@@ -665,7 +674,8 @@ def save_trading_day(
 
             stats = _day_stats(conn, *key)
             resolved = status or derive_day_status(
-                stats["bar_count"], expected_bar_count, stats["open_bar_count"]
+                stats["bar_count"], expected_bar_count, stats["open_bar_count"],
+                stats["rth_bar_count"], expected_rth_bar_count,
             )
             if resolved not in DAY_STATUSES:
                 raise ValueError(f"status must be one of {DAY_STATUSES}, got {resolved!r}")
@@ -698,6 +708,7 @@ def save_bars_by_day(
     price_type: str = "TRADES",
     source: str = "IBKR",
     expected_bar_count: Optional[int] = None,
+    expected_rth_bar_count: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Bulk path: groups bars by ``contract_id`` + ``trading_day`` and writes each day
@@ -714,6 +725,7 @@ def save_bars_by_day(
         save_trading_day(
             conn, contract_id=cid, trading_day=day, bars=day_bars, interval=interval,
             price_type=price_type, source=source, expected_bar_count=expected_bar_count,
+            expected_rth_bar_count=expected_rth_bar_count,
         )
         for (cid, day), day_bars in sorted(grouped.items())
     ]
