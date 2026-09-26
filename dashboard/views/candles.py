@@ -26,6 +26,7 @@ import pytz
 from nicegui import run, ui
 
 from config import Config
+from dashboard.components.coverage_map import coverage_map
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
@@ -526,6 +527,8 @@ class SessionExplorer:
                 ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
             ).props("dense")
             self.status = ui.row().classes("items-center gap-2")
+            ui.space()
+            coverage_map(self.conn)
 
     # ------------------------------------------------------------------
     # Forecasting

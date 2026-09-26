@@ -174,3 +174,35 @@ def test_contract_order_for_a_day(monkeypatch):
     assert order("2026-06-15") == [2, 3, 4, 1]      # a contract month counts through its month
     assert order("2026-09-18") == [3, 4, 2, 1]      # expiry day itself
     assert order("2026-12-21") == [4, 3, 2, 1]      # nothing later holds it: closest earlier first
+
+
+def test_coverage_map_scores_weeks(market):
+    conn, _, sessions = market
+    from datetime import date
+    from dashboard.components.coverage_map import band, chart_options, coverage_weeks
+    # Stored NQ sessions: 2026-06-03 .. 06-12 (8 days); "today" is the next Monday.
+    data = coverage_weeks(conn, ["NQ", "ES", "RTY"], today=date(2026, 6, 15))
+    assert data["weeks"] == [date(2026, 6, 1), date(2026, 6, 8), date(2026, 6, 15)]
+    cells = data["cells"]
+    assert cells[("NQ", date(2026, 6, 8))]["category"] == 5                 # 5/5 complete
+    first = cells[("NQ", date(2026, 6, 1))]
+    assert (first["complete"], first["missing"], first["category"]) == (3, 2, 3)   # 60 %
+    assert cells[("NQ", date(2026, 6, 15))]["category"] == 0                # no finished day yet
+    assert cells[("RTY", date(2026, 6, 8))]["category"] == 1                # nothing stored
+    assert "Week of Mon 2026-06-08" in cells[("NQ", date(2026, 6, 8))]["tip"]
+
+    # A partial day lowers the week below "complete"; the best contract of a day counts.
+    def partial(day):
+        with conn:
+            conn.execute("UPDATE session_days SET status = 'PARTIAL', bar_count = 690, expected_bar_count = 1380 "
+                         "WHERE contract_id = %s AND trading_day = %s;", (NQ_CID, day))
+        return coverage_weeks(conn, ["NQ"], today=date(2026, 6, 15))["cells"][("NQ", date(2026, 6, 8))]
+
+    week = partial("2026-06-10")          # December's warm-up copy of the day is complete
+    assert (week["complete"], week["category"]) == (5, 5)
+    week = partial("2026-06-09")          # only September holds this one
+    assert (week["complete"], week["partial"], week["category"]) == (4, 1, 4)   # 90 %
+
+    assert [band(s, False) for s in (None, 0.0, 0.2, 0.5, 0.95)] == [0, 1, 2, 3, 4] and band(1.0, True) == 5
+    opts = chart_options(data)
+    assert len(opts["series"][0]["data"]) == 3 * 3 and opts["yAxis"]["data"] == ["NQ", "ES", "RTY"]
