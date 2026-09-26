@@ -139,6 +139,11 @@ Two pages:
   earlier day, with that day's own previous close, overnight range and VWAP; the dropdown
   switches to the other matches. A matched day is drawn from the closest contract expiring on
   or after it (an August day comes from September even when the page shows December).
+  Beside the selectors, **Database coverage by week** is a small map of what is stored: one
+  cell per instrument and week, green when every scheduled trading day is complete, then
+  light green (≥ 90 %), yellow (≥ 50 %), orange (> 0 %) and red (nothing), from the
+  collector's day ledger; hover a cell for its day counts
+  ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   every stored prediction joined against its realized outcome, so you can see whether the
   bias calls were right.
