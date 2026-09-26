@@ -1,7 +1,7 @@
 # forecaster/client.py
 """
 LLM Client and Forecasting Engine for the Opening Forecast System.
-Handles communication with LLM endpoints (OpenAI/Anthropic) and provides
+Handles communication with LLM endpoints (Google Gemini by default, or Anthropic) and provides
 a deterministic, analogue-driven fallback engine when running offline.
 """
 
@@ -15,30 +15,36 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_FORECAST_KEYS = ["opening_bias", "scenarios", "probabilities", "forecast_horizon"]
 
+DEFAULT_MODEL = "gemini-2.5-flash"
+
 
 class ForecastClient:
     def __init__(self, model_name=None, api_key=None, provider=None):
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-4o-mini")
+        self.model_name = model_name or os.getenv("LLM_MODEL", DEFAULT_MODEL)
 
-        openai_key = os.getenv("OPENAI_API_KEY")
+        # GOOGLE_API_KEY is the google-genai SDK's own fallback name, so honour it too.
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 
-        # Infer provider from an explicit arg, then the model name, then whichever key exists.
+        # Infer provider from an explicit arg, then the model name, then whichever key
+        # exists. Gemini is the default.
         if provider:
             self.provider = provider
         elif "claude" in self.model_name.lower():
             self.provider = "anthropic"
-        elif anthropic_key and not openai_key:
+        elif "gemini" in self.model_name.lower():
+            self.provider = "gemini"
+        elif anthropic_key and not gemini_key:
             self.provider = "anthropic"
         else:
-            self.provider = "openai"
+            self.provider = "gemini"
 
         if api_key:
             self.api_key = api_key
         elif self.provider == "anthropic":
             self.api_key = anthropic_key
         else:
-            self.api_key = openai_key
+            self.api_key = gemini_key
 
     # ------------------------------------------------------------------
     # Offline / deterministic fallback
@@ -167,20 +173,21 @@ class ForecastClient:
             return self._generate_mock_or_baseline_forecast(target_day, target_features, analogues)
 
         try:
-            if self.provider == "openai":
-                from openai import OpenAI
+            if self.provider == "gemini":
+                from google import genai
+                from google.genai import types
 
-                client = OpenAI(api_key=self.api_key)
-                response = client.chat.completions.create(
+                client = genai.Client(api_key=self.api_key)
+                response = client.models.generate_content(
                     model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": "You are a quantitative market research analyst. Always respond with a single JSON object."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction="You are a quantitative market research analyst. Always respond with a single JSON object.",
+                        response_mime_type="application/json",
+                        temperature=0.2,
+                    ),
                 )
-                raw_text = response.choices[0].message.content
+                raw_text = response.text
 
             elif self.provider == "anthropic":
                 import anthropic

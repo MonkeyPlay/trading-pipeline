@@ -218,9 +218,9 @@ class Config:
     IB_CLIENT_ID = int(os.getenv("IB_CLIENT_ID", "1"))
 
     # LLM Settings
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")  # e.g. gpt-4o-mini, claude-3-5-sonnet-latest
+    LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")  # e.g. gemini-2.5-flash, claude-sonnet-5
 
     # Instrument Settings
     #   SYMBOLS         - instruments that are forecast (and therefore collected)
@@ -296,8 +296,8 @@ class Config:
     def validate(cls):
         """Validates critical config values."""
         # Check LLM keys (optional warnings rather than hard crashes)
-        if not cls.OPENAI_API_KEY and not cls.ANTHROPIC_API_KEY:
-            print("WARNING: Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY found in environment variables.")
+        if not cls.GEMINI_API_KEY and not cls.ANTHROPIC_API_KEY:
+            print("WARNING: Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY found in environment variables.")
 
         unknown = [s for s in cls.collect_symbols() if s not in INSTRUMENTS]
         if unknown:

@@ -260,9 +260,9 @@ Settings come from environment variables or a local `.env`, read by
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
 | `IB_CLIENT_ID` | `1` | IB socket client id (the real-time streamer uses this + 1) |
 | `ROLL_WARMUP_SESSIONS` | `7` | Trading days of a future's next contract stored before it becomes front |
-| `OPENAI_API_KEY` | — | Enables OpenAI-backed forecasts |
+| `GEMINI_API_KEY` | — | Enables Google Gemini-backed forecasts (the default provider; `GOOGLE_API_KEY` also works) |
 | `ANTHROPIC_API_KEY` | — | Enables Anthropic-backed forecasts |
-| `LLM_MODEL` | `gpt-4o-mini` | Model name; a name containing `claude` selects Anthropic |
+| `LLM_MODEL` | `gemini-2.5-flash` | Model name; a name containing `claude` selects Anthropic, anything else Gemini |
 | `DASHBOARD_HOST` | `127.0.0.1` | Interface the dashboard binds to |
 | `DASHBOARD_PORT` | `8080` | Port the dashboard listens on |
 
@@ -271,8 +271,8 @@ Settings come from environment variables or a local `.env`, read by
 SYMBOLS=ES,NQ,RTY
 CONTEXT_SYMBOLS=VIX,VXN,TNX,DX,SMH,10Y,2YY
 EXPIRY=202612
-LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=sk-...
+LLM_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=...
 ```
 
 **Adding another instrument** means one entry in `INSTRUMENTS` in [config.py](config.py)
