@@ -1,6 +1,6 @@
 # forecaster/client.py
 """
-LLM Client and Forecasting Engine for the NQ Opening Forecast System.
+LLM Client and Forecasting Engine for the Opening Forecast System.
 Handles communication with LLM endpoints (OpenAI/Anthropic) and provides
 a deterministic, analogue-driven fallback engine when running offline.
 """
@@ -149,13 +149,16 @@ class ForecastClient:
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
-    def get_forecast(self, target_day, target_features, analogues):
+    def get_forecast(self, target_day, target_features, analogues, instrument=None):
         """
         Requests a forecast from the configured LLM. Falls back to the baseline
         statistical matching engine on any failure (no key, import error, bad JSON).
+
+        ``instrument`` is a display label ('S&P 500 E-mini (ES)') naming which
+        contract the snapshot belongs to, so the model is not told the wrong index.
         """
         try:
-            prompt = construct_forecast_prompt(target_day, target_features, analogues)
+            prompt = construct_forecast_prompt(target_day, target_features, analogues, instrument)
         except Exception as e:  # never let prompt assembly kill the pipeline
             logger.warning(f"Prompt construction failed ({e}); using baseline engine.")
             return self._generate_mock_or_baseline_forecast(target_day, target_features, analogues)

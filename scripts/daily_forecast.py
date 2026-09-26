@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-End-to-end daily forecast runner for the NQ Opening Forecast System.
+End-to-end daily forecast runner for the Opening Forecast System.
 
-Ties the pieces together and PERSISTS the results:
+Ties the pieces together and PERSISTS the results, once per instrument:
   1. load recent 1-minute bars for the contract
   2. evaluate realized outcomes for every completed prior session   -> outcomes
   3. compute the pre-open feature snapshot for the target session   -> feature_snapshots
@@ -10,8 +10,12 @@ Ties the pieces together and PERSISTS the results:
   5. request an LLM (or baseline) opening forecast                  -> predictions
   6. store the analogue matches                                     -> analogue_matches
 
+Each instrument is forecast independently: analogues for ES are drawn only from
+past ES sessions, never across instruments.
+
 Run from the project root:
-    python scripts/daily_forecast.py --expiry 202609
+    python scripts/daily_forecast.py                    # every configured symbol
+    python scripts/daily_forecast.py --symbol NQ        # just one
 """
 
 import os
@@ -61,6 +65,25 @@ def _load_bars_df(conn, contract_id, lookback_days):
     return pd.DataFrame([dict(r) for r in rows])
 
 
+def _load_vix_df(conn, lookback_days):
+    """
+    Cash VIX bars for the same window, or None when VIX is not configured as
+    context or has never been collected. A missing feed is not an error: the
+    snapshots simply carry no VIX columns.
+    """
+    if "VIX" not in Config.CONTEXT_SYMBOLS:
+        return None
+    contract = get_contract_by_expiry(conn, "VIX", Config.expiry_for("VIX"))
+    if contract is None:
+        logger.warning("VIX is configured as context but not in the DB; run the collector.")
+        return None
+    df = _load_bars_df(conn, contract["contract_id"], lookback_days)
+    if df.empty:
+        logger.warning("VIX contract exists but has no bars in the window.")
+        return None
+    return df
+
+
 def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
     init_database(dsn)
     conn = get_db_connection(dsn)
@@ -73,13 +96,13 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
 
         df = _load_bars_df(conn, contract_id, lookback_days)
         if df.empty:
-            logger.error("No bar data available for the requested window.")
+            logger.error(f"{symbol}: no bar data available for the requested window.")
             return 1
 
         enriched = enrich_candle_timezones(df)
         trading_days = sorted(d for d in enriched["trading_day"].dropna().unique())
         if len(trading_days) < 2:
-            logger.error("Need at least two trading days of data to build a forecast.")
+            logger.error(f"{symbol}: need at least two trading days of data to build a forecast.")
             return 1
 
         # --- 2. Backfill realized outcomes for completed sessions ---
@@ -110,8 +133,9 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
             logger.info(f"Saved realized outcome for {day}.")
 
         # --- 3. Target session + pre-open snapshot ---
+        vix_df = _load_vix_df(conn, lookback_days)
         target = target_date or trading_days[-1]
-        snapshot = calculate_pre_open_snapshot(df, target)
+        snapshot = calculate_pre_open_snapshot(df, target, vix_df=vix_df)
         if not snapshot or "error" in snapshot:
             logger.error(f"Cannot compute pre-open snapshot for {target}: {snapshot.get('error')}")
             return 1
@@ -131,6 +155,8 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
             vwap=snapshot["vwap"],
             raw_features=snapshot,
             feature_version=Config.FEATURE_VERSION,
+            vix_pre_open=snapshot.get("vix_pre_open"),
+            vix_change=snapshot.get("vix_change"),
         )
         logger.info(f"Saved feature snapshot #{snapshot_id} for {target}.")
 
@@ -139,7 +165,7 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
         for day in trading_days:
             if day >= target:
                 continue
-            hist = calculate_pre_open_snapshot(df, day)
+            hist = calculate_pre_open_snapshot(df, day, vix_df=vix_df)
             if not hist or "error" in hist:
                 continue
             out_row = get_outcome(conn, contract_id, day)
@@ -151,7 +177,9 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
 
         # --- 5. Forecast ---
         client = ForecastClient(model_name=model)
-        forecast = client.get_forecast(target, snapshot, analogues)
+        forecast = client.get_forecast(
+            target, snapshot, analogues, instrument=Config.describe_instrument(symbol)
+        )
 
         prediction_id = save_prediction(
             conn, contract_id=contract_id, forecast_cutoff=cutoff, snapshot_id=snapshot_id,
@@ -179,13 +207,33 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run + persist the daily NQ opening forecast")
+    parser = argparse.ArgumentParser(description="Run + persist the daily opening forecast")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
-    parser.add_argument("--symbol", default="NQ")
-    parser.add_argument("--expiry", required=True, help="Contract expiry YYYYMM (e.g. 202609)")
+    parser.add_argument("--symbol", default=",".join(Config.SYMBOLS),
+                        help="Symbol, or a comma-separated list (e.g. NQ or ES,NQ,RTY)")
+    parser.add_argument("--expiry", default=None,
+                        help="Contract expiry YYYYMM applied to every symbol "
+                             "(default: the configured EXPIRY, with per-symbol overrides)")
     parser.add_argument("--model", default=Config.LLM_MODEL)
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--date", default=None, help="Target session YYYY-MM-DD (default: latest available)")
     args = parser.parse_args()
 
-    sys.exit(run(args.db, args.symbol, args.expiry, args.model, args.lookback_days, args.date))
+    symbols = [s.strip().upper() for s in args.symbol.split(",") if s.strip()]
+    if not symbols:
+        parser.error("--symbol must name at least one symbol.")
+
+    # One instrument's missing data must not suppress the others' forecasts, so
+    # every symbol is attempted and the worst status is what the process returns.
+    exit_code = 0
+    for sym in symbols:
+        expiry = args.expiry or Config.expiry_for(sym)
+        logger.info(f"=== {Config.describe_instrument(sym)} {expiry} ===")
+        try:
+            status = run(args.db, sym, expiry, args.model, args.lookback_days, args.date)
+        except Exception:
+            logger.exception(f"{sym} {expiry} failed.")
+            status = 1
+        exit_code = exit_code or status
+
+    sys.exit(exit_code)

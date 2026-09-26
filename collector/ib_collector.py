@@ -199,7 +199,9 @@ class IBCollectorApp(EWrapper, EClient):
         self.resolved_contracts[reqId] = {
             "con_id": con.conId,
             "symbol": con.symbol,
-            "expiry": con.lastTradeDateOrContractMonth,
+            # IB returns "" for an instrument with no expiry (a cash index); store
+            # NULL so contract lookups can distinguish "no expiry" from a real one.
+            "expiry": con.lastTradeDateOrContractMonth or None,
             "sec_type": con.secType,
             "exchange": con.exchange,
             "currency": con.currency,
@@ -260,22 +262,28 @@ class IBCollectorApp(EWrapper, EClient):
             self.historical_events[reqId].set()
 
     # --- High-level operations ---
-    def resolve_futures_contract(self, symbol, expiry, exchange="CME", currency="USD"):
+    def resolve_contract(self, symbol, expiry=None, exchange="CME", currency="USD", sec_type="FUT"):
+        """
+        Resolves a tradable contract via IB. ``expiry`` is the contract month for a
+        future and None for a cash index, which has no expiry to specify.
+        """
         req_id = self.get_next_req_id()
         self.contract_events[req_id] = threading.Event()
 
         contract = Contract()
         contract.symbol = symbol
-        contract.secType = "FUT"
+        contract.secType = sec_type
         contract.exchange = exchange
         contract.currency = currency
-        contract.lastTradeDateOrContractMonth = expiry
+        if expiry:
+            contract.lastTradeDateOrContractMonth = expiry
 
-        logger.info(f"Resolving {symbol} {expiry} on {exchange}...")
+        label = f"{symbol} {expiry}" if expiry else symbol
+        logger.info(f"Resolving {label} ({sec_type}) on {exchange}...")
         self.reqContractDetails(req_id, contract)
 
         if not self.contract_events[req_id].wait(timeout=15.0):
-            logger.error(f"Timeout resolving {symbol} {expiry}")
+            logger.error(f"Timeout resolving {label}")
             return None
         if req_id in self.request_failed:
             return None
@@ -400,34 +408,114 @@ def _fetch_and_store_day(app, conn, contract_info, day_str, now_utc):
         return None
 
 
-def run_collection_workflow(dsn, host, port, client_id, symbol, expiry, days_to_download,
+def _label(symbol, expiry):
+    """'NQ 202612' for a future, plain 'VIX' for an index with no expiry."""
+    return f"{symbol} {expiry}" if expiry else symbol
+
+
+def _collect_contract(app, conn, symbol, expiry, targets, start_day, end_day, gap_fill):
+    """
+    Resolves one contract and stores its missing days. ``targets`` is the day list
+    planned offline, or None when the contract was unknown until now.
+
+    Returns the number of bars written.
+    """
+    instrument = Config.instrument(symbol)
+    exchange = instrument.exchange if instrument else "CME"
+    sec_type = instrument.sec_type if instrument else "FUT"
+    label = _label(symbol, expiry)
+
+    contract_info = app.resolve_contract(
+        symbol, expiry, exchange=exchange, sec_type=sec_type
+    )
+    if not contract_info:
+        logger.error(f"Failed to resolve {label}.")
+        return 0
+
+    con_id = contract_info["con_id"]
+    upsert_contract(
+        conn, contract_id=con_id, symbol=contract_info["symbol"],
+        expiry=contract_info["expiry"], exchange=contract_info["exchange"],
+        currency=contract_info["currency"], tick_size=contract_info["tick_size"],
+        multiplier=contract_info["multiplier"], sec_type=contract_info["sec_type"],
+    )
+
+    if targets is None:
+        # First run for this contract: now that con_id is known, plan the days.
+        plan = plan_trading_days(
+            conn, con_id, start_day, end_day,
+            interval=INTERVAL_LABEL, price_type=PRICE_TYPE, force=not gap_fill,
+        )
+        _log_plan(plan)
+        targets = days_to_fetch(plan)
+        if not targets:
+            logger.info(f"{label}: every trading day in the window is already stored.")
+            return 0
+
+    logger.info(f"{label}: fetching {len(targets)} trading day(s), one at a time.")
+    now_utc = datetime.now(timezone.utc)
+    total, stored_days, failed_days = 0, 0, []
+
+    for day_str in targets:
+        written = _fetch_and_store_day(app, conn, contract_info, day_str, now_utc)
+        if written is None:
+            failed_days.append(day_str)
+        else:
+            total += written
+            stored_days += 1
+        time.sleep(1.0)
+
+    logger.info(f"{label}: {stored_days}/{len(targets)} day(s) stored, {total} bar(s) written.")
+    if failed_days:
+        logger.warning(f"{label}: {len(failed_days)} day(s) failed, retried next run: {failed_days}")
+    return total
+
+
+def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_download,
                             gap_fill=True, start=None, end=None, plan_only=False):
+    """
+    Collects one or more contracts. ``instruments`` is a sequence of
+    ``(symbol, expiry)`` pairs.
+
+    Every contract shares a single IB connection, and therefore a single
+    ``IBKRPacer``. That matters: one process per symbol would give each its own
+    pacer, so each would undercount the others' requests and the combined volume
+    could trip the HMDS rate limit that the pacer exists to respect.
+    """
     init_database(dsn)
     conn = get_db_connection(dsn)
 
     app = None
     try:
         start_day, end_day = _resolve_window(days_to_download, start, end)
-        logger.info(f"Window: {start_day} -> {end_day} ({symbol} {expiry}, {INTERVAL_LABEL}).")
 
         # --- Step 1: ask the database what is missing, before touching IB. ---
-        # The contract may already be known from an earlier run, in which case the
-        # whole plan can be built offline and a fully-covered window costs no
-        # connection at all.
-        contract_row = get_contract_by_expiry(conn, symbol, expiry)
-        targets = None
-        if contract_row is not None:
-            plan = plan_trading_days(
-                conn, contract_row["contract_id"], start_day, end_day,
-                interval=INTERVAL_LABEL, price_type=PRICE_TYPE, force=not gap_fill,
-            )
-            _log_plan(plan)
-            targets = days_to_fetch(plan)
-            if not targets:
-                logger.info("Every trading day in the window is already stored — nothing to download.")
-                return
-        else:
-            logger.info(f"{symbol} {expiry} is not in the database yet; it must be resolved via IB first.")
+        # A contract may already be known from an earlier run, in which case its
+        # plan is built offline. If every requested instrument is fully covered,
+        # no connection is opened at all.
+        pending = []
+        for symbol, expiry in instruments:
+            label = _label(symbol, expiry)
+            logger.info(f"Window: {start_day} -> {end_day} ({label}, {INTERVAL_LABEL}).")
+            contract_row = get_contract_by_expiry(conn, symbol, expiry)
+            targets = None
+            if contract_row is not None:
+                plan = plan_trading_days(
+                    conn, contract_row["contract_id"], start_day, end_day,
+                    interval=INTERVAL_LABEL, price_type=PRICE_TYPE, force=not gap_fill,
+                )
+                _log_plan(plan)
+                targets = days_to_fetch(plan)
+                if not targets:
+                    logger.info(f"{label}: every trading day in the window is already stored.")
+                    continue
+            else:
+                logger.info(f"{label} is not in the database yet; it must be resolved via IB first.")
+            pending.append((symbol, expiry, targets))
+
+        if not pending:
+            logger.info("Nothing to download for any requested instrument.")
+            return
 
         if plan_only:
             logger.info("--plan-only: stopping before connecting to IB.")
@@ -437,7 +525,7 @@ def run_collection_workflow(dsn, host, port, client_id, symbol, expiry, days_to_
             logger.error("ibapi is not installed; cannot run a live collection.")
             sys.exit(1)
 
-        # --- Step 2: connect and resolve the contract. ---
+        # --- Step 2: connect once, reused by every contract. ---
         app = IBCollectorApp()
         logger.info(f"Connecting to IB at {host}:{port} (clientId={client_id})...")
         app.connect(host, port, client_id)
@@ -447,48 +535,14 @@ def run_collection_workflow(dsn, host, port, client_id, symbol, expiry, days_to_
             logger.error("Could not connect to IB Gateway/TWS. Is the API socket enabled?")
             sys.exit(1)
 
-        contract_info = app.resolve_futures_contract(symbol, expiry)
-        if not contract_info:
-            logger.error(f"Failed to resolve {symbol} {expiry}.")
-            return
-
-        con_id = contract_info["con_id"]
-        upsert_contract(
-            conn, contract_id=con_id, symbol=contract_info["symbol"],
-            expiry=contract_info["expiry"], exchange=contract_info["exchange"],
-            currency=contract_info["currency"], tick_size=contract_info["tick_size"],
-            multiplier=contract_info["multiplier"], sec_type=contract_info["sec_type"],
-        )
-
-        if targets is None:
-            # First run for this contract: now that con_id is known, plan the days.
-            plan = plan_trading_days(
-                conn, con_id, start_day, end_day,
-                interval=INTERVAL_LABEL, price_type=PRICE_TYPE, force=not gap_fill,
-            )
-            _log_plan(plan)
-            targets = days_to_fetch(plan)
-            if not targets:
-                logger.info("Every trading day in the window is already stored — nothing to download.")
-                return
-
         # --- Step 3: one IB request per missing day, one atomic write per day. ---
-        logger.info(f"Fetching {len(targets)} trading day(s), one at a time.")
-        now_utc = datetime.now(timezone.utc)
-        total, stored_days, failed_days = 0, 0, []
+        grand_total = 0
+        for symbol, expiry, targets in pending:
+            grand_total += _collect_contract(
+                app, conn, symbol, expiry, targets, start_day, end_day, gap_fill
+            )
 
-        for day_str in targets:
-            written = _fetch_and_store_day(app, conn, contract_info, day_str, now_utc)
-            if written is None:
-                failed_days.append(day_str)
-            else:
-                total += written
-                stored_days += 1
-            time.sleep(1.0)
-
-        logger.info(f"Collection complete: {stored_days}/{len(targets)} day(s) stored, {total} bar(s) written.")
-        if failed_days:
-            logger.warning(f"{len(failed_days)} day(s) failed and will be retried next run: {failed_days}")
+        logger.info(f"Collection complete across {len(pending)} contract(s): {grand_total} bar(s) written.")
     finally:
         if app is not None:
             logger.info("Disconnecting from IB...")
@@ -502,8 +556,12 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="127.0.0.1", help="IP address of IB Gateway or TWS")
     parser.add_argument("--port", type=int, default=4002, help="API port (4002 Gateway paper, 4001 Gateway live, 7497 TWS paper)")
     parser.add_argument("--client-id", type=int, default=1, help="Client ID for the socket API connection")
-    parser.add_argument("--symbol", type=str, default="NQ", help="Futures symbol (e.g., NQ)")
-    parser.add_argument("--expiry", type=str, help="Contract expiry month YYYYMM (e.g., 202609)")
+    parser.add_argument("--symbol", type=str, default=",".join(Config.collect_symbols()),
+                        help="Symbol, or a comma-separated list (e.g. NQ or ES,NQ,RTY,VIX). "
+                             "Defaults to SYMBOLS plus CONTEXT_SYMBOLS")
+    parser.add_argument("--expiry", type=str,
+                        help="Contract expiry month YYYYMM (e.g. 202609); defaults to the "
+                             "configured EXPIRY, with per-symbol overrides applied")
     parser.add_argument("--days", type=int, default=20, help="How many calendar days back to consider")
     parser.add_argument("--start", type=str, help="First calendar day of the window (YYYY-MM-DD); overrides --days")
     parser.add_argument("--end", type=str, help="Last calendar day of the window (YYYY-MM-DD); defaults to today")
@@ -520,11 +578,23 @@ if __name__ == "__main__":
         print("Database initialized successfully. Exiting.")
         sys.exit(0)
 
-    if not args.expiry:
-        parser.error("--expiry is required unless --init-only is specified.")
+    symbols = [s.strip().upper() for s in args.symbol.split(",") if s.strip()]
+    if not symbols:
+        parser.error("--symbol must name at least one futures symbol.")
+
+    # An explicit --expiry applies to every future; otherwise each resolves its own,
+    # so one instrument can sit on a different contract month during a roll. A cash
+    # index has no expiry at all, and --expiry must not invent one for it.
+    def _expiry_for_arg(sym):
+        instrument = Config.instrument(sym)
+        if instrument is not None and instrument.is_index:
+            return None
+        return args.expiry or Config.expiry_for(sym)
+
+    instruments = [(s, _expiry_for_arg(s)) for s in symbols]
 
     run_collection_workflow(
         dsn=args.db, host=args.host, port=args.port, client_id=args.client_id,
-        symbol=args.symbol, expiry=args.expiry, days_to_download=args.days,
+        instruments=instruments, days_to_download=args.days,
         gap_fill=not args.full, start=args.start, end=args.end, plan_only=args.plan_only,
     )

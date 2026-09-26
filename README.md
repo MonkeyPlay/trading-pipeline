@@ -1,11 +1,35 @@
-# NQ Opening Forecast Pipeline
+# Opening Forecast Pipeline
 
-A local, end-to-end research pipeline for the **NQ (Nasdaq-100 E-mini) futures opening**:
+A local, end-to-end research pipeline for the **CME equity-index futures opening**:
 it collects 1-minute bars from Interactive Brokers, freezes a pre-open feature snapshot
 at 09:30 ET, finds volatility-normalized historical analogues, asks an LLM (or a
 deterministic baseline) for an opening forecast, scores that forecast against what
 actually happened, and serves the whole thing in a NiceGUI dashboard drawn with
 TradingView's Lightweight Charts.
+
+Four instruments are tracked out of the box:
+
+| Symbol | Instrument | Tick | Multiplier | Role |
+|---|---|---|---|---|
+| `ES` | S&P 500 E-mini | 0.25 | 50 | forecast target |
+| `NQ` | Nasdaq-100 E-mini | 0.25 | 20 | forecast target |
+| `RTY` | Russell 2000 E-mini | 0.10 | 50 | forecast target |
+| `VIX` | CBOE Volatility Index | 0.01 | — | pre-open context |
+
+The three futures share the same RTH window, the same 18:00 ET Globex roll and the same
+holiday calendar, so the session and coverage logic is identical for each. Each is
+forecast **independently** — analogues for ES are drawn only from past ES sessions, never
+across instruments. `SYMBOLS` selects which ones run.
+
+**VIX is context, not a target.** It is the cash index rather than a future: no expiry, no
+volume, `sec_type = 'IND'`. It is collected like anything else, but instead of being
+forecast it contributes the pre-open VIX level and its change from the prior close to
+*every* futures snapshot (`vix_pre_open`, `vix_change`), and those reach the model in the
+prompt. `CONTEXT_SYMBOLS` controls this set. Because nothing on the Session Explorer page
+applies to an index, cash indices are left out of its contract picker.
+
+If VIX has not been collected, the columns stay NULL and the prompt simply omits the line —
+a missing feed never blocks a forecast or reports a stale level.
 
 Everything runs on your machine against a local PostgreSQL + TimescaleDB database. No cloud.
 
@@ -28,7 +52,8 @@ That serves the dashboard against whatever is already in the `trading_pipeline` 
 It never needs IB to be running — it only reads stored data. `DASHBOARD_PORT` and
 `DASHBOARD_HOST` override where it listens.
 
-**No data yet?** Seed a throwaway database with realistic fake sessions:
+**No data yet?** Seed a throwaway database with realistic fake sessions for all three
+instruments (each scaled to its own index level):
 
 ```bash
 python populate_mock_data.py --reset          # writes the trading_pipeline_dev database
@@ -105,24 +130,35 @@ Two pages:
 Requires IB Gateway or TWS running locally (port `4002` = Gateway paper by default).
 
 ```bash
-python -m collector.ib_collector --expiry 202609 --days 30 --plan-only   # what would it fetch?
-python -m collector.ib_collector --expiry 202609 --days 30               # fill the gaps
-python -m collector.ib_collector --expiry 202609 --start 2026-08-01 --end 2026-08-31
-python -m collector.ib_collector --expiry 202609 --days 30 --full        # re-download everything
+python -m collector.ib_collector --days 30 --plan-only            # what would it fetch?
+python -m collector.ib_collector --days 30                        # fill the gaps, all symbols
+python -m collector.ib_collector --days 30 --symbol NQ            # just one
+python -m collector.ib_collector --start 2026-08-01 --end 2026-08-31
+python -m collector.ib_collector --days 30 --full                 # re-download everything
 ```
 
+With no `--symbol` it collects everything in `SYMBOLS`, and with no `--expiry` each symbol
+resolves its own contract month (see [Configuration](#configuration)).
+
+**All symbols go through one IB connection**, which matters: the request pacer that keeps
+you under IB's historical-data rate limit lives on that connection. Running one process
+per symbol would give each its own pacer, so each would undercount the others' requests
+and a wide backfill could trip the limit.
+
 Collection is **incremental and day-partitioned**: the collector reads the `session_days`
-ledger first and only opens a socket for days it actually needs. If nothing is missing it
-exits without connecting. See [docs/data_store.md](docs/data_store.md) for the full model —
-day statuses, the atomic per-day write path, and the trailing-revision window.
+ledger first and only opens a socket for days it actually needs. If nothing is missing for
+any symbol it exits without connecting at all. See [docs/data_store.md](docs/data_store.md)
+for the full model — day statuses, the atomic per-day write path, and the
+trailing-revision window.
 
 ### 3. Daily forecast — features, analogues, prediction, scoring
 
 ```bash
-python scripts/daily_forecast.py --expiry 202609 --lookback-days 40
+python scripts/daily_forecast.py --lookback-days 40        # every symbol in SYMBOLS
+python scripts/daily_forecast.py --symbol RTY              # just one
 ```
 
-In one pass ([scripts/daily_forecast.py](scripts/daily_forecast.py)) it:
+For each symbol in turn ([scripts/daily_forecast.py](scripts/daily_forecast.py)) it:
 
 1. loads recent 1-minute bars,
 2. backfills realized `outcomes` for every session that has already closed,
@@ -147,7 +183,9 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
-`NQ_EXPIRY` overrides the contract month it uses (default `202609`).
+It covers every symbol in `SYMBOLS`, and hands the whole list to each step in one process
+so the collector's rate-limit pacing stays accurate and one instrument's missing data does
+not suppress the others' forecasts.
 
 ## Configuration
 
@@ -158,6 +196,10 @@ Settings come from environment variables or a local `.env`, read by
 |---|---|---|
 | `DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline` | Production store — collector and pipeline write here |
 | `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
+| `SYMBOLS` | `ES,NQ,RTY` | Instruments that are forecast, in order |
+| `CONTEXT_SYMBOLS` | `VIX` | Collected as pre-open context only; never forecast |
+| `EXPIRY` | `202612` | Contract month shared by the futures (they use one quarterly cycle) |
+| `<SYMBOL>_EXPIRY` | — | Overrides `EXPIRY` for one instrument, e.g. `RTY_EXPIRY=202612` mid-roll |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
 | `IB_CLIENT_ID` | `1` | IB socket client id |
@@ -169,9 +211,20 @@ Settings come from environment variables or a local `.env`, read by
 
 ```bash
 # .env
+SYMBOLS=ES,NQ,RTY
+CONTEXT_SYMBOLS=VIX
+EXPIRY=202612
 LLM_MODEL=gpt-4o-mini
 OPENAI_API_KEY=sk-...
 ```
+
+**Adding another instrument** means one entry in `INSTRUMENTS` in [config.py](config.py)
+(symbol, display name, exchange, tick size, multiplier, and `sec_type` for a non-future),
+then adding the symbol to `SYMBOLS` or `CONTEXT_SYMBOLS`. Nothing else is symbol-specific:
+the `contracts` table already keys everything by contract, and the collector reads tick
+size and multiplier back from IB. A non-CME or non-equity-index future would also need the
+session windows and holiday calendar checked, since those assume the 18:00 ET roll and the
+CME equity calendar.
 
 **Without an API key the pipeline still works.** `ForecastClient`
 ([forecaster/client.py](forecaster/client.py)) falls back to a deterministic,
@@ -189,7 +242,8 @@ python config.py
 **Features** ([features/calculations.py](features/calculations.py)) are frozen at 09:30 ET
 of the target day — no bar at or after the open is used, so the snapshot carries no
 look-ahead bias. It captures previous-RTH high/low/close, overnight high/low/range, the
-opening gap, pre-open direction, historical volatility and VWAP.
+opening gap, pre-open direction, historical volatility and VWAP, plus the cash VIX level
+as of the same cutoff and its change from the prior close.
 
 The trading day starts at **18:00 ET the prior evening** (the Globex open), not midnight.
 [features/session_windows.py](features/session_windows.py) owns that rule and classifies
@@ -233,6 +287,11 @@ is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
+
+Every table is keyed by `contract_id`, so instruments never need separate tables — adding
+ES and RTY needed no migration — only the VIX context columns did (`0002`). It does roughly
+quadruple the stored volume against a single-symbol history: budget about 5 MB per contract
+per month of 1-minute bars.
 
 ```bash
 python -m database.migrations                      # show current + pending versions

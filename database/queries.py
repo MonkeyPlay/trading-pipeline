@@ -65,7 +65,7 @@ def get_contract(conn: Database, contract_id: int) -> Optional[Row]:
         raise
 
 
-def get_contract_by_expiry(conn: Database, symbol: str, expiry: str) -> Optional[Row]:
+def get_contract_by_expiry(conn: Database, symbol: str, expiry: Optional[str]) -> Optional[Row]:
     """
     Retrieves a contract by trading symbol and expiry.
 
@@ -73,8 +73,16 @@ def get_contract_by_expiry(conn: Database, symbol: str, expiry: str) -> Optional
     stores the full last-trade date ('20260918'), so an exact match is tried
     first and a prefix match second. With several matching expiries the nearest
     one wins, which is the front month a bare contract month refers to.
+
+    ``expiry=None`` means an instrument that has no expiry at all — a cash index —
+    and matches only the row stored with a NULL expiry.
     """
     try:
+        if expiry is None:
+            return conn.execute(
+                "SELECT * FROM contracts WHERE symbol = %s AND expiry IS NULL;", (symbol,)
+            ).fetchone()
+
         row = conn.execute(
             "SELECT * FROM contracts WHERE symbol = %s AND expiry = %s;", (symbol, expiry)
         ).fetchone()
@@ -792,6 +800,8 @@ def save_feature_snapshot(
     raw_features: Dict[str, Any],
     feature_version: str,
     data_quality_status: str = "VALID",
+    vix_pre_open: Optional[float] = None,
+    vix_change: Optional[float] = None,
 ) -> int:
     """
     Saves computed pre-open metrics frozen at the cutoff time.
@@ -802,8 +812,9 @@ def save_feature_snapshot(
     INSERT INTO feature_snapshots (
         contract_id, timestamp_utc, previous_rth_high, previous_rth_low, previous_rth_close,
         overnight_high, overnight_low, overnight_range, gap, pre_open_direction,
-        historical_volatility, vwap, raw_features, feature_version, data_quality_status
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        historical_volatility, vwap, raw_features, feature_version, data_quality_status,
+        vix_pre_open, vix_change
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT(contract_id, timestamp_utc, feature_version) DO UPDATE SET
         previous_rth_high=excluded.previous_rth_high,
         previous_rth_low=excluded.previous_rth_low,
@@ -816,7 +827,9 @@ def save_feature_snapshot(
         historical_volatility=excluded.historical_volatility,
         vwap=excluded.vwap,
         raw_features=excluded.raw_features,
-        data_quality_status=excluded.data_quality_status
+        data_quality_status=excluded.data_quality_status,
+        vix_pre_open=excluded.vix_pre_open,
+        vix_change=excluded.vix_change
     RETURNING snapshot_id;
     """
     try:
@@ -825,6 +838,7 @@ def save_feature_snapshot(
                 contract_id, timestamp_utc, previous_rth_high, previous_rth_low, previous_rth_close,
                 overnight_high, overnight_low, overnight_range, gap, pre_open_direction,
                 historical_volatility, vwap, json.dumps(raw_features), feature_version, data_quality_status,
+                vix_pre_open, vix_change,
             )).fetchone()
             return int(row["snapshot_id"])
     except Error as e:

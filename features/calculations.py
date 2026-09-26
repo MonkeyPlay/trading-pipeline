@@ -22,6 +22,7 @@ from features.session_windows import (
 __all__ = [
     "enrich_candle_timezones",
     "calculate_vwap",
+    "calculate_vix_context",
     "calculate_pre_open_snapshot",
 ]
 
@@ -62,7 +63,39 @@ def calculate_vwap(df):
     return df
 
 
-def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None):
+def calculate_vix_context(vix_df, target_trading_day):
+    """
+    The cash VIX level as of just before the 09:30 ET cutoff, and its change from
+    the previous session's close, as ``(level, change)``.
+
+    Returns ``(None, None)`` when there is no usable VIX data, so a missing feed
+    leaves the snapshot's VIX columns NULL rather than reporting a wrong level.
+    VIX is an index: it has no volume, so nothing here touches volume or VWAP.
+    """
+    if vix_df is None or getattr(vix_df, "empty", True):
+        return None, None
+
+    vix = enrich_candle_timezones(vix_df).sort_values("timestamp_utc")
+
+    pre_open = vix[
+        (vix["trading_day"] == target_trading_day) & _before_open(vix["timestamp_ny"])
+    ]
+    if pre_open.empty:
+        return None, None
+    level = float(pre_open.iloc[-1]["close"])
+
+    prior_days = sorted(d for d in vix["trading_day"].dropna().unique() if d < target_trading_day)
+    if not prior_days:
+        return level, None
+
+    prev_session = vix[vix["trading_day"] == prior_days[-1]]
+    if prev_session.empty:
+        return level, None
+
+    return level, level - float(prev_session.iloc[-1]["close"])
+
+
+def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None, vix_df=None):
     """
     Computes a feature snapshot frozen at 09:30 AM ET for a target trading day.
     Requires at least the previous trading day's RTH bars and the current day's
@@ -72,6 +105,9 @@ def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None):
     those days are the ones in ``df``; pass ``rth_closes`` — ``{trading_day: last
     RTH close}``, e.g. from ``database.queries.get_daily_rth_closes`` — to take it
     over a longer history than ``df`` holds.
+
+    ``vix_df`` is optional cash VIX bars; when given, the pre-open VIX level and
+    its change are added as context. The forecast instrument itself is unaffected.
     """
     if df is None or df.empty:
         return {}
@@ -154,6 +190,8 @@ def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None):
     else:
         volatility = 0.01
 
+    vix_level, vix_change = calculate_vix_context(vix_df, target_trading_day)
+
     return {
         "trading_day": target_trading_day,
         "previous_rth_high": prev_rth_high,
@@ -166,4 +204,6 @@ def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None):
         "pre_open_direction": direction,
         "vwap": vwap_val,
         "historical_volatility": volatility,
+        "vix_pre_open": vix_level,
+        "vix_change": vix_change,
     }

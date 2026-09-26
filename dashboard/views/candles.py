@@ -26,6 +26,7 @@ from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
     get_bars,
+    get_contract_by_expiry,
     get_daily_rth_closes,
     get_day_bars,
     get_outcome,
@@ -113,6 +114,11 @@ def _cutoff_utc_iso(session_date: str) -> str:
     return NY_TZ.localize(datetime(d.year, d.month, d.day, 9, 30)).astimezone(pytz.utc).isoformat()
 
 
+def _is_cash_index(symbol: str) -> bool:
+    instrument = Config.instrument(symbol)
+    return instrument is not None and instrument.is_index
+
+
 def _safe(value, default=0.0):
     return default if value is None else value
 
@@ -131,7 +137,14 @@ class SessionExplorer:
 
     def __init__(self, conn) -> None:
         self.conn = conn
-        self.contracts = {f"{c['symbol']} ({c['expiry']})": c for c in list_contracts(conn)}
+        # Cash indices (VIX) are collected as pre-open context, not forecast, and every
+        # control on this page — snapshot, analogues, forecast — assumes a future. They
+        # feed in through the snapshot instead of being selectable here.
+        self.contracts = {
+            f"{c['symbol']} ({c['expiry']})": c
+            for c in list_contracts(conn)
+            if not _is_cash_index(c["symbol"])
+        }
 
         self.contract = None
         self.date: Optional[str] = None
@@ -145,6 +158,7 @@ class SessionExplorer:
         # Loaded per session and reused across indicator changes.
         self.day_df: Optional[pd.DataFrame] = None
         self.recent_bars: Optional[pd.DataFrame] = None
+        self.vix_bars: Optional[pd.DataFrame] = None
         # {trading_day: last RTH close} for the whole history up to the displayed
         # day: historical volatility spans all of it, recent_bars only a window.
         self.rth_closes: Dict[str, float] = {}
@@ -176,6 +190,7 @@ class SessionExplorer:
         # plus the session before it. That window also covers the indicator warm-up.
         self.recent_bars = self._load_bars(self._history_start())
         self.rth_closes = get_daily_rth_closes(self.conn, contract_id, interval="1m", end_day=self.date)
+        self.vix_bars = self._load_vix_bars(self._history_start())
         self._compute_snapshot()
 
     def _analogue_candidates(self) -> List[str]:
@@ -212,8 +227,23 @@ class SessionExplorer:
             )
         ])
 
+    def _load_vix_bars(self, start_day: Optional[str]) -> Optional[pd.DataFrame]:
+        """Cash VIX over the same window, for pre-open context. None when absent."""
+        if "VIX" not in Config.CONTEXT_SYMBOLS:
+            return None
+        contract = get_contract_by_expiry(self.conn, "VIX", Config.expiry_for("VIX"))
+        if contract is None:
+            return None
+        rows = get_bars(
+            self.conn, contract["contract_id"], interval="1m",
+            start_day=start_day, end_day=self.date,
+        )
+        return pd.DataFrame([dict(r) for r in rows]) if rows else None
+
     def _compute_snapshot(self) -> None:
-        snapshot = calculate_pre_open_snapshot(self.recent_bars, self.date, self.rth_closes)
+        snapshot = calculate_pre_open_snapshot(
+            self.recent_bars, self.date, self.rth_closes, vix_df=self.vix_bars
+        )
         self.snapshot_is_real = bool(snapshot) and "error" not in snapshot
         if self.snapshot_is_real:
             self.snapshot = snapshot
@@ -634,7 +664,9 @@ class SessionExplorer:
         # Analogue candidates: strictly earlier sessions only (no look-ahead).
         hist_snapshots = []
         for day in self._analogue_candidates():
-            hist = calculate_pre_open_snapshot(self.recent_bars, day, self.rth_closes)
+            hist = calculate_pre_open_snapshot(
+                self.recent_bars, day, self.rth_closes, vix_df=self.vix_bars
+            )
             if "error" in hist:
                 continue
             outcome = get_outcome(self.conn, contract_id, day)
@@ -644,7 +676,10 @@ class SessionExplorer:
 
         analogues = find_analogues(self.snapshot, hist_snapshots, k=3)
         client = ForecastClient(model_name=Config.LLM_MODEL)
-        forecast = client.get_forecast(self.date, self.snapshot, analogues)
+        forecast = client.get_forecast(
+            self.date, self.snapshot, analogues,
+            instrument=Config.describe_instrument(self.contract["symbol"]),
+        )
 
         if self.persist.value and self.snapshot_is_real:
             self._persist(client, forecast, analogues)
@@ -668,6 +703,8 @@ class SessionExplorer:
             vwap=snapshot.get("vwap"),
             raw_features=snapshot,
             feature_version=Config.FEATURE_VERSION,
+            vix_pre_open=snapshot.get("vix_pre_open"),
+            vix_change=snapshot.get("vix_change"),
         )
         prediction_id = save_prediction(
             conn=self.conn, contract_id=contract_id, forecast_cutoff=cutoff,
