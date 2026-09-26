@@ -28,6 +28,7 @@ from nicegui import run, ui
 from config import Config
 from dashboard.components.coverage_map import coverage_map
 from dashboard.components.lightweight_chart import LightweightChart
+from dashboard.components.model_forecast import ModelForecastPanel
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
     contracts_with_day,
@@ -392,6 +393,7 @@ class SessionExplorer:
         if keep_forecast:
             self._push_analogue()
         else:
+            self.model_panel.show(self.contract["symbol"], self.date)
             self._show_stored_forecast()
 
     # ------------------------------------------------------------------
@@ -406,6 +408,7 @@ class SessionExplorer:
         if self.date is None:
             self.forecast_panel.clear()
             self._render_analogue_view([], None)
+            self.model_panel.show(self.contract["symbol"], None)
         self.refresh_session()
 
     def on_date(self, event) -> None:
@@ -506,9 +509,12 @@ class SessionExplorer:
                     ui.label("Pre-open features").classes("text-sm font-medium")
                     self.features_panel = ui.column().classes("gap-3 w-full")
 
+            self.model_panel = ModelForecastPanel(self.conn)
+            self.model_panel.build()
             self._build_forecast_panel()
 
         if self.date is None:
+            self.model_panel.show(self.contract["symbol"], None)
             ui.notify("The selected contract has no stored sessions.", type="warning")
             return
         self.refresh_session()

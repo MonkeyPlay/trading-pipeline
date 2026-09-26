@@ -133,7 +133,12 @@ Two pages:
   another contract or trading day, plot the candles with the pre-open reference levels and
   session VWAP drawn from the feature snapshot, and run a forecast for that session on
   demand. A forecast already stored for the day (from the dashboard or
-  `scripts/daily_forecast.py`) is shown straight away. The **Pre-open features** panel beside
+  `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v1`, or the
+  `nq_climatology_v2` baseline): per target the status, predicted label, full probability
+  distribution, the method that won the model selection, and the actual outcome with a
+  hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
+  is stored. The **Pre-open features** panel beside
   the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
   historical day — RTH** charts the regular session (09:30–16:00 ET) of the best-matching
   earlier day, with that day's own previous close, overnight range and VWAP; the dropdown
@@ -216,8 +221,11 @@ For each symbol in turn ([scripts/daily_forecast.py](scripts/daily_forecast.py))
 
 ### Both together
 
-[scripts/run_pipeline.sh](scripts/run_pipeline.sh) runs the collector then the forecast,
-logging to `logs/pipeline_run.log`. It is meant for cron, shortly before the 09:30 ET open:
+[scripts/run_pipeline.sh](scripts/run_pipeline.sh) starts the real-time streamer (unless one
+is already running), runs the collector and the analogue forecast, records the v2 outcomes of
+the last ten days (so the model trains on them), then runs the live v2 model forecast, which
+trains, waits for 09:29 ET and stores its forecast before 09:30. It logs to
+`logs/pipeline_run.log`. It is meant for cron, shortly before the 09:30 ET open:
 
 ```cron
 15 9 * * 1-5  /path/to/trading-pipeline/scripts/run_pipeline.sh
