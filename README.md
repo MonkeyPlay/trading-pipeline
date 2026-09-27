@@ -128,42 +128,42 @@ python -m dashboard.app
 
 Two pages:
 
-- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — three
-  selectors, in order: the **session day** (searchable, newest first), the **instrument**
-  with bars that day (ES, NQ, ...), and the **contract** holding it (the one the collector made
-  active that day first). It opens on NQ's newest session. The chart shows that day's regular
-  session with **15 minutes either side** - 09:15 to 16:15 ET, or to 13:15 on an early close -
-  and draws the extra minutes grey (candles, volume and background), with the pre-open
-  reference levels and session VWAP drawn from the feature snapshot. The **opening range**
-  (the first 15 minutes after the open) is a grey box over its bars, then its high and low
-  continue as **ORH** / **ORL** lines with the channel between them shaded for the rest of the
-  session (always from the 1-minute bars, whatever the timeframe; no box on the 30-minute
-  view, where one bar spans it). The **First hour forecast · 09:30–10:30** card below the chart
-  forecasts the first hour from pre-open data only ([forecaster/first_hour.py](forecaster/first_hour.py)):
-  the **first-hour range** in points from whichever of three estimators - the median of the 20
-  closest pre-open matches, a ridge regression on the pre-open volatility inputs, or the usual
-  range of the last 40 sessions - has had the smallest error on the earlier sessions, with a
-  likely band that held half of them; the 15-minute opening range; and how often the opening
-  range breaks by 10:30 and on which side, as the usual rates (the side has shown no skill).
-  An orange fan on the chart (median, 25–75 % and 10–90 % of the matches' paths, from the last
-  pre-open price, widened by a walk-forward calibration so its bands held 80 % / 50 % of the
-  10:29 closes) spans 09:30–10:30, so the real candles draw over it; once the day's first hour
-  is stored the card shows the actual range and break. `first-hour-backtest` scores it all
-  on your data. Run a forecast for that session on demand: the card shows
-  the bias, how the 10 matched sessions' first hour went (up / flat / down) and each match's
-  own first-hour move. A forecast already stored for the day (from the dashboard or
-  `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v6`, or the
-  `nq_climatology_v6` baseline): per target the status, predicted label, full probability
-  distribution, the method that won the model selection, and the actual outcome with a
-  hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
-  is stored. The **Pre-open features** panel beside
-  the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
-  historical day — RTH** charts the same window of the best-matching earlier day (its regular
-  session with the grey 15 minutes either side and its own opening range), with that day's own
-  previous close, overnight range and VWAP, and beside it that day's **Pre-open features**, computed exactly as for the
-  selected day; the dropdown switches to the other matches. A matched day is drawn from the closest contract expiring on
-  or after it (an August day comes from September even when the page shows December).
+- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
+  around the first hour. Three selectors, in order: the **session day** (searchable, newest
+  first), the **instrument** with bars that day (ES, NQ, ...), and the **contract** holding it
+  (the one the collector made active that day first). It opens on NQ's newest session.
+  - **Chart:** the day's regular session with **15 minutes either side** is loaded - 09:15 to
+    16:15 ET, or to 13:15 on an early close - and a new day opens on **09:15-10:45**; **Fit**
+    shows the whole window, and a timeframe change keeps the window being looked at. The
+    extra minutes are drawn grey (candles, volume, background). Pre-open reference levels and
+    the session VWAP come from the feature snapshot. The **opening range** (the first 15
+    minutes) is a grey box over its bars, then **ORH** / **ORL** lines with the channel between
+    them shaded (from the 1-minute bars at any timeframe; no box at 30 minutes).
+  - **Matching historical day, overlaid:** the dropdown above the chart offers the 10 closest
+    pre-open matches; the chosen one is drawn on the same chart as **desaturated candles**,
+    shifted to the same minutes from the open and scaled so its 09:29 close sits on the
+    selected day's - its moves in percent from where the selected day stood before the open.
+    Its bars come from the contract that was trading that day. The **Pre-open features** panel
+    shows each figure for the selected day with the match's value beneath it.
+  - **First hour forecast · 09:30–10:30** ([forecaster/first_hour.py](forecaster/first_hour.py)),
+    from pre-open data only: the **first-hour range** in points from whichever of three
+    estimators - the median of the 20 closest pre-open matches, a ridge regression on the
+    pre-open volatility inputs, or the usual range of the last 40 sessions - has had the
+    smallest error on the earlier sessions, with a likely band that held half of them; the
+    15-minute opening range; and how often the opening range breaks by 10:30 and on which side,
+    as the usual rates (the side has shown no skill). An orange fan on the chart (median, 25–75 %
+    and 10–90 % of the matches' paths, from the last pre-open price, widened by a walk-forward
+    calibration so its bands held 80 % / 50 % of the 10:29 closes) spans 09:30–10:30. Once the
+    first hour is stored the card shows the actual range and break.
+  - **Model forecast:** the trained model's run for the day (`nq_sklearn_v6`, or the
+    `nq_climatology_v6` baseline) - the targets decided between 09:30 and 10:30, each with its
+    status, predicted label, full probability distribution, the method that won the model
+    selection, and the outcome with a hit/miss mark once labelled. **Run model** computes one
+    from the stored bars if none is stored.
+  - **Opening scenario generator:** the analogue forecast of the first hour (bias, how the 10
+    matched sessions' first hour went, each match's own move); one stored for the day (by
+    `scenario-backfill`, `scripts/daily_forecast.py` or **Generate forecast**) is shown straight
+    away.
   Beside the selectors, **Database coverage by week** is a small map of what is stored: one
   cell per instrument and week, green when every scheduled trading day is complete, then
   light green (≥ 90 %), yellow (≥ 50 %), orange (> 0 %) and red (nothing), from the
@@ -473,6 +473,8 @@ python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
 python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
 python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the 09:30-10:30 forecast: range estimators, breaks, fan calibration (writes nothing)
+python scripts/nq_forecast_v2.py scenario-backfill --start 2025-09-01 --end 2026-09-25 # store the opening scenario generator's forecasts, walk-forward
+python scripts/nq_forecast_v2.py scenario-backtest                              # walk-forward score of the generator on the first hour (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 

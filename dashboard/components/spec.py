@@ -222,10 +222,17 @@ def build_chart_spec(
     fit: bool = False,
     opening_range: Optional[Dict[str, Any]] = None,
     fan: Optional[Dict[str, Any]] = None,
+    overlay: Optional[pd.DataFrame] = None,
+    visible_range: Optional[Sequence[Any]] = None,
+    keep_view: bool = False,
 ) -> Dict[str, Any]:
     """
     Assembles the full chart spec for one session. Rows with a true ``muted``
-    column are drawn grey on a shaded background (``shades``).
+    column are drawn grey on a shaded background (``shades``). ``overlay`` (bars
+    with ``timestamp_ny`` and OHLC) is drawn as a second, desaturated candle
+    series beneath the session's. ``visible_range`` ((start, end) timestamps)
+    is the window shown instead of fitting everything; ``keep_view`` keeps the
+    window currently shown across the new data (a timeframe change).
     """
     if df is None or df.empty:
         return {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": [], "shades": []}
@@ -270,7 +277,7 @@ def build_chart_spec(
             bands.update(drawn["bands"])
             legend.extend(drawn["legend"])
 
-    return {
+    spec = {
         "candles": candle_points(df),
         "volume": volume_points(df),
         "series": series,
@@ -278,8 +285,15 @@ def build_chart_spec(
         "legend": legend,
         "shades": shade_ranges(df),
         "shade_color": MUTED_BACKGROUND,
+        "overlay_candles": candle_points(overlay.drop(columns=["muted"], errors="ignore"))
+        if overlay is not None and not overlay.empty else [],
         "fit": fit,
+        "keep_view": keep_view,
     }
+    if visible_range is not None:
+        start, end = to_epoch(pd.DatetimeIndex([pd.Timestamp(t) for t in visible_range]))
+        spec["visible_range"] = {"from": int(start), "to": int(end)}
+    return spec
 
 
 def build_accuracy_spec(dates: Sequence[str], accuracy: Sequence[float]) -> Dict[str, Any]:

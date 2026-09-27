@@ -309,3 +309,50 @@ def test_first_hours_from_one_query(market):
     hour = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.rth_open_at + timedelta(hours=1))]
     assert h.open == pytest.approx(hour["open"].iloc[0]) and h.close == pytest.approx(hour["close"].iloc[-1])
     assert h.high == pytest.approx(hour["high"].max()) and h.low == pytest.approx(hour["low"].min())
+
+
+def test_overlay_is_placed_on_the_selected_day_from_its_09_29_close():
+    from dashboard.views.candles import overlay_bars
+    ny = "America/New_York"
+    bars = pd.DataFrame({"timestamp_ny": pd.to_datetime(["2026-01-05 09:29", "2026-01-05 09:30", "2026-01-05 10:00"])
+                         .tz_localize(ny), "open": [100.0, 100.0, 110.0], "high": [101.0, 102.0, 112.0],
+                         "low": [99.0, 98.0, 108.0], "close": [100.0, 101.0, 111.0], "muted": [True, False, False]})
+    # a winter match overlaid on a summer day: the open maps to the open, whatever the UTC offset
+    out = overlay_bars({"bars": bars, "close_0929": 100.0}, "2026-01-05", "2026-06-10", anchor=20000.0)
+    assert [t.strftime("%Y-%m-%d %H:%M") for t in out["timestamp_ny"].dt.tz_convert(ny)] == [
+        "2026-06-10 09:29", "2026-06-10 09:30", "2026-06-10 10:00"]
+    assert out["close"].tolist() == [20000.0, 20200.0, 22200.0]          # moves in percent from 09:29
+    assert out["high"].iloc[2] == 22400.0 and "muted" not in out.columns
+    assert overlay_bars({"bars": bars, "close_0929": None}, "2026-01-05", "2026-06-10", 20000.0) is None
+    assert overlay_bars(None, "2026-01-05", "2026-06-10", 20000.0) is None
+
+
+def test_default_view_and_overlay_in_the_spec():
+    from dashboard.components.spec import build_chart_spec
+    idx = pd.date_range("2026-06-10 09:15", "2026-06-10 16:14", freq="1min", tz="America/New_York")
+    df = pd.DataFrame({"timestamp_ny": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
+    epoch = lambda hhmm: int(pd.Timestamp(f"2026-06-10 {hhmm}").value // 10 ** 9)
+    spec = build_chart_spec(df, visible_range=(idx[0], pd.Timestamp("2026-06-10 10:45", tz="America/New_York")),
+                            overlay=df.head(3))
+    assert spec["visible_range"] == {"from": epoch("09:15"), "to": epoch("10:45")}
+    assert spec["fit"] is False and spec["keep_view"] is False
+    assert [p["time"] for p in spec["overlay_candles"]] == [epoch("09:15"), epoch("09:16"), epoch("09:17")]
+    kept = build_chart_spec(df, keep_view=True)
+    assert "visible_range" not in kept and kept["keep_view"] is True and kept["overlay_candles"] == []
+
+
+def test_scenario_backfill_stores_walk_forward(market):
+    conn, _, sessions = market
+    from database.queries import get_analogue_matches
+    from forecaster import analogue
+    from forecaster.client import MODEL_VERSION
+    days = [s.session_date.isoformat() for s in sessions]
+    log = []
+    counts = analogue.backfill(conn, days[0], days[-1], log=log.append)
+    assert counts["stored"] >= 3 and counts["stored"] + counts["unavailable"] + counts["skipped"] == len(days)
+    last = get_day_prediction(conn, "NQ", days[-1], NQ_CID)
+    assert last["model_version"] == MODEL_VERSION
+    matches = [str(m["match_date"]) for m in get_analogue_matches(conn, last["prediction_id"])]
+    assert matches and all(d < days[-1] for d in matches)            # earlier sessions only
+    again = analogue.backfill(conn, days[0], days[-1], log=log.append)
+    assert again["stored"] == 0 and again["skipped"] == counts["stored"]

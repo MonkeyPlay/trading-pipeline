@@ -12,6 +12,8 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py first-hour-backtest
+    python scripts/nq_forecast_v2.py scenario-backfill --start 2025-09-01 --end 2026-09-25
+    python scripts/nq_forecast_v2.py scenario-backtest
 
 Forecasts come from the trained scikit-learn model (nq_sklearn_v6, the default)
 or the climatology baseline (nq_climatology_v6); ``--model`` takes one or a
@@ -49,7 +51,7 @@ from features import calendar as cal
 from features import catalogue as catv2
 from features.market_data import DbMarketData
 from features.nq_v2 import SnapshotError, build_snapshot
-from forecaster import first_hour, label_study, labels_v2, metric_study, models_v2, scoring_v2
+from forecaster import analogue, first_hour, label_study, labels_v2, metric_study, models_v2, scoring_v2
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("nq_forecast_v2")
@@ -351,6 +353,20 @@ def cmd_first_hour_backtest(conn, md, args):
     return 0
 
 
+def cmd_scenario_backfill(conn, md, args):
+    """Stores the opening scenario generator's forecast for every NQ session in the range, walk-forward."""
+    counts = analogue.backfill(conn, args.start, args.end, force=args.force, log=logger.info)
+    logger.info(f"Scenario forecasts: {counts['stored']} stored, {counts['skipped']} already stored, "
+                f"{counts['unavailable']} not possible.")
+    return 0
+
+
+def cmd_scenario_backtest(conn, md, args):
+    """Replays the opening scenario generator walk-forward and scores it on the first hour. Writes nothing."""
+    print(analogue.format_backtest(analogue.backtest(conn, k=args.k, min_history=args.min_history)))
+    return 0
+
+
 def cmd_evaluate(conn, md, args):
     """
     Per model, target and data mode: issued / abstained / unavailable counts,
@@ -454,13 +470,21 @@ def main(argv=None):
                                                    "pre-open matches (writes nothing)")
     p.add_argument("--k", type=int, default=first_hour.K, help="Pre-open matches per forecast")
     p.add_argument("--min-history", type=int, default=60, help="Earlier sessions needed before a session is scored")
+    p = sub.add_parser("scenario-backfill", help="Store the opening scenario generator's forecasts, walk-forward")
+    dates(p, single=False)
+    p.add_argument("--force", action="store_true", help="Store again where this model version already has one")
+    p = sub.add_parser("scenario-backtest", help="Walk-forward score of the opening scenario generator "
+                                                 "(writes nothing)")
+    p.add_argument("--k", type=int, default=analogue.K, help="Analogues per forecast")
+    p.add_argument("--min-history", type=int, default=60, help="Earlier sessions needed before a session is scored")
     sub.add_parser("register", help="Register definitions only")
 
     args = parser.parse_args(argv)
     if args.command in ("snapshot", "forecast"):
         if not args.date and not (args.start and args.end):
             parser.error("give --date, or --start and --end")
-    if args.command in ("outcomes", "backfill", "label-study", "metric-study") and not (args.start and args.end):
+    if args.command in ("outcomes", "backfill", "label-study", "metric-study", "scenario-backfill") \
+            and not (args.start and args.end):
         parser.error("give --start and --end")
     if args.command == "backfill":
         args.date = None
@@ -476,6 +500,7 @@ def main(argv=None):
                    "backfill": cmd_backfill, "train": cmd_train, "live": cmd_live, "evaluate": cmd_evaluate,
                    "label-study": cmd_label_study, "metric-study": cmd_metric_study,
                    "first-hour-backtest": cmd_first_hour_backtest,
+                   "scenario-backfill": cmd_scenario_backfill, "scenario-backtest": cmd_scenario_backtest,
                    "register": lambda *a: 0}[args.command]
         return handler(conn, md, args)
     finally:

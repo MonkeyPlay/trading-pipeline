@@ -389,6 +389,19 @@ export default {
     // an empty candlestick series still tries to draw a last-value label and
     // throws when it has no value to show.
     if (this.show_candles) {
+      // A second, desaturated candle series for an overlaid session (the matching
+      // historical day). Created first, so the main candles draw on top of it.
+      this.overlay = this.chart.addSeries(lwc.CandlestickSeries, {
+        upColor: "rgba(128, 170, 164, 0.45)",
+        downColor: "rgba(186, 140, 140, 0.45)",
+        wickUpColor: "rgba(128, 170, 164, 0.45)",
+        wickDownColor: "rgba(186, 140, 140, 0.45)",
+        borderVisible: false,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        priceFormat: { type: "price", precision: 2, minMove: 0.25 },
+      });
+      this.overlayPoints = null;
       this.candles = this.chart.addSeries(lwc.CandlestickSeries, {
         upColor: "#26a69a",
         downColor: "#ef5350",
@@ -412,9 +425,10 @@ export default {
 
     this.chart.subscribeCrosshairMove(this.onCrosshair);
     this.refitUntil = 0;
+    this.pendingRange = null;
     this.resizeObserver = new ResizeObserver(() => {
       if (performance.now() < this.refitUntil) {
-        requestAnimationFrame(() => this.chart && this.chart.timeScale().fitContent());
+        requestAnimationFrame(() => this.frame());
       }
     });
     this.resizeObserver.observe(this.$refs.chart);
@@ -438,6 +452,27 @@ export default {
       panes[1].setStretchFactor(volume);
     },
 
+    /** Frames the chart: the pending visible range when one was asked for, else everything. */
+    frame() {
+      if (!this.chart) return;
+      if (this.pendingRange) {
+        try {
+          this.chart.timeScale().setVisibleRange(this.pendingRange);
+        } catch (e) {
+          this.chart.timeScale().fitContent();
+        }
+      } else {
+        this.chart.timeScale().fitContent();
+      }
+    },
+
+    /** Shows all the data (the Fit button). */
+    fit() {
+      if (!this.chart) return;
+      this.pendingRange = null;
+      this.chart.timeScale().fitContent();
+    },
+
     /** Reconciles the whole chart against a desired-state spec. */
     apply(spec) {
       if (!this.chart) return;
@@ -449,6 +484,9 @@ export default {
 
       const hadData =
         (this.candlePoints && this.candlePoints.length) || Object.keys(this.series).length;
+      // The time window being looked at, to restore after the data is swapped
+      // (another timeframe has other bars, so the bar-index viewport would jump).
+      const keptRange = spec.keep_view && hadData ? this.chart.timeScale().getVisibleRange() : null;
 
       if (spec.candles && this.candles) {
         applyData(this.candles, this.candlePoints, spec.candles);
@@ -458,6 +496,13 @@ export default {
         applyData(this.volume, this.volumePoints, spec.volume);
         this.volumePoints = spec.volume;
       }
+      if (this.overlay) {
+        const overlay = spec.overlay_candles || [];
+        if (JSON.stringify(overlay) !== JSON.stringify(this.overlayPoints || [])) {
+          this.overlay.setData(overlay);
+        }
+        this.overlayPoints = overlay;
+      }
 
       this.reconcileSeries(spec.series || {});
       this.reconcileBands(spec.bands || {});
@@ -466,10 +511,19 @@ export default {
       this.legendSpec = spec.legend || [];
       this.legend = this.legendSpec.map((item) => ({ ...item, value: null }));
 
-      // Frame the data the first time it arrives; afterwards leave the user's
-      // viewport alone, which is the whole point of reconciling in place.
-      if (!hadData || spec.fit) {
-        this.chart.timeScale().fitContent();
+      // Frame the data: a requested time window, else the window being looked
+      // at, else everything the first time data arrives (or on request). Otherwise
+      // leave the user's viewport alone - the point of reconciling in place.
+      if (spec.visible_range) {
+        this.pendingRange = spec.visible_range;
+        this.frame();
+        this.refitUntil = performance.now() + 1500;
+      } else if (keptRange) {
+        this.pendingRange = keptRange;
+        this.frame();
+      } else if (!hadData || spec.fit) {
+        this.pendingRange = null;
+        this.frame();
         // A chart that has only just been laid out may still be growing to its
         // final width; resizing keeps the bar spacing, which would leave the
         // fitted data bunched at the right. Refit on resizes shortly after.
