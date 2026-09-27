@@ -1390,40 +1390,6 @@ def get_predictions_by_snapshot(conn: Database, snapshot_id: int) -> List[Row]:
         raise
 
 
-def get_evaluations(conn: Database) -> List[Row]:
-    """
-    Joins predictions to their realized outcomes for the same contract and
-    session date. Used by the evaluation dashboard.
-    """
-    query = """
-    SELECT
-        p.prediction_id,
-        p.contract_id,
-        p.model_version,
-        p.forecast_cutoff AS forecast_cutoff,
-        p.opening_bias    AS predicted_bias,
-        p.probabilities   AS probabilities,
-        o.session_date    AS session_date,
-        o.rth_high, o.rth_low, o.rth_close,
-        o.first_15_minute_high, o.first_15_minute_low,
-        o.raw_outcomes    AS raw_outcomes
-    FROM predictions p
-    INNER JOIN outcomes o
-        ON o.contract_id = p.contract_id
-       AND o.session_date = (p.forecast_cutoff AT TIME ZONE 'America/New_York')::date
-    ORDER BY p.forecast_cutoff DESC;
-    """
-    try:
-        return conn.execute(query).fetchall()
-    except Error as e:
-        logger.error(f"Failed to load evaluations: {e}")
-        raise
-
-
-# ==========================================
-# 6. OUTCOMES TABLE HANDLERS
-# ==========================================
-
 def save_outcome(
     conn: Database,
     contract_id: int,

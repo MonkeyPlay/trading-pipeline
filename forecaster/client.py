@@ -121,7 +121,7 @@ class ForecastClient:
             }
 
         probabilities = {
-            # Keys kept from v1 for the stored rows and the evaluation page.
+            # Keys kept from v1 for the stored rows.
             "bullish_continuation_pct": up_pct,
             "mean_reversion_gap_fill_pct": flat_pct,
             "bearish_rejection_pct": down_pct,

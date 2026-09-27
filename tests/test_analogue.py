@@ -132,3 +132,26 @@ def test_nq_with_too_few_stored_snapshots_falls_back(monkeypatch):
     found = an.find_analogues(None, "NQ", "2026-02-02", dict(hist[2], trading_day="2026-02-02"), hist, k=3)
     assert found["scale_name"] == "daily σ" and found["pool"] == 5
     assert found["analogues"][0]["match_date"] == "2026-01-03"
+
+
+def test_scenario_backtest_scores_the_first_hour(monkeypatch):
+    import numpy as np
+    from forecaster import first_hour as fh
+    days = [f"2026-{m:02d}-{d:02d}" for m in (1, 2, 3) for d in range(1, 29)]
+    rng = np.random.default_rng(4)
+    hours, snaps = {}, []
+    for day in days:
+        x = float(rng.normal())
+        move = 30.0 * x + float(rng.normal(0, 5))                     # the first hour follows the input
+        hours[day] = fh.FirstHour(session_date=day, open=100.0, or_high=101, or_low=99, high=101, low=99,
+                                  close=100.0 + move, path=np.zeros(60), or_width=2, width=2, first_break="none",
+                                  break_minute=None)
+        snaps.append({"session_date": day, "features": {k: x for k in an.MATCH_FEATURES},
+                      "reference_values": {"A": 100.0}})
+    monkeypatch.setattr(fh, "load_first_hours", lambda conn, symbol: hours)
+    monkeypatch.setattr(an.store, "snapshots_before", lambda conn, before, fv, symbol: snaps)
+    r = an.backtest(None, "NQ", k=10, min_history=40)
+    assert r["sessions"] == len(days) - 40
+    assert r["probabilities"]["gain"] > 2 * r["probabilities"]["gain_se"]   # a real signal is found
+    assert r["hit_rate"] > r["base_hit_rate"]
+    assert "hit rate" in an.format_backtest(r)

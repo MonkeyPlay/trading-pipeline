@@ -53,3 +53,7 @@ class LightweightChart(
         # or a chart not yet mounted when this runs) draws the latest state.
         self._props["initial_spec"] = spec
         self.run_method("apply", spec)
+
+    def fit(self) -> None:
+        """Shows all the data (e.g. a Fit button); the next apply() without a range keeps it."""
+        self.run_method("fit")

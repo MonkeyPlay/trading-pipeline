@@ -200,6 +200,7 @@ def forecast(day: str, ranked_dates: List[str], hours: Dict[str, FirstHour], anc
 
 MIN_CALIBRATION = 30     # earlier scored sessions before the calibration replaces the defaults
 REFIT_EVERY = 5
+SHOWN_MATCHES = 10       # pre-open matches offered for overlay on the chart
 RANGE_METHODS = ("matches", "regression", "usual")
 RANGE_LABELS = {"matches": "median of the pre-open matches",
                 "regression": "ridge regression on the pre-open volatility inputs",
@@ -343,7 +344,8 @@ def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=N
             history: Optional[Dict[str, Any]] = None, k: int = K) -> Dict[str, Any]:
     """
     The first-hour forecast for the dashboard: ``{'forecast', 'range', 'fan',
-    'breaks', 'calibration', 'actual', 'method', 'pool'}``. ``history`` is
+    'breaks', 'calibration', 'actual', 'method', 'pool', 'matches'}`` - the last
+    the SHOWN_MATCHES closest pre-open matches with a first hour, closest first. ``history`` is
     ``load_history(conn, symbol)``, loaded once per symbol. ``forecast`` is None
     when too few matches have a first hour.
     """
@@ -360,8 +362,12 @@ def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=N
         prev, gap = finite(target_v1.get("previous_rth_close")), finite(target_v1.get("gap"))
         anchor = prev + gap if prev is not None and gap is not None else prev
     fc = forecast(day, [r["session_date"] for r in found["ranked"]], hours, anchor, k)
+    matches = [{"match_date": r["session_date"], "similarity_score": r["similarity_score"],
+                "distance": r["distance"], "ranking": i + 1}
+               for i, r in enumerate([r for r in found["ranked"] if r["session_date"] < day
+                                      and r["session_date"] in hours][:SHOWN_MATCHES])]
     out = {"forecast": fc, "actual": hours.get(day), "method": found["method"], "pool": found["pool"],
-           "calibration": None, "range": None, "fan": None, "breaks": None}
+           "calibration": None, "range": None, "fan": None, "breaks": None, "matches": matches}
     if fc is None:
         return out
     cal_ = calibration(history["records"], day)
