@@ -93,11 +93,13 @@ def test_backtest_walks_forward(monkeypatch):
     monkeypatch.setattr(fh.store, "snapshots_before", lambda conn, before, fv, symbol: snaps)
     r = fh.backtest(None, "NQ", k=20, min_history=40)
     assert r["sessions"] == len(days) - 40
-    # the range follows the matched pre-open volatility, so the forecast beats the naive median
-    assert r["range"]["gain"] > 2 * r["range"]["gain_se"]
+    # the range follows the pre-open volatility, so both estimators beat the usual range
+    for key in ("range_matches", "range_regression"):
+        assert r[key]["gain"] > 2 * r[key]["gain_se"]
     # the side is random here: no gain beyond noise
     assert abs(r["first_break"]["gain"]) < 3 * r["first_break"]["gain_se"] + 0.02
-    assert "first-hour range" in fh.format_backtest(r)
+    text = fh.format_backtest(r)
+    assert "regression" in text and "calibrated" in text
 
 
 def test_fan_series_on_the_chart():
@@ -116,3 +118,34 @@ def test_fan_series_on_the_chart():
 def test_a_first_hour_that_never_moved_is_not_a_session():
     # placeholder bars: 60 identical prices (the backtest used to divide by its zero range)
     assert fh.first_hour(_bars([100.0] * 60, [100.0] * 60, [100.0] * 60), OPEN, "d") is None
+
+
+
+def _record(day, actual, matches, regression, usual, z80, z50):
+    return {"day": day, "actual": actual, "estimates": {"matches": matches, "regression": regression, "usual": usual},
+            "z80": z80, "z50": z50, "first_break": "above", "p_matches": {}, "p_base": {}}
+
+
+def test_calibration_uses_earlier_sessions_only():
+    recs = [_record(f"2026-01-{i + 1:02d}", 1.0, 1.5, 1.05, 1.2, z80=1.0 + i / 100, z50=0.5 + i / 100)
+            for i in range(fh.MIN_CALIBRATION + 5)]
+    assert fh.calibration(recs, "2026-01-10")["method"] == "matches"       # too few earlier: defaults
+    assert fh.calibration(recs, "2026-01-10")["fan80"] == 1.0
+    c = fh.calibration(recs, "2026-12-31")
+    assert c["n"] == len(recs) and c["method"] == "regression"             # smallest error: |log 1/1.05|
+    assert c["band50"] == pytest.approx(abs(np.log(1 / 1.05)))
+    z80 = np.array([r["z80"] for r in recs])
+    assert c["fan80"] == pytest.approx(np.quantile(z80, 0.8))
+    # a later session never enters an earlier day's calibration
+    later = recs + [_record("2027-01-01", 1.0, 1.0, 9.0, 9.0, 99.0, 99.0)]
+    assert fh.calibration(later, "2026-12-31") == c
+
+
+def test_calibrated_fan_and_side_residuals():
+    fan = {10: np.array([-2.0]), 25: np.array([-1.0]), 50: np.array([0.0]), 75: np.array([0.5]), 90: np.array([1.0])}
+    wide = fh.calibrated_fan(fan, 2.0, 1.5)
+    assert (wide[10][0], wide[25][0], wide[50][0], wide[75][0], wide[90][0]) == (-4.0, -1.5, 0.0, 0.75, 2.0)
+    ends = {q: v[0] for q, v in fan.items()}
+    assert fh._z(0.5, ends, 10, 90) == pytest.approx(0.5)            # above the median: the upper half counts
+    assert fh._z(-1.0, ends, 10, 90) == pytest.approx(0.5)           # below: the lower half
+    assert fh._z(1.0, ends, 25, 75) == pytest.approx(2.0)

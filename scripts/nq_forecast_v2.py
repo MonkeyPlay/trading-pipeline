@@ -13,8 +13,8 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py first-hour-backtest
 
-Forecasts come from the trained scikit-learn model (nq_sklearn_v5, the default)
-or the climatology baseline (nq_climatology_v5); ``--model`` takes one or a
+Forecasts come from the trained scikit-learn model (nq_sklearn_v6, the default)
+or the climatology baseline (nq_climatology_v6); ``--model`` takes one or a
 comma-separated list. No language model or external API is called.
 
 Every command registers the feature, label and model definitions first; a

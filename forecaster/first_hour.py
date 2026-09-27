@@ -22,9 +22,15 @@ inputs and the gap) - specifically from how *their* first hour went:
                      (percent from their open), minute by minute, anchored at
                      today's pre-open price
 
-``backtest`` replays this on every stored NQ session with only earlier sessions
-and scores the range against the naive guess and the break probabilities
-against the base rates.
+The range has three estimators - the matches' median, a ridge regression of
+the log range on the pre-open volatility inputs (models_v2.VOL_FEATURES), and
+the usual range - and ``backtest_records`` replays all three walk-forward on
+every stored NQ session, with the fan and the break probabilities. For a day,
+``calibration`` reads only the records of earlier sessions: the range
+estimator with the smallest error so far, its likely band from its own past
+errors (so the band holds what it says), and how much to widen the fan so its
+10-90 % and 25-75 % bands held 80 % and 50 % of the 10:29 closes. Which side
+breaks has shown no skill, so the dashboard shows the base rates for it.
 
 Every session's first hour comes from one query (``opening_window_bars``), on
 the contract that was trading that day.
@@ -192,17 +198,160 @@ def forecast(day: str, ranked_dates: List[str], hours: Dict[str, FirstHour], anc
     }
 
 
-def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=None,
-            hours: Optional[Dict[str, FirstHour]] = None, k: int = K) -> Dict[str, Any]:
+MIN_CALIBRATION = 30     # earlier scored sessions before the calibration replaces the defaults
+REFIT_EVERY = 5
+RANGE_METHODS = ("matches", "regression", "usual")
+RANGE_LABELS = {"matches": "median of the pre-open matches",
+                "regression": "ridge regression on the pre-open volatility inputs",
+                "usual": "median of the last 40 sessions"}
+
+
+# --------------------------------------------------------------------------
+# Walk-forward records
+# --------------------------------------------------------------------------
+
+def _vol_row(features: Dict[str, Any]) -> List[float]:
+    from forecaster.models_v2 import VOL_FEATURES
+    return [np.nan if (v := finite(features.get(k))) is None else v for k in VOL_FEATURES]
+
+
+def _ridge():
+    from sklearn.linear_model import RidgeCV
+    from forecaster.metric_study import RIDGE_ALPHAS, _vol_pipeline
+    return _vol_pipeline(RidgeCV(alphas=RIDGE_ALPHAS))
+
+
+def _fit_ridge(rows: List[List[float]], widths: List[float]):
+    import warnings
+    pipe = _ridge()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pipe.fit(np.asarray(rows, dtype=float), np.log(np.asarray(widths, dtype=float)))
+    return pipe
+
+
+def _predict_ridge(pipe, row: List[float]) -> float:
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return float(np.exp(pipe.predict(np.asarray([row], dtype=float))[0]))
+
+
+def load_history(conn, symbol: str = "NQ", k: int = K, min_history: int = 60) -> Dict[str, Any]:
     """
-    The first-hour forecast for the dashboard: ``{'forecast', 'actual', 'method',
-    'pool'}``. ``forecast`` is None when too few matches have a first hour;
-    ``actual`` is the day's own first hour once it is stored.
+    Everything the first-hour forecast needs for ``symbol``, loaded once:
+    ``{'hours', 'snaps', 'records'}`` - every session's first hour, the stored
+    point-in-time snapshots, and the walk-forward records (``backtest_records``).
+    """
+    hours = load_first_hours(conn, symbol)
+    snaps = store.snapshots_before(conn, "9999-12-31", catv2.FEATURE_VERSION, symbol)
+    return {"hours": hours, "snaps": snaps, "records": backtest_records(hours, snaps, k, min_history)}
+
+
+def _z(end: float, fan_end: Dict[int, float], lo: int, hi: int) -> float:
+    """How far ``end`` lies from the fan's median, in units of the band's half on
+    its side (<= 1: inside the lo-hi band) - the unit ``calibrated_fan`` scales."""
+    med = fan_end[50]
+    half = fan_end[hi] - med if end >= med else med - fan_end[lo]
+    if half > 0:
+        return abs(end - med) / half
+    return 0.0 if end == med else math.inf
+
+
+def backtest_records(hours: Dict[str, FirstHour], snaps: List[Dict[str, Any]], k: int = K,
+                     min_history: int = 60) -> List[Dict[str, Any]]:
+    """
+    The forecast replayed on every snapshot whose session has a first hour and
+    at least ``min_history`` earlier such sessions, from earlier sessions only.
+    Each record: 'day', 'actual' (first-hour width, % of the open), the three
+    range estimates, 'z80' / 'z50' (the 10:29 close's distance from the fan's
+    median in units of its 10-90 % / 25-75 % band's half on that side), and the break outcome
+    with its matched and base-rate probabilities.
+    """
+    from forecaster.analogue import MATCH_FEATURES, MIN_V2_DIMS, _v2_vector
+    from matching.normalizer import rank_analogues
+
+    usable = [s for s in snaps if s["session_date"] in hours]
+    records: List[Dict[str, Any]] = []
+    pipe, since_fit = None, REFIT_EVERY
+    for i, snap in enumerate(usable):
+        day = snap["session_date"]
+        earlier = usable[:i]
+        if len(earlier) < min_history:
+            continue
+        actual = hours[day]
+        cands = [{"session_date": s["session_date"], "vector": _v2_vector(s["features"])} for s in earlier]
+        ranked = rank_analogues(_v2_vector(snap["features"]), cands, MATCH_FEATURES, MIN_V2_DIMS)
+        fc = forecast(day, [r["session_date"] for r in ranked], hours, None, k)
+        if fc is None or not fc["naive_width_pct"] or not fc["width_pct"][50] > 0:
+            continue
+        if pipe is None or since_fit >= REFIT_EVERY:
+            pipe = _fit_ridge([_vol_row(s["features"]) for s in earlier],
+                              [hours[s["session_date"]].width for s in earlier])
+            since_fit = 0
+        since_fit += 1
+        end = actual.path[-1]
+        fan_end = {q: v[-1] for q, v in fc["fan_pct"].items()}
+        records.append({
+            "day": day, "actual": actual.width,
+            "estimates": {"matches": fc["width_pct"][50], "regression": _predict_ridge(pipe, _vol_row(snap["features"])),
+                          "usual": fc["naive_width_pct"]},
+            "z80": _z(end, fan_end, 10, 90), "z50": _z(end, fan_end, 25, 75),
+            "first_break": actual.first_break, "p_matches": fc["first_break"], "p_base": fc["base_rates"],
+        })
+    return records
+
+
+def calibration(records: List[Dict[str, Any]], day: str) -> Dict[str, Any]:
+    """
+    From the records of sessions before ``day`` only: the range estimator with
+    the smallest mean |log error| ('method'), its 50 % and 80 % error quantiles
+    ('band50', 'band80': the likely band is estimate x exp(+/- band)), each
+    method's mean error ('errors'), and the fan widening factors ('fan80',
+    'fan50'). Defaults (the matches, no widening, bands None) below
+    MIN_CALIBRATION earlier records.
+    """
+    earlier = [r for r in records if r["day"] < str(day)]
+    out = {"n": len(earlier), "method": "matches", "errors": {}, "band50": None, "band80": None,
+           "fan80": 1.0, "fan50": 1.0}
+    if len(earlier) < MIN_CALIBRATION:
+        return out
+    errs = {m: np.array([abs(math.log(r["actual"] / r["estimates"][m])) for r in earlier]) for m in RANGE_METHODS}
+    out["errors"] = {m: float(e.mean()) for m, e in errs.items()}
+    out["method"] = min(RANGE_METHODS, key=lambda m: (out["errors"][m], RANGE_METHODS.index(m)))
+    chosen = errs[out["method"]]
+    out["band50"], out["band80"] = float(np.quantile(chosen, 0.5)), float(np.quantile(chosen, 0.8))
+    z80 = np.array([r["z80"] for r in earlier])
+    z50 = np.array([r["z50"] for r in earlier])
+    out["fan80"] = float(np.quantile(z80[np.isfinite(z80)], 0.8)) if np.isfinite(z80).any() else 1.0
+    out["fan50"] = float(np.quantile(z50[np.isfinite(z50)], 0.5)) if np.isfinite(z50).any() else 1.0
+    return out
+
+
+def calibrated_fan(fan: Dict[int, np.ndarray], fan80: float, fan50: float) -> Dict[int, np.ndarray]:
+    """The fan's bands widened (or narrowed) around its median by the calibration factors."""
+    med = fan[50]
+    return {10: med + fan80 * (fan[10] - med), 25: med + fan50 * (fan[25] - med), 50: med,
+            75: med + fan50 * (fan[75] - med), 90: med + fan80 * (fan[90] - med)}
+
+
+# --------------------------------------------------------------------------
+# Dashboard
+# --------------------------------------------------------------------------
+
+def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=None,
+            history: Optional[Dict[str, Any]] = None, k: int = K) -> Dict[str, Any]:
+    """
+    The first-hour forecast for the dashboard: ``{'forecast', 'range', 'fan',
+    'breaks', 'calibration', 'actual', 'method', 'pool'}``. ``history`` is
+    ``load_history(conn, symbol)``, loaded once per symbol. ``forecast`` is None
+    when too few matches have a first hour.
     """
     from forecaster.analogue import rank_preopen
 
     day = str(day)
-    hours = load_first_hours(conn, symbol) if hours is None else hours
+    history = history or {"hours": load_first_hours(conn, symbol), "snaps": [], "records": []}
+    hours = history["hours"]
     found = rank_preopen(conn, symbol, day, target_v1, v1_history)
     anchor = None
     if found["target"] is not None:
@@ -211,7 +360,39 @@ def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=N
         prev, gap = finite(target_v1.get("previous_rth_close")), finite(target_v1.get("gap"))
         anchor = prev + gap if prev is not None and gap is not None else prev
     fc = forecast(day, [r["session_date"] for r in found["ranked"]], hours, anchor, k)
-    return {"forecast": fc, "actual": hours.get(day), "method": found["method"], "pool": found["pool"]}
+    out = {"forecast": fc, "actual": hours.get(day), "method": found["method"], "pool": found["pool"],
+           "calibration": None, "range": None, "fan": None, "breaks": None}
+    if fc is None:
+        return out
+    cal_ = calibration(history["records"], day)
+    out["calibration"] = cal_
+
+    # The range: the estimator that has done best on earlier sessions.
+    estimate = fc["width_pct"][50]
+    if cal_["method"] == "usual":
+        estimate = fc["naive_width_pct"]
+    elif cal_["method"] == "regression" and found["target"] is not None:
+        earlier = [s for s in history["snaps"] if s["session_date"] < day and s["session_date"] in hours]
+        if len(earlier) >= MIN_CALIBRATION:
+            pipe = _fit_ridge([_vol_row(s["features"]) for s in earlier], [hours[s["session_date"]].width for s in earlier])
+            estimate = _predict_ridge(pipe, _vol_row(found["target"]["features"]))
+    band = (lambda b, sign: estimate * math.exp(sign * b)) if cal_["band50"] is not None else None
+    to_pts = (lambda pct: pct / 100.0 * anchor) if anchor else (lambda pct: None)
+    out["range"] = {
+        "method": cal_["method"], "label": RANGE_LABELS[cal_["method"]], "estimate_pct": estimate,
+        "estimate_pts": to_pts(estimate),
+        "band50_pts": (to_pts(band(cal_["band50"], -1)), to_pts(band(cal_["band50"], 1))) if band else
+        (fc["width_pts"][25], fc["width_pts"][75]),
+        "band80_pts": (to_pts(band(cal_["band80"], -1)), to_pts(band(cal_["band80"], 1))) if band else
+        (fc["width_pts"][10], fc["width_pts"][90]),
+        "usual_pts": fc["naive_width_pts"], "errors": cal_["errors"], "calibrated": band is not None,
+    }
+    widened = calibrated_fan(fc["fan_pct"], cal_["fan80"], cal_["fan50"])
+    out["fan"] = {"pct": widened, "price": {q: anchor * (1 + v / 100.0) for q, v in widened.items()} if anchor else None,
+                  "fan80": cal_["fan80"], "fan50": cal_["fan50"], "calibrated": cal_["n"] >= MIN_CALIBRATION}
+    base = fc["base_rates"]
+    out["breaks"] = {"any": 1 - base["none"], "above": base["above"], "below": base["below"], "none": base["none"]}
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -227,64 +408,71 @@ def _summary(model: List[float], base: List[float]) -> Dict[str, float]:
             "gain_se": float(g.std(ddof=1) / math.sqrt(n)) if n > 1 else math.nan}
 
 
-def backtest(conn, symbol: str = "NQ", k: int = K, min_history: int = 60) -> Dict[str, Any]:
+def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Walk-forward over every stored point-in-time snapshot of ``symbol`` whose
-    session has a first hour and at least ``min_history`` earlier such sessions:
-    the forecast from earlier sessions only, scored against what happened.
+    The backtest from the walk-forward records:
 
-      range        |log(actual / forecast median)| vs the naive last-40 median (lower is better)
+      range        |log(actual / estimate)| of the matches' median and of the
+                   regression, each against the usual range (lower is better)
       first break  3-class log loss, matches (shrunk toward the base rates) vs the base rates
       breakout     2-class log loss of 'any break' vs 'none', same
-      fan          share of sessions whose 10:29 close lies inside the 10-90 % and 25-75 % bands
+      fan          share of sessions whose 10:29 close lies inside the 10-90 % and
+                   25-75 % bands, as built and after the walk-forward calibration
+                   (factors from earlier sessions only, from MIN_CALIBRATION on)
 
     Gains are base minus model: > 0 means the forecast beat the simple guess.
     """
-    from forecaster.analogue import MATCH_FEATURES, MIN_V2_DIMS, _v2_vector
-    from matching.normalizer import rank_analogues
+    def err(r, m):
+        return abs(math.log(r["actual"] / r["estimates"][m]))
 
-    hours = load_first_hours(conn, symbol)
-    snaps = store.snapshots_before(conn, "9999-12-31", catv2.FEATURE_VERSION, symbol)
-    width_m, width_b, brk_m, brk_b, any_m, any_b = [], [], [], [], [], []
-    in80 = in50 = 0
-    for i, snap in enumerate(snaps):
-        day = snap["session_date"]
-        actual = hours.get(day)
-        earlier = [s for s in snaps[:i] if s["session_date"] in hours]
-        if actual is None or len(earlier) < min_history:
+    brk_m = [-math.log(r["p_matches"][r["first_break"]]) for r in records]
+    brk_b = [-math.log(r["p_base"][r["first_break"]]) for r in records]
+    any_m, any_b = [], []
+    for r in records:
+        broke = r["first_break"] != "none"
+        for p, out in ((1 - r["p_matches"]["none"], any_m), (1 - r["p_base"]["none"], any_b)):
+            out.append(-math.log(p if broke else 1 - p))
+    cal80 = cal50 = n_cal = 0
+    for r in records:
+        c = calibration(records, r["day"])
+        if c["n"] < MIN_CALIBRATION:
             continue
-        cands = [{"session_date": s["session_date"], "vector": _v2_vector(s["features"])} for s in earlier]
-        ranked = rank_analogues(_v2_vector(snap["features"]), cands, MATCH_FEATURES, MIN_V2_DIMS)
-        fc = forecast(day, [r["session_date"] for r in ranked], hours, None, k)
-        if fc is None or not fc["naive_width_pct"] or not fc["width_pct"][50] > 0:
-            continue
-        width_m.append(abs(math.log(actual.width / fc["width_pct"][50])))
-        width_b.append(abs(math.log(actual.width / fc["naive_width_pct"])))
-        brk_m.append(-math.log(fc["first_break"][actual.first_break]))
-        brk_b.append(-math.log(fc["base_rates"][actual.first_break]))
-        broke = actual.first_break != "none"
-        p_m = 1 - fc["first_break"]["none"]
-        p_b = 1 - fc["base_rates"]["none"]
-        any_m.append(-math.log(p_m if broke else 1 - p_m))
-        any_b.append(-math.log(p_b if broke else 1 - p_b))
-        end = actual.path[-1]
-        in80 += fc["fan_pct"][10][-1] <= end <= fc["fan_pct"][90][-1]
-        in50 += fc["fan_pct"][25][-1] <= end <= fc["fan_pct"][75][-1]
-    n = len(width_m)
-    return {"sessions": n, "k": k, "range": _summary(width_m, width_b),
-            "first_break": _summary(brk_m, brk_b), "breakout": _summary(any_m, any_b),
-            "fan_80": in80 / n if n else math.nan, "fan_50": in50 / n if n else math.nan}
+        n_cal += 1
+        cal80 += r["z80"] <= c["fan80"]
+        cal50 += r["z50"] <= c["fan50"]
+    n = len(records)
+    return {
+        "sessions": n,
+        "range_matches": _summary([err(r, "matches") for r in records], [err(r, "usual") for r in records]),
+        "range_regression": _summary([err(r, "regression") for r in records], [err(r, "usual") for r in records]),
+        "first_break": _summary(brk_m, brk_b), "breakout": _summary(any_m, any_b),
+        "fan_80": sum(r["z80"] <= 1 for r in records) / n if n else math.nan,
+        "fan_50": sum(r["z50"] <= 1 for r in records) / n if n else math.nan,
+        "fan_80_calibrated": cal80 / n_cal if n_cal else math.nan,
+        "fan_50_calibrated": cal50 / n_cal if n_cal else math.nan, "calibrated_sessions": n_cal,
+    }
+
+
+def backtest(conn, symbol: str = "NQ", k: int = K, min_history: int = 60) -> Dict[str, Any]:
+    """``summarize`` of ``backtest_records`` for ``symbol``'s stored sessions."""
+    history = load_history(conn, symbol, k, min_history)
+    return {**summarize(history["records"]), "k": k}
 
 
 def format_backtest(r: Dict[str, Any]) -> str:
     lines = [f"First-hour forecast backtest: {r['sessions']} session(s), {r['k']} pre-open matches each, "
              f"only earlier sessions used. Gain = simple guess minus forecast (> 0: the forecast is better).", "",
-             f"{'':34} {'forecast':>9} {'simple':>9} {'gain ± SE':>20}"]
-    for key, label in (("range", "first-hour range, |log error|"), ("first_break", "first break, log loss (3-way)"),
+             f"{'':42} {'forecast':>9} {'simple':>9} {'gain ± SE':>20}"]
+    for key, label in (("range_matches", "range, |log error|: matches' median"),
+                       ("range_regression", "range, |log error|: regression"),
+                       ("first_break", "first break side, log loss (3-way)"),
                        ("breakout", "break vs none, log loss")):
         s = r[key]
-        verdict = "better" if s["gain"] > 2 * s["gain_se"] else "worse" if s["gain"] < -2 * s["gain_se"] else "no difference"
-        lines.append(f"{label:34} {s['model']:9.4f} {s['base']:9.4f} {s['gain']:+10.4f} ± {s['gain_se']:.4f}  {verdict}")
-    lines += ["", f"10:29 close inside the fan: 10-90 % band {r['fan_80'] * 100:.0f} % of sessions (ideal 80), "
-                  f"25-75 % band {r['fan_50'] * 100:.0f} % (ideal 50)."]
+        verdict = ("better" if s["gain"] > 2 * s["gain_se"] else "worse" if s["gain"] < -2 * s["gain_se"]
+                   else "no difference")
+        lines.append(f"{label:42} {s['model']:9.4f} {s['base']:9.4f} {s['gain']:+10.4f} ± {s['gain_se']:.4f}  {verdict}")
+    lines += ["", "10:29 close inside the fan (ideal 80 % / 50 %):",
+              f"  as built:   10-90 % band {r['fan_80'] * 100:.0f} %, 25-75 % band {r['fan_50'] * 100:.0f} %",
+              f"  calibrated: 10-90 % band {r['fan_80_calibrated'] * 100:.0f} %, 25-75 % band "
+              f"{r['fan_50_calibrated'] * 100:.0f} % (walk-forward, {r['calibrated_sessions']} sessions)"]
     return "\n".join(lines)

@@ -139,21 +139,22 @@ Two pages:
   continue as **ORH** / **ORL** lines with the channel between them shaded for the rest of the
   session (always from the 1-minute bars, whatever the timeframe; no box on the 30-minute
   view, where one bar spans it). The **First hour forecast · 09:30–10:30** card below the chart
-  forecasts the first hour from pre-open data only, from how the 20 closest pre-open matches'
-  first hour went ([forecaster/first_hour.py](forecaster/first_hour.py)): the first-hour range
-  (median and 25–75 % band, in points, next to the usual range of the last 40 sessions), the
-  15-minute opening range, and which side of the opening range price breaks first after 09:45
-  (above ORH / no break / below ORL, shrunk toward and shown next to the base rates). An orange
-  fan on the chart (median, 25–75 % and 10–90 % of the matches' paths, from the last pre-open
-  price) spans 09:30–10:30, so the real candles draw over it; once the day's first hour is
-  stored the card shows the actual range and break. On this history the range is where
-  pre-open data carries information; which side breaks is a question of direction, which it
-  has not predicted - `first-hour-backtest` scores both on your data. Run a forecast for that session on demand: the card shows
+  forecasts the first hour from pre-open data only ([forecaster/first_hour.py](forecaster/first_hour.py)):
+  the **first-hour range** in points from whichever of three estimators - the median of the 20
+  closest pre-open matches, a ridge regression on the pre-open volatility inputs, or the usual
+  range of the last 40 sessions - has had the smallest error on the earlier sessions, with a
+  likely band that held half of them; the 15-minute opening range; and how often the opening
+  range breaks by 10:30 and on which side, as the usual rates (the side has shown no skill).
+  An orange fan on the chart (median, 25–75 % and 10–90 % of the matches' paths, from the last
+  pre-open price, widened by a walk-forward calibration so its bands held 80 % / 50 % of the
+  10:29 closes) spans 09:30–10:30, so the real candles draw over it; once the day's first hour
+  is stored the card shows the actual range and break. `first-hour-backtest` scores it all
+  on your data. Run a forecast for that session on demand: the card shows
   the bias, how the 10 matched sessions' first hour went (up / flat / down) and each match's
   own first-hour move. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v5`, or the
-  `nq_climatology_v5` baseline): per target the status, predicted label, full probability
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v6`, or the
+  `nq_climatology_v6` baseline): per target the status, predicted label, full probability
   distribution, the method that won the model selection, and the actual outcome with a
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
   is stored. The **Pre-open features** panel beside
@@ -437,17 +438,22 @@ point-in-time flag. Forecast runs, per-target probability distributions (with
 abstention), realised labels and continuous outcome metrics are separate, append-only
 records; corrections become new versions or revisions, never overwrites.
 
-It predicts the five targets of the NASDAQ-100 prediction schema - `first_move_5m`,
-`opening_type_15m`, `direction_15m`, `direction_rth` and `session_type_rth` - and two
-range regimes, `range_15m_regime` and `range_rth_regime` (`wide` / `narrow`: above or
-below the median range of the previous 40 sessions), each labelled afterwards by
-deterministic rules from the realised minute bars (`nq_labels_v4_candidate`). The
+It labels the five targets of the NASDAQ-100 prediction schema - `first_move_5m`,
+`opening_type_15m`, `direction_15m`, `direction_rth` and `session_type_rth` - three range
+regimes, `range_15m_regime`, `range_1h_regime` and `range_rth_regime` (`wide` / `narrow`:
+above or below the median range of the previous 40 sessions), and two more first-hour
+targets, `direction_1h` (09:30 open to 10:29 close) and `first_break_1h` (which side of the
+15-minute opening range breaks first between 09:45 and 10:30), each labelled afterwards by
+deterministic rules from the realised minute bars (`nq_labels_v5_candidate`). The model
+forecasts only those decided between **09:30 and 10:30** - first move, opening type,
+15-minute direction and range, and the three first-hour targets; the full-session ones are
+labelled for the studies but not forecast. The
 schema's starting thresholds labelled about two thirds of openings and sessions 'mixed';
 they are retuned on the realised label mix (`label-study`), which brings 'mixed' to about
 a third. The range regimes were added because the pre-open features predict how far NQ
 moves, not which way (`metric-study`).
 
-**The model** (`nq_sklearn_v5`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+**The model** (`nq_sklearn_v6`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
 scikit-learn classifier per target over an explicit allowlist of snapshot features
 (median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
 session it trains only on earlier sessions whose outcome was knowable before that
@@ -457,7 +463,7 @@ tree ensemble by chronological
 cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
 replaces the prior only from 120 training sessions on, and only when it beats the prior
 on the same validation sessions by a clear margin (more than two standard errors of the
-per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v5`
+per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v6`
 (label frequencies) is kept as the baseline to compare against.
 
 ```bash
@@ -466,7 +472,7 @@ python scripts/nq_forecast_v2.py train                                          
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
 python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
-python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the 09:30-10:30 forecast (writes nothing)
+python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the 09:30-10:30 forecast: range estimators, breaks, fan calibration (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 
