@@ -356,3 +356,16 @@ def test_scenario_backfill_stores_walk_forward(market):
     assert matches and all(d < days[-1] for d in matches)            # earlier sessions only
     again = analogue.backfill(conn, days[0], days[-1], log=log.append)
     assert again["stored"] == 0 and again["skipped"] == counts["stored"]
+
+
+def test_backtests_page_rows():
+    from dashboard.views.backtests import first_hour_rows, scenario_rows, verdict
+    s = lambda g, se: {"model": 0.3, "base": 0.3 + g, "gain": g, "gain_se": se}
+    assert verdict(0.03, 0.01) == "better" and verdict(-0.03, 0.01) == "worse" and verdict(0.01, 0.01) == "no difference"
+    assert verdict(float("nan"), float("nan")) == "too few sessions"
+    rows = first_hour_rows({"range_matches": s(0.024, 0.0135), "range_regression": s(0.05, 0.01),
+                            "first_break": s(-0.009, 0.011), "breakout": s(-0.005, 0.007)})
+    assert [r["verdict"] for r in rows] == ["no difference", "better", "no difference", "no difference"]
+    sc = scenario_rows({"probabilities": s(0.0, 0.01), "hits": s(0.02, 0.05), "hit_rate": 0.424,
+                        "base_hit_rate": 0.407})
+    assert sc[1]["forecast"] == "42.4 %" and sc[1]["gain"].startswith("+1.7 pp")

@@ -169,10 +169,13 @@ Two pages:
   light green (≥ 90 %), yellow (≥ 50 %), orange (> 0 %) and red (nothing), from the
   collector's day ledger; hover a cell for its day counts
   ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
-- **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
-  every stored prediction joined against its realized outcome, so you can see whether the
-  bias calls were right - each scored over its own horizon (the first hour for
-  `analogue_baseline_v2`, open to close for the older v1 rows).
+- **Backtests** (`/backtests`, [dashboard/views/backtests.py](dashboard/views/backtests.py)) —
+  each forecast against a simple guess on the same sessions, using only what was known before
+  each session: the first-hour forecast and the opening scenario generator replayed
+  walk-forward (as `first-hour-backtest` and `scenario-backtest`), and the trained model's
+  stored forecasts against the climatology baseline (as `evaluate`). Every row shows the gain
+  with its standard error and a verdict - better / worse only beyond two standard errors.
+  Each section runs when the page opens and again on **Rerun**.
 
 ### 2. Collector — pull fresh bars from IB
 
@@ -416,7 +419,7 @@ measures each analogue's first hour - 09:30 open to 10:29 close, in units of tha
 ATR (or daily σ) - as up, down or flat (within ±0.10), and reports those frequencies as the
 `probabilities`; the `opening_bias` is the most frequent outcome (a tie is NEUTRAL), with
 two `scenarios` with triggers and invalidations. The flat band in points is stored with the
-forecast, and the evaluation page scores it over that same first hour. v1 took the bias from
+forecast, and `scenario-backtest` (and the Backtests page) scores it over that same first hour. v1 took the bias from
 the gap's sign and the frequencies from the RTH close against the previous close, and could
 show a bearish bias above a mostly bullish distribution. It is deterministic and offline.
 The trained model is the v2 pipeline below.
