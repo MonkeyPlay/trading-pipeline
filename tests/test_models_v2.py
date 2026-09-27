@@ -242,12 +242,14 @@ def test_feature_models_need_enough_history(store):
 
 def test_selection_margin_is_recorded(store, fitted_cache):
     fitted = _fit(store, fitted_cache)
+    sel = models_v2.SKLEARN["parameters"]["selection"]
     for t, tf in fitted["targets"].items():
         assert tf["selection_reason"]
         for name, sc in tf["cv"].items():
             if name != "prior":
                 assert {"gain_vs_prior", "gain_se", "beats_prior"} <= set(sc)
-                assert sc["beats_prior"] == (sc["gain_vs_prior"] > max(0.005, sc["gain_se"]))
+                assert sc["beats_prior"] == (
+                    sc["gain_vs_prior"] > max(sel["min_gain_nats"], sel["gain_se_multiple"] * sc["gain_se"]))
     report = models_v2.training_report(fitted)
     import json
     json.dumps(report, allow_nan=False)
