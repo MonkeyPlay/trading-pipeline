@@ -139,8 +139,9 @@ Two pages:
     the session VWAP come from the feature snapshot. The **opening range** (the first 15
     minutes) is a grey box over its bars, then **ORH** / **ORL** lines with the channel between
     them shaded (from the 1-minute bars at any timeframe; no box at 30 minutes).
-  - **Matching historical day, overlaid:** the dropdown above the chart offers the 10 closest
-    pre-open matches; the chosen one is drawn on the same chart as **desaturated candles**,
+  - **Similar pre-open day, overlaid:** the dropdown above the chart offers the 10 closest
+    pre-open matches - days with similar volatility before the open; their paths are no
+    forecast of the day's. The chosen one is drawn on the same chart as **desaturated candles**,
     shifted to the same minutes from the open and scaled so its 09:29 close sits on the
     selected day's - its moves in percent from where the selected day stood before the open.
     Its bars come from the contract that was trading that day. The **Pre-open features** panel
@@ -158,15 +159,17 @@ Two pages:
     streamer must be running). Once a horizon is over the card shows the actual range against
     the band it was given. The opening-range break rates by 10:30 are shown as the usual
     rates.
-  - **Model forecast:** the trained model's run for the day (`nq_sklearn_v6`, or the
-    `nq_climatology_v6` baseline) - the targets decided between 09:30 and 10:30, each with its
-    status, predicted label, full probability distribution, the method that won the model
-    selection, and the outcome with a hit/miss mark once labelled. **Run model** computes one
-    from the stored bars if none is stored.
-  - **Opening scenario generator:** the analogue forecast of the first hour (bias, how the 10
-    matched sessions' first hour went, each match's own move); one stored for the day (by
-    `scenario-backfill`, `scripts/daily_forecast.py` or **Generate forecast**) is shown straight
-    away.
+  - **Direction forecasts** (folded away: they mostly call directions, which have not beaten
+    the base rates walk-forward - see **Backtests**):
+    - **Model forecast:** the trained model's run for the day (`nq_sklearn_v6`, or the
+      `nq_climatology_v6` baseline) - the targets decided between 09:30 and 10:30, each with its
+      status, predicted label, full probability distribution, the method that won the model
+      selection, and the outcome with a hit/miss mark once labelled. **Run model** computes one
+      from the stored bars if none is stored.
+    - **Opening scenario generator:** the analogue forecast of the first hour (bias, how the 10
+      matched sessions' first hour went, each match's own move); one stored for the day (by
+      `scenario-backfill`, `scripts/daily_forecast.py` or **Generate forecast**) is shown straight
+      away.
   Beside the selectors, **Database coverage by week** is a small map of what is stored: one
   cell per instrument and week, green when every scheduled trading day is complete, then
   light green (≥ 90 %), yellow (≥ 50 %), orange (> 0 %) and red (nothing), from the

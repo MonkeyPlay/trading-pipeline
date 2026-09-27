@@ -8,8 +8,10 @@ the day (the one active that day first). The chart shows the regular session
 with 15 minutes either side - 09:15 to 16:15 ET, or to 13:15 on an early close -
 and draws those extra minutes grey on a grey background. The pre-open panel
 shows the feature snapshot, and the forecast panel runs the opening model
-against it - or shows the forecast already stored for that day. A dropdown
-overlays one of the closest pre-open matches on the same chart.
+against it - or shows the forecast already stored for that day; both mostly call
+directions, which nothing has predicted, so they are folded away. A dropdown
+overlays one of the closest pre-open matches on the same chart: a day with similar
+volatility before the open, whose path is no forecast of the day's.
 
 The range nowcast (forecaster/range_nowcast.py) says how far the price still
 travels before 09:45, 10:30 and 16:00, drawn as a cone from the current price.
@@ -806,7 +808,7 @@ class SessionExplorer:
                 return
             ui.select(
                 {d: f"#{m['ranking']} · {d} · {m['similarity_score'] * 100:.1f}% match" for d, m in self.matches.items()},
-                value=self.match_choice, label="Matching day (overlaid)", on_change=self.on_match,
+                value=self.match_choice, label="Similar pre-open day (overlaid)", on_change=self.on_match,
             ).classes("w-80")
             session = self.match_session or {}
             contract = session.get("contract")
@@ -817,7 +819,8 @@ class SessionExplorer:
             h = self._hours(self.contract["symbol"]).get(self.match_choice)
             detail = [f"{contract['symbol']} {contract['expiry']}" if contract else "",
                       f"first hour {h.path[-1]:+.2f} %, range {h.width:.2f} %" if h is not None else "",
-                      f"scaled ×{self.close_0929 / session['close_0929']:.3f} to the selected day's 09:29 close"]
+                      f"scaled ×{self.close_0929 / session['close_0929']:.3f} to the selected day's 09:29 close",
+                      "similar volatility before the open - its path is no forecast of the day's"]
             ui.label(" · ".join(x for x in detail if x)).classes("text-xs").style(f"color:{MATCH_COLOUR}")
 
     def on_match(self, event) -> None:
@@ -947,9 +950,15 @@ class SessionExplorer:
                              ).classes("text-sm").style(_MUTED)
                 self.nowcast_panel = ui.column().classes("w-full gap-1")
 
-            self.model_panel = ModelForecastPanel(self.conn)
-            self.model_panel.build()
-            self._build_forecast_panel()
+            # The trained model and the scenario generator mostly call directions, which
+            # nothing has predicted walk-forward: folded away, kept for reference.
+            with ui.expansion("Direction forecasts · trained model and scenario generator",
+                              caption="Mostly direction calls, which have not beaten the base rates walk-forward "
+                                      "(see Backtests) - kept for reference", icon="visibility_off",
+                              value=False).classes("w-full").style("background:#1c212e"):
+                self.model_panel = ModelForecastPanel(self.conn)
+                self.model_panel.build()
+                self._build_forecast_panel()
 
         # A live session's new bars are picked up every LIVE_POLL_SECONDS (a no-op on other days).
         ui.timer(LIVE_POLL_SECONDS, self._live_tick)
