@@ -4,7 +4,8 @@ Scores for stored v2 forecasts against their realised outcomes.
 
 Rows are ``database.forecast_store.get_prediction_outcomes`` records. Two views:
 
-  ``score_groups``        per model, target and data mode: how many predictions were
+  ``score_groups``        per model, target and data mode, over the newest run per
+                          session: how many predictions were
                           issued / abstained / unavailable, the accuracy of issued
                           labels, and the log loss and Brier score of every
                           distribution with an eligible outcome.
@@ -31,10 +32,23 @@ def _scorable(row) -> bool:
     return row["probabilities"] is not None and row["eligible"]
 
 
-def score_groups(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    groups: Dict[Tuple, List[Dict[str, Any]]] = {}
+def _newest(rows: Iterable[Dict[str, Any]], keep=lambda r: True) -> Dict[Tuple, Dict[str, Any]]:
+    """The newest row per (model, target, data mode, session) among those ``keep`` accepts."""
+    out: Dict[Tuple, Dict[str, Any]] = {}
     for r in rows:
-        groups.setdefault((r["model_version"], r["target_id"], r["data_mode"]), []).append(r)
+        if not keep(r):
+            continue
+        key = (r["model_version"], r["target_id"], r["data_mode"], str(r["session_date"]))
+        if key not in out or str(r["generated_at"]) > str(out[key]["generated_at"]):
+            out[key] = r
+    return out
+
+
+def score_groups(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per session: a session forecast again (a re-run backfill) counts once, by its newest run."""
+    groups: Dict[Tuple, List[Dict[str, Any]]] = {}
+    for key, r in _newest(rows).items():
+        groups.setdefault(key[:3], []).append(r)
     out = []
     for (model, target, mode), rs in sorted(groups.items()):
         status = [r["prediction_status"] for r in rs]
@@ -56,14 +70,7 @@ def score_groups(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _latest_per_session(rows, model) -> Dict[Tuple, Dict[str, Any]]:
     """The newest scorable prediction of ``model`` per (target, data mode, session)."""
-    out: Dict[Tuple, Dict[str, Any]] = {}
-    for r in rows:
-        if r["model_version"] != model or not _scorable(r):
-            continue
-        key = (r["target_id"], r["data_mode"], str(r["session_date"]))
-        if key not in out or str(r["generated_at"]) > str(out[key]["generated_at"]):
-            out[key] = r
-    return out
+    return {key[1:]: r for key, r in _newest(rows, lambda r: r["model_version"] == model and _scorable(r)).items()}
 
 
 def paired_comparison(rows: Iterable[Dict[str, Any]], baseline: str,
