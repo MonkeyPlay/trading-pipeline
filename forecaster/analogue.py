@@ -127,20 +127,20 @@ def _atr(reference_values: Dict[str, Any]) -> Optional[float]:
 V1History = Union[Sequence[Dict[str, Any]], Callable[[], Sequence[Dict[str, Any]]]]
 
 
-def find_analogues(conn, symbol: str, day: str, target_v1: Dict[str, Any],
-                   v1_history: Optional[V1History] = None, k: int = K) -> Dict[str, Any]:
+def rank_preopen(conn, symbol: str, day: str, target_v1: Dict[str, Any],
+                 v1_history: Optional[V1History] = None) -> Dict[str, Any]:
     """
-    The ``k`` closest earlier sessions with a measurable first hour:
-    ``{'analogues', 'method', 'pool', 'scale', 'scale_name'}``. Each analogue has
-    'match_date', 'distance', 'similarity_score', 'ranking', 'n_dims' and
-    'outcome' {'move', 'normalized', 'label'}. ``v1_history`` - the earlier
-    sessions' v1 snapshots, or a callable returning them - is only read when the
-    NQ snapshot path is not available.
+    Every earlier session ranked by pre-open similarity to ``day``, closest
+    first: ``{'ranked', 'method', 'pool', 'scale', 'scale_name', 'target'}``.
+    ``target`` is the day's point-in-time snapshot on the NQ path, else None.
+    ``v1_history`` - the earlier sessions' v1 snapshots, or a callable
+    returning them - is only read when the NQ snapshot path is not available.
     """
     day = str(day)
     target = v2_target(conn, day) if symbol == V2_SYMBOL else None
     scale = _atr(target["reference_values"]) if target else None
-    ranked = []
+    ranked: List[Dict[str, Any]] = []
+    method, scale_name = "", ""
     if target is not None and scale is not None:
         candidates = [
             {"session_date": c["session_date"], "vector": _v2_vector(c["features"]),
@@ -153,6 +153,7 @@ def find_analogues(conn, symbol: str, day: str, target_v1: Dict[str, Any],
         scale_name = "ATR"
     if len(ranked) < MIN_V2_POOL:
         # No point-in-time snapshots for this instrument, or too few stored yet.
+        target = None
         history = v1_history() if callable(v1_history) else (v1_history or [])
         target_vector, scale = v1_match_vector(target_v1 or {})
         candidates = []
@@ -164,9 +165,21 @@ def find_analogues(conn, symbol: str, day: str, target_v1: Dict[str, Any],
         ranked = rank_analogues(target_vector, candidates, V1_KEYS, len(V1_KEYS))
         method = "standardised gap and overnight range in units of one day's volatility"
         scale_name = "daily σ"
+    return {"ranked": ranked, "method": method, "pool": len(candidates), "scale": scale,
+            "scale_name": scale_name, "target": target}
 
+
+def find_analogues(conn, symbol: str, day: str, target_v1: Dict[str, Any],
+                   v1_history: Optional[V1History] = None, k: int = K) -> Dict[str, Any]:
+    """
+    The ``k`` closest earlier sessions (``rank_preopen``) with a measurable first
+    hour: ``{'analogues', 'method', 'pool', 'scale', 'scale_name'}``. Each
+    analogue has 'match_date', 'distance', 'similarity_score', 'ranking',
+    'n_dims' and 'outcome' {'move', 'normalized', 'label'}.
+    """
+    found = rank_preopen(conn, symbol, day, target_v1, v1_history)
     analogues: List[Dict[str, Any]] = []
-    for c in ranked:
+    for c in found["ranked"]:
         if len(analogues) == k:
             break
         if not c.get("scale"):
@@ -181,8 +194,8 @@ def find_analogues(conn, symbol: str, day: str, target_v1: Dict[str, Any],
             "ranking": len(analogues) + 1,
             "outcome": {"move": move["move"], "normalized": normalized, "label": classify_move(normalized)},
         })
-    return {"analogues": analogues, "method": method, "pool": len(candidates), "scale": scale,
-            "scale_name": scale_name}
+    return {"analogues": analogues, "method": found["method"], "pool": found["pool"], "scale": found["scale"],
+            "scale_name": found["scale_name"]}
 
 
 def analogue_forecast(conn, symbol: str, day: str, target_v1: Dict[str, Any],
