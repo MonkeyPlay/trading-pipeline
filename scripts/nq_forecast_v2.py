@@ -331,7 +331,8 @@ def cmd_metric_study(conn, md, args):
     if not snaps:
         print(f"No {catv2.FEATURE_VERSION} snapshots between {args.start} and {args.end}.")
         return 0
-    result = metric_study.study(md, snaps, min_train=args.min_train, refit_every=args.refit_every)
+    result = metric_study.study(md, snaps, min_train=args.min_train, refit_every=args.refit_every,
+                                median_window=args.median_window)
     print(metric_study.format_report(result, top=args.top))
     return 0
 
@@ -433,6 +434,8 @@ def main(argv=None):
     p.add_argument("--top", type=int, default=5, help="Strongest associations shown per metric")
     p.add_argument("--min-train", type=int, default=120, help="Sessions before the first walk-forward prediction")
     p.add_argument("--refit-every", type=int, default=5, help="Sessions between walk-forward refits")
+    p.add_argument("--median-window", type=int, default=40,
+                   help="Previous sessions whose median defines the 'above median' candidate label")
     sub.add_parser("register", help="Register definitions only")
 
     args = parser.parse_args(argv)
