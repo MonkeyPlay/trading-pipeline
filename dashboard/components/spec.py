@@ -19,6 +19,12 @@ import pandas as pd
 _UP = "rgba(38, 166, 154, 0.5)"
 _DOWN = "rgba(239, 83, 80, 0.5)"
 
+# Bars outside the regular session (the 15 minutes either side of it) are drawn
+# muted: grey candles and volume on a grey background band.
+MUTED_CANDLE = "#6b6f7a"
+MUTED_VOLUME = "rgba(120, 123, 134, 0.35)"
+MUTED_BACKGROUND = "rgba(120, 123, 134, 0.14)"
+
 # Pre-open reference levels drawn from the feature snapshot, in draw order.
 _FEATURE_LEVELS = (
     ("previous_rth_close", "Prev RTH Close", "#29b6f6", 2, 2),
@@ -63,34 +69,53 @@ def _times(df: pd.DataFrame) -> np.ndarray:
     return to_epoch(pd.to_datetime(df[column]))
 
 
+def _muted(df: pd.DataFrame) -> np.ndarray:
+    """The optional boolean ``muted`` column (bars outside the regular session)."""
+    if "muted" not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    return df["muted"].fillna(False).astype(bool).to_numpy()
+
+
 def candle_points(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """OHLC rows in the shape Lightweight Charts wants."""
+    """OHLC rows in the shape Lightweight Charts wants; muted bars are grey."""
     times = _times(df)
-    return [
-        {
-            "time": int(time),
-            "open": float(o),
-            "high": float(h),
-            "low": float(low),
-            "close": float(c),
-        }
-        for time, o, h, low, c in zip(
-            times, df["open"], df["high"], df["low"], df["close"]
-        )
-    ]
+    out = []
+    for time, o, h, low, c, muted in zip(
+        times, df["open"], df["high"], df["low"], df["close"], _muted(df)
+    ):
+        point = {"time": int(time), "open": float(o), "high": float(h), "low": float(low), "close": float(c)}
+        if muted:
+            point["color"] = point["wickColor"] = MUTED_CANDLE
+        out.append(point)
+    return out
 
 
 def volume_points(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Volume bars, tinted by whether the bar closed up or down."""
+    """Volume bars, tinted by whether the bar closed up or down (grey when muted)."""
     times = _times(df)
     return [
         {
             "time": int(time),
             "value": float(v),
-            "color": _UP if c >= o else _DOWN,
+            "color": MUTED_VOLUME if muted else _UP if c >= o else _DOWN,
         }
-        for time, v, o, c in zip(times, df["volume"], df["open"], df["close"])
+        for time, v, o, c, muted in zip(times, df["volume"], df["open"], df["close"], _muted(df))
     ]
+
+
+def shade_ranges(df: pd.DataFrame) -> List[Dict[str, int]]:
+    """Each run of consecutive muted bars as ``{'from': first bar time, 'to': last bar time}``."""
+    times, muted = _times(df), _muted(df)
+    ranges: List[Dict[str, int]] = []
+    start = None
+    for i, m in enumerate(muted):
+        if m and start is None:
+            start = i
+        if start is not None and (not m or i == len(muted) - 1):
+            end = i if m else i - 1
+            ranges.append({"from": int(times[start]), "to": int(times[end])})
+            start = None
+    return ranges
 
 
 def _level_series(times: np.ndarray, value: float, label: str, color: str,
@@ -114,9 +139,12 @@ def build_chart_spec(
     show_vwap: bool = True,
     fit: bool = False,
 ) -> Dict[str, Any]:
-    """Assembles the full chart spec for one session."""
+    """
+    Assembles the full chart spec for one session. Rows with a true ``muted``
+    column are drawn grey on a shaded background (``shades``).
+    """
     if df is None or df.empty:
-        return {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []}
+        return {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": [], "shades": []}
 
     df = df.sort_values("timestamp_ny" if "timestamp_ny" in df.columns else "timestamp_utc")
     times = _times(df)
@@ -156,6 +184,8 @@ def build_chart_spec(
         "series": series,
         "bands": bands,
         "legend": legend,
+        "shades": shade_ranges(df),
+        "shade_color": MUTED_BACKGROUND,
         "fit": fit,
     }
 

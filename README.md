@@ -128,11 +128,14 @@ python -m dashboard.app
 
 Two pages:
 
-- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — opens
-  on NQ's current contract (the one active for the latest session) and its newest day; pick
-  another contract or trading day, plot the candles with the pre-open reference levels and
-  session VWAP drawn from the feature snapshot, and run a forecast for that session on
-  demand. A forecast already stored for the day (from the dashboard or
+- **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — three
+  selectors, in order: the **session day** (searchable, newest first), the **instrument**
+  with bars that day (ES, NQ, ...), and the **contract** holding it (the one the collector made
+  active that day first). It opens on NQ's newest session. The chart shows that day's regular
+  session with **15 minutes either side** - 09:15 to 16:15 ET, or to 13:15 on an early close -
+  and draws the extra minutes grey (candles, volume and background), with the pre-open
+  reference levels and session VWAP drawn from the feature snapshot; run a forecast for that
+  session on demand. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
   above it shows the trained v2 model's run for the day (`nq_sklearn_v5`, or the
   `nq_climatology_v5` baseline): per target the status, predicted label, full probability
@@ -140,9 +143,10 @@ Two pages:
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
   is stored. The **Pre-open features** panel beside
   the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
-  historical day — RTH** charts the regular session (09:30–16:00 ET) of the best-matching
-  earlier day, with that day's own previous close, overnight range and VWAP; the dropdown
-  switches to the other matches. A matched day is drawn from the closest contract expiring on
+  historical day — RTH** charts the same window of the best-matching earlier day (its regular
+  session with the grey 15 minutes either side), with that day's own previous close, overnight
+  range and VWAP, and beside it that day's **Pre-open features**, computed exactly as for the
+  selected day; the dropdown switches to the other matches. A matched day is drawn from the closest contract expiring on
   or after it (an August day comes from September even when the page shows December).
   Beside the selectors, **Database coverage by week** is a small map of what is stored: one
   cell per instrument and week, green when every scheduled trading day is complete, then

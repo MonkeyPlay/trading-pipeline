@@ -174,6 +174,35 @@ def contracts_with_day(conn: Database, symbol: str, trading_day: str, interval: 
     ).fetchall()
 
 
+def list_session_days(conn: Database, symbols: List[str], interval: str = "1m", price_type: str = "TRADES",
+                      limit: int = 1000) -> List[str]:
+    """Trading days on which any contract of ``symbols`` holds bars, newest first."""
+    if not symbols:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT s.trading_day FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
+        f"WHERE c.symbol IN ({', '.join(['%s'] * len(symbols))}) AND s.interval = %s AND s.price_type = %s "
+        "AND s.bar_count > 0 ORDER BY s.trading_day DESC LIMIT %s;",
+        (*symbols, interval, price_type, limit),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def symbols_with_day(conn: Database, trading_day: str, symbols: List[str], interval: str = "1m",
+                     price_type: str = "TRADES") -> List[str]:
+    """Those of ``symbols`` (kept in their order) with a contract holding bars for ``trading_day``."""
+    if not symbols:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT c.symbol FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
+        f"WHERE c.symbol IN ({', '.join(['%s'] * len(symbols))}) AND s.trading_day = %s "
+        "AND s.interval = %s AND s.price_type = %s AND s.bar_count > 0;",
+        (*symbols, _validate_day(trading_day), interval, price_type),
+    ).fetchall()
+    held = {r[0] for r in rows}
+    return [sym for sym in symbols if sym in held]
+
+
 def list_future_chain(conn: Database, symbol: str) -> List[Row]:
     """Every stored contract of a futures symbol, nearest expiry first."""
     return conn.execute(

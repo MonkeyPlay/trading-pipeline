@@ -2,11 +2,15 @@
 """
 Candlestick exploration view for the NQ Opening Forecast System.
 
-Selectors load a stored session (NQ's current contract by default), the
-pre-open panel shows the feature snapshot, and the forecast panel runs the
-opening model against it - or shows the forecast already stored for that day.
-Below it, a second chart replays the regular session of the best-matching
-historical day, and a dropdown switches between the other matches.
+Three selectors pick what is shown, in this order: the session day, then an
+instrument with bars that day (ES, NQ, ...), then one of its contracts holding
+the day (the one active that day first). The chart shows the regular session
+with 15 minutes either side - 09:15 to 16:15 ET, or to 13:15 on an early close -
+and draws those extra minutes grey on a grey background. The pre-open panel
+shows the feature snapshot, and the forecast panel runs the opening model
+against it - or shows the forecast already stored for that day. Below it, a
+second chart replays the same window of the best-matching historical day, with
+that day's own pre-open features, and a dropdown switches between the matches.
 
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing chart. The chart is created once per page
@@ -38,15 +42,16 @@ from database.queries import (
     get_daily_rth_closes,
     get_day_bars,
     get_day_prediction,
-    get_latest_contract,
     get_outcome,
     get_session_day,
     list_contracts,
-    list_trading_days,
+    list_session_days,
     save_analogue_matches,
     save_feature_snapshot,
     save_prediction,
+    symbols_with_day,
 )
+from features import calendar as cal
 from features.calculations import (
     calculate_pre_open_snapshot,
     calculate_vwap,
@@ -65,6 +70,11 @@ _ANALOGUE_CANDIDATES = 60
 DEFAULT_SYMBOL = "NQ"
 
 _MUTED = "color:#787b86"
+
+# Minutes shown either side of the regular session, drawn muted.
+_EXTRA = pd.Timedelta(minutes=15)
+_NY = "America/New_York"
+_BAR_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30}
 
 
 def _resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -89,6 +99,77 @@ def _cutoff_utc_iso(session_date: str) -> str:
     """09:30 ET of the given YYYY-MM-DD, as a UTC ISO-8601 string."""
     d = datetime.strptime(session_date, "%Y-%m-%d")
     return NY_TZ.localize(datetime(d.year, d.month, d.day, 9, 30)).astimezone(pytz.utc).isoformat()
+
+
+def session_window(day: str) -> Dict[str, pd.Timestamp]:
+    """
+    New York times of ``day``'s regular session (``open``, ``close``: the
+    scheduled close, 13:00 on an early close) and the window shown around it
+    (``start`` = open - 15 min, ``end`` = close + 15 min). Days outside the
+    exchange calendar fall back to 09:30-16:00.
+    """
+    try:
+        s = cal.session(day)
+        if s.is_open:
+            open_ = pd.Timestamp(s.rth_open_at).tz_convert(_NY)
+            close = pd.Timestamp(s.scheduled_close_at).tz_convert(_NY)
+            return {"start": open_ - _EXTRA, "open": open_, "close": close, "end": close + _EXTRA}
+    except cal.CalendarCoverageError:
+        pass
+    base = pd.Timestamp(str(day)).tz_localize(_NY)
+    open_, close = base + pd.Timedelta(hours=9, minutes=30), base + pd.Timedelta(hours=16)
+    return {"start": open_ - _EXTRA, "open": open_, "close": close, "end": close + _EXTRA}
+
+
+def window_bars(df: Optional[pd.DataFrame], day: str, timeframe: str = "1m") -> Optional[pd.DataFrame]:
+    """
+    The bars of ``df`` (at ``timeframe``, with ``timestamp_ny`` bar starts) that
+    overlap ``day``'s shown window, with ``muted`` true for those starting
+    outside the regular session - the 15 minutes before the open and after the
+    close. Indicators such as VWAP are computed on the whole day beforehand.
+    """
+    if df is None or df.empty:
+        return df
+    w = session_window(day)
+    width = pd.Timedelta(minutes=_BAR_MINUTES.get(timeframe, 1))
+    ts = df["timestamp_ny"]
+    out = df[(ts + width > w["start"]) & (ts < w["end"])].copy()
+    out["muted"] = (out["timestamp_ny"] < w["open"]) | (out["timestamp_ny"] >= w["close"])
+    return out
+
+
+def vix_bars(conn, start_day: Optional[str], end_day: str) -> Optional[pd.DataFrame]:
+    """Cash VIX bars over the given days, for pre-open context. None when absent."""
+    if "VIX" not in Config.CONTEXT_SYMBOLS:
+        return None
+    contract = get_contract_by_expiry(conn, "VIX", Config.expiry_for("VIX"))
+    if contract is None:
+        return None
+    rows = get_bars(conn, contract["contract_id"], interval="1m", start_day=start_day, end_day=end_day)
+    return pd.DataFrame([dict(r) for r in rows]) if rows else None
+
+
+def day_snapshot(conn, contract_id: int, day: str) -> Dict[str, Any]:
+    """
+    The pre-open feature snapshot of one stored day on one contract - as the
+    selected day's panel shows it - or {} when the contract lacks the previous
+    session or the day's RTH open.
+    """
+    row = conn.execute(
+        "SELECT MAX(trading_day) FROM session_days WHERE contract_id = %s AND interval = '1m' "
+        "AND price_type = 'TRADES' AND bar_count > 0 AND trading_day < %s",
+        (contract_id, day),
+    ).fetchone()
+    start = str(row[0]) if row is not None and row[0] is not None else day
+    bars = get_bars(conn, contract_id, interval="1m", start_day=start, end_day=day)
+    if not bars:
+        return {}
+    snapshot = calculate_pre_open_snapshot(
+        pd.DataFrame([dict(r) for r in bars]), day,
+        get_daily_rth_closes(conn, contract_id, interval="1m", end_day=day),
+        vix_df=vix_bars(conn, start, day),
+    )
+    return snapshot if snapshot and "error" not in snapshot else {}
 
 
 def _is_context_only(symbol: str) -> bool:
@@ -173,16 +254,37 @@ def analogue_contracts(conn, symbol: str, match_date: str) -> List[Any]:
     return later + earlier[::-1]
 
 
+def day_contracts(conn, symbol: str, day: str) -> List[Any]:
+    """
+    Contracts of ``symbol`` holding ``day``, for the contract selector: the one
+    the collector made active that day first (it holds the day's session
+    before the roll and after it), then as ``analogue_contracts`` orders them.
+    """
+    ordered = analogue_contracts(conn, symbol, day)
+    row = conn.execute("SELECT contract_id FROM active_contracts WHERE symbol = %s AND trading_day = %s;",
+                       (symbol, day)).fetchone()
+    if row is not None:
+        active = [c for c in ordered if c["contract_id"] == row["contract_id"]]
+        ordered = active + [c for c in ordered if c["contract_id"] != row["contract_id"]]
+    return ordered
+
+
+def _contract_label(contract) -> str:
+    return f"{contract['symbol']} {contract['expiry']}"
+
+
 def load_analogue_session(conn, symbol: str, match_date: str, timeframe: str = "1m") -> Dict[str, Any]:
     """
-    The regular session of a matched historical day, ready to chart.
+    A matched historical day, ready to chart in the same window as the selected
+    day: its regular session with 15 minutes either side (muted).
 
     Bars come from the best contract holding the day (``analogue_contracts``:
     the closest one expiring on or after it), whatever contract the forecast
-    itself was made on. Returns ``{'contract', 'bars', 'levels', 'stats'}``:
-    RTH bars at ``timeframe`` with session VWAP, the day's own pre-open levels
-    (previous RTH close, overnight high/low) and its RTH open/high/low/close.
-    ``bars`` is None when no contract holds RTH bars for the day.
+    itself was made on. Returns ``{'contract', 'bars', 'levels', 'stats',
+    'snapshot'}``: the window's bars at ``timeframe`` with session VWAP, the
+    day's own pre-open levels (previous RTH close, overnight high/low), its RTH
+    open/high/low/close, and its pre-open feature snapshot ({} when it cannot
+    be computed). ``bars`` is None when no contract holds RTH bars for the day.
     """
     match_date = str(match_date)
     for contract in analogue_contracts(conn, symbol, match_date):
@@ -200,15 +302,15 @@ def load_analogue_session(conn, symbol: str, match_date: str, timeframe: str = "
             "overnight_low": float(pre_open["low"].min()) if not pre_open.empty else None,
         }
         # VWAP is anchored at the 18:00 ET session open like the main chart, then
-        # only the regular session is shown.
-        shown = calculate_vwap(_resample(full, timeframe))
-        shown = shown[shown["session_scope"] == "RTH"]
+        # the same window as the main chart is shown.
+        shown = window_bars(calculate_vwap(_resample(full, timeframe)), match_date, timeframe)
         stats = {
             "open": float(rth["open"].iloc[0]), "high": float(rth["high"].max()),
             "low": float(rth["low"].min()), "close": float(rth["close"].iloc[-1]), "bars": int(len(rth)),
         }
-        return {"contract": contract, "bars": shown, "levels": levels, "stats": stats}
-    return {"contract": None, "bars": None, "levels": {}, "stats": None}
+        return {"contract": contract, "bars": shown, "levels": levels, "stats": stats,
+                "snapshot": day_snapshot(conn, contract["contract_id"], match_date)}
+    return {"contract": None, "bars": None, "levels": {}, "stats": None, "snapshot": {}}
 
 
 def _analogue_label(analogue: Dict[str, Any]) -> str:
@@ -226,6 +328,36 @@ def _metric(label: str, value: str, *, hint: str = "", accent: str = "#d1d4dc") 
             ui.label(hint).classes("text-xs").style("color:#787b86")
 
 
+def render_features(snapshot: Dict[str, Any]) -> None:
+    """The pre-open feature figures of one snapshot, in the current container."""
+    prev_close = _safe(snapshot.get("previous_rth_close"))
+    gap = _safe(snapshot.get("gap"))
+    pct = (gap / prev_close * 100) if prev_close else 0.0
+    direction = snapshot.get("pre_open_direction", "FLAT")
+
+    _metric("Trade date", str(snapshot.get("trading_day", "—")))
+    _metric("Previous RTH close", f"${prev_close:,.2f}")
+    _metric(
+        "Opening gap",
+        f"{gap:+,.2f}",
+        hint=f"{pct:+.2f}% of previous close",
+        accent="#26a69a" if gap > 0 else "#ef5350" if gap < 0 else "#d1d4dc",
+    )
+    _metric("Historical volatility", f"{_safe(snapshot.get('historical_volatility')) * 100:.2f}%")
+    _metric(
+        "Overnight range",
+        f"${_safe(snapshot.get('overnight_range')):,.2f}",
+        hint=f"H {_safe(snapshot.get('overnight_high')):,.2f}  ·  "
+             f"L {_safe(snapshot.get('overnight_low')):,.2f}",
+    )
+    _metric(
+        "Pre-open bias",
+        direction,
+        accent={"UP": "#26a69a", "DOWN": "#ef5350"}.get(direction, "#d1d4dc"),
+    )
+    _metric("Overnight VWAP", f"{_safe(snapshot.get('vwap')):,.2f}")
+
+
 class SessionExplorer:
     """Holds the view's state and keeps the chart in step with it."""
 
@@ -235,15 +367,20 @@ class SessionExplorer:
         # page — snapshot, analogues, forecast — assumes a forecast target. They feed in
         # through the snapshot instead. The collector also records whole futures chains
         # to plan rolls, so only contracts that actually hold bars are offered.
-        self.contracts = {
-            f"{c['symbol']} ({c['expiry']})": c
-            for c in list_contracts(conn, with_data_only=True)
-            if not _is_context_only(c["symbol"])
-        }
+        self.symbols: List[str] = []
+        for c in list_contracts(conn, with_data_only=True):
+            if not _is_context_only(c["symbol"]) and c["symbol"] not in self.symbols:
+                self.symbols.append(c["symbol"])
 
-        self.contract = None
+        # Selected, in the order the controls pick them: day -> symbol -> contract.
         self.date: Optional[str] = None
+        self.symbol: Optional[str] = None
+        self.contract = None
+        self.day_contracts: Dict[int, Any] = {}   # contract_id -> contract row, for the selector
         self.timeframe = "1m"
+        # Set while the selectors are updated from code, so their change events
+        # do not reload the session once per control.
+        self._syncing = False
 
         # Loaded per session.
         self.day_df: Optional[pd.DataFrame] = None
@@ -284,7 +421,7 @@ class SessionExplorer:
         # plus the session before it.
         self.recent_bars = self._load_bars(self._history_start())
         self.rth_closes = get_daily_rth_closes(self.conn, contract_id, interval="1m", end_day=self.date)
-        self.vix_bars = self._load_vix_bars(self._history_start())
+        self.vix_bars = vix_bars(self.conn, self._history_start(), self.date)
         self._compute_snapshot()
 
     def _analogue_candidates(self) -> List[str]:
@@ -320,19 +457,6 @@ class SessionExplorer:
                 start_day=start_day, end_day=self.date,
             )
         ])
-
-    def _load_vix_bars(self, start_day: Optional[str]) -> Optional[pd.DataFrame]:
-        """Cash VIX over the same window, for pre-open context. None when absent."""
-        if "VIX" not in Config.CONTEXT_SYMBOLS:
-            return None
-        contract = get_contract_by_expiry(self.conn, "VIX", Config.expiry_for("VIX"))
-        if contract is None:
-            return None
-        rows = get_bars(
-            self.conn, contract["contract_id"], interval="1m",
-            start_day=start_day, end_day=self.date,
-        )
-        return pd.DataFrame([dict(r) for r in rows]) if rows else None
 
     def _compute_snapshot(self) -> None:
         snapshot = calculate_pre_open_snapshot(
@@ -376,7 +500,8 @@ class SessionExplorer:
             self.chart.apply({"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []})
             return
 
-        self.chart.apply(build_chart_spec(self.day_df, features=self.snapshot, fit=True))
+        self.chart.apply(build_chart_spec(window_bars(self.day_df, self.date, self.timeframe),
+                                          features=self.snapshot, fit=True))
 
     def refresh_session(self, keep_forecast: bool = False) -> None:
         """
@@ -400,19 +525,50 @@ class SessionExplorer:
     # Control handlers
     # ------------------------------------------------------------------
 
-    def on_contract(self, event) -> None:
-        self.contract = self.contracts[event.value]
-        days = list_trading_days(self.conn, self.contract["contract_id"], limit=100)
-        self.date_select.set_options(days, value=days[0] if days else None)
-        self.date = days[0] if days else None
-        if self.date is None:
-            self.forecast_panel.clear()
-            self._render_analogue_view([], None)
-            self.model_panel.show(self.contract["symbol"], None)
-        self.refresh_session()
+    def _choose_symbol(self) -> List[str]:
+        """The instruments with bars on the selected day; keeps the current one when it has."""
+        symbols = symbols_with_day(self.conn, self.date, self.symbols) if self.date else []
+        if self.symbol not in symbols:
+            self.symbol = DEFAULT_SYMBOL if DEFAULT_SYMBOL in symbols else (symbols[0] if symbols else None)
+        return symbols
+
+    def _choose_contract(self) -> Dict[int, str]:
+        """The selected instrument's contracts holding the day; the first (active that day) is chosen."""
+        contracts = day_contracts(self.conn, self.symbol, self.date) if self.symbol and self.date else []
+        self.day_contracts = {int(c["contract_id"]): c for c in contracts}
+        self.contract = contracts[0] if contracts else None
+        return {int(c["contract_id"]): _contract_label(c) for c in contracts}
+
+    def _sync_selectors(self, symbols: bool = True) -> None:
+        """Pushes the chosen symbol / contract (and their options) to the controls."""
+        self._syncing = True
+        try:
+            if symbols:
+                self.symbol_select.set_options(self._choose_symbol(), value=self.symbol)
+            options = self._choose_contract()
+            self.contract_select.set_options(
+                options, value=int(self.contract["contract_id"]) if self.contract is not None else None)
+        finally:
+            self._syncing = False
 
     def on_date(self, event) -> None:
+        if self._syncing or not event.value:
+            return
         self.date = event.value
+        self._sync_selectors()
+        self.refresh_session()
+
+    def on_symbol(self, event) -> None:
+        if self._syncing or not event.value:
+            return
+        self.symbol = event.value
+        self._sync_selectors(symbols=False)
+        self.refresh_session()
+
+    def on_contract(self, event) -> None:
+        if self._syncing or event.value is None:
+            return
+        self.contract = self.day_contracts[int(event.value)]
         self.refresh_session()
 
     def on_timeframe(self, event) -> None:
@@ -449,58 +605,25 @@ class SessionExplorer:
     def _render_features(self) -> None:
         self.features_panel.clear()
         with self.features_panel:
-            snapshot = self.snapshot
-            prev_close = _safe(snapshot.get("previous_rth_close"))
-            gap = _safe(snapshot.get("gap"))
-            pct = (gap / prev_close * 100) if prev_close else 0.0
-            direction = snapshot.get("pre_open_direction", "FLAT")
-
-            _metric("Trade date", str(snapshot.get("trading_day", "—")))
-            _metric("Previous RTH close", f"${prev_close:,.2f}")
-            _metric(
-                "Opening gap",
-                f"{gap:+,.2f}",
-                hint=f"{pct:+.2f}% of previous close",
-                accent="#26a69a" if gap > 0 else "#ef5350" if gap < 0 else "#d1d4dc",
-            )
-            _metric("Historical volatility", f"{_safe(snapshot.get('historical_volatility')) * 100:.2f}%")
-            _metric(
-                "Overnight range",
-                f"${_safe(snapshot.get('overnight_range')):,.2f}",
-                hint=f"H {_safe(snapshot.get('overnight_high')):,.2f}  ·  "
-                     f"L {_safe(snapshot.get('overnight_low')):,.2f}",
-            )
-            _metric(
-                "Pre-open bias",
-                direction,
-                accent={"UP": "#26a69a", "DOWN": "#ef5350"}.get(direction, "#d1d4dc"),
-            )
-            _metric("Overnight VWAP", f"{_safe(snapshot.get('vwap')):,.2f}")
-
-    def _default_label(self) -> str:
-        """NQ's current contract (see get_latest_contract), else any NQ contract, else the first."""
-        latest = get_latest_contract(self.conn, DEFAULT_SYMBOL)
-        if latest is not None:
-            for label, contract in self.contracts.items():
-                if contract["contract_id"] == latest["contract_id"]:
-                    return label
-        labels = [label for label, c in self.contracts.items() if c["symbol"] == DEFAULT_SYMBOL]
-        return labels[-1] if labels else next(iter(self.contracts))
+            render_features(self.snapshot)
 
     def build(self) -> None:
-        if not self.contracts:
+        days = list_session_days(self.conn, self.symbols)
+        if not days:
             with ui.card().classes("w-full"):
-                ui.label("No contracts found.").classes("text-lg")
+                ui.label("No sessions found.").classes("text-lg")
                 ui.label("Run the collector, or populate_mock_data.py, before opening this view.")
             return
 
-        first_label = self._default_label()
-        self.contract = self.contracts[first_label]
-        days = list_trading_days(self.conn, self.contract["contract_id"], limit=100)
-        self.date = days[0] if days else None
+        # Opens on the newest NQ session (else the newest of any instrument), on
+        # the contract active that day.
+        newest_default = list_session_days(self.conn, [DEFAULT_SYMBOL], limit=1)
+        self.date = newest_default[0] if newest_default else days[0]
+        symbols = self._choose_symbol()
+        contract_options = self._choose_contract()
 
         with ui.column().classes("w-full p-4 gap-3"):
-            self._build_controls(first_label, days)
+            self._build_controls(days, symbols, contract_options)
 
             with ui.row().classes("w-full no-wrap gap-4 items-start"):
                 with ui.column().classes("grow gap-1 min-w-0"):
@@ -513,22 +636,25 @@ class SessionExplorer:
             self.model_panel.build()
             self._build_forecast_panel()
 
-        if self.date is None:
-            self.model_panel.show(self.contract["symbol"], None)
-            ui.notify("The selected contract has no stored sessions.", type="warning")
+        if self.contract is None:
+            self.model_panel.show(self.symbol, None)
+            ui.notify("No contract holds bars for the selected day.", type="warning")
             return
         self.refresh_session()
 
-    def _build_controls(self, first_label: str, days: List[str]) -> None:
+    def _build_controls(self, days: List[str], symbols: List[str], contract_options: Dict[int, str]) -> None:
         with ui.row().classes("w-full items-center gap-4"):
-            ui.select(
-                list(self.contracts), value=first_label, label="Contract",
-                on_change=self.on_contract,
-            ).classes("w-56")
             self.date_select = ui.select(
-                days, value=self.date, label="Session date (NY trading day)",
+                days, value=self.date, label="Session day (NY trading day)", with_input=True,
                 on_change=self.on_date,
-            ).classes("w-56")
+            ).classes("w-52")
+            self.symbol_select = ui.select(
+                symbols, value=self.symbol, label="Instrument", on_change=self.on_symbol,
+            ).classes("w-32")
+            self.contract_select = ui.select(
+                contract_options, value=int(self.contract["contract_id"]) if self.contract is not None else None,
+                label="Contract", on_change=self.on_contract,
+            ).classes("w-44")
             ui.toggle(
                 ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
             ).props("dense")
@@ -764,8 +890,9 @@ class SessionExplorer:
                     with ui.column().classes("gap-0"):
                         ui.label("Matching historical day — RTH").classes("text-lg font-medium")
                         ui.label(
-                            "The regular session (09:30–16:00 ET) of a day the forecast matched, with "
-                            "that day's own previous close and overnight range."
+                            "The regular session of a day the forecast matched, with 15 minutes either "
+                            "side (grey) as above, that day's own previous close and overnight range, "
+                            "and its pre-open features."
                         ).classes("text-sm").style(_MUTED)
                     ui.space()
                     ui.select(
@@ -773,7 +900,12 @@ class SessionExplorer:
                         value=self.analogue_choice, label="Matching day", on_change=self.on_analogue,
                     ).classes("w-80")
                 self.analogue_summary = ui.row().classes("w-full gap-8 items-start")
-                self.analogue_chart = LightweightChart(height=420, spec=self._analogue_spec(session))
+                with ui.row().classes("w-full no-wrap gap-4 items-start"):
+                    with ui.column().classes("grow gap-1 min-w-0"):
+                        self.analogue_chart = LightweightChart(height=420, spec=self._analogue_spec(session))
+                    with ui.card().classes("w-72 shrink-0").style("background:#161a25"):
+                        ui.label("Pre-open features").classes("text-sm font-medium")
+                        self.analogue_features = ui.column().classes("gap-3 w-full")
         self._render_analogue_summary(session)
 
     def _analogue_session(self) -> Dict[str, Any]:
@@ -792,6 +924,13 @@ class SessionExplorer:
         self._render_analogue_summary(session)
 
     def _render_analogue_summary(self, session: Dict[str, Any]) -> None:
+        self.analogue_features.clear()
+        with self.analogue_features:
+            if session.get("snapshot"):
+                render_features(session["snapshot"])
+            else:
+                ui.label("Not computable: the contract lacks the previous session or the day's open."
+                         ).classes("text-sm").style(_MUTED)
         self.analogue_summary.clear()
         analogue = self.analogue_options[self.analogue_choice]
         with self.analogue_summary:
