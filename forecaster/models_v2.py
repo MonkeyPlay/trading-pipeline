@@ -12,7 +12,7 @@ predicts, its targets, its *required features* (which decide the run's
 explicit feature allowlist, the preprocessing, the candidate estimators and the
 selection rule, so training and inference are identical by construction.
 
-``nq_sklearn_v3``
+``nq_sklearn_v4``
     Trained walk-forward: to forecast session D it fits only on earlier sessions
     whose realised label was knowable before D's cutoff (and, live, already
     computed). Per target, every candidate - the class prior, sparse (L1) and L2
@@ -30,10 +30,12 @@ selection rule, so training and inference are identical by construction.
     the prior is kept. (nq_sklearn_v1 took any improvement from 60 sessions on.
     nq_sklearn_v2 asked for one standard error: in a 248-session NQ backfill it
     admitted a feature model on 48 sessions, every time at 1.1-1.6 SE, a different
-    candidate at nearly every refit, and those forecasts lost to the prior.)
+    candidate at nearly every refit, and those forecasts lost to the prior.
+    nq_sklearn_v3 is this model on the previous labels, nq_labels_v2_candidate.)
 
-``nq_climatology_v3``
-    Laplace-smoothed label frequencies over earlier sessions - the baseline.
+``nq_climatology_v4``
+    Laplace-smoothed label frequencies over earlier sessions - the baseline
+    (nq_climatology_v3: the same on nq_labels_v2_candidate).
 
 Prediction status (section 7):
     issued       a label (the arg-max, ties by vocabulary order) + probabilities
@@ -100,7 +102,7 @@ MISSING_CATEGORY = "missing"
 _REQUIRED = ["daily_atr_fraction", "gap_signed_atr"]   # the labels are measured in units of A
 
 CLIMATOLOGY = {
-    "model_version": "nq_climatology_v3",
+    "model_version": "nq_climatology_v4",
     "kind": "climatology",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -112,7 +114,7 @@ CLIMATOLOGY = {
 }
 
 SKLEARN = {
-    "model_version": "nq_sklearn_v3",
+    "model_version": "nq_sklearn_v4",
     "kind": "sklearn",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
