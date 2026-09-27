@@ -95,7 +95,7 @@ def test_live_timing_is_enforced(conn):
     run = {"snapshot_id": sid, "model_version": models_v2.CLIMATOLOGY["model_version"], "label_version": labels_v2.LABEL_VERSION,
            "calibration": {}, "input_quality_status": "invalid"}
     abstain = [{"target_id": t, "abstained": True, "abstention_reason": "test", "prediction_status": "unavailable",
-                "decision_reason": "data_quality", "calibration_status": "unvalidated"} for t in labels_v2.TARGETS]
+                "decision_reason": "data_quality", "calibration_status": "unvalidated"} for t in models_v2.MODEL_TARGETS]
     with pytest.raises(psycopg.Error, match="before 09:30"):
         store.save_forecast_run(conn, dict(run, generated_at=s.rth_open_at + timedelta(seconds=1)), abstain)
     with pytest.raises(psycopg.Error, match="precedes"):
@@ -160,6 +160,8 @@ def test_outcome_revisions_and_explicit_selection(conn):
     sid = snap["snapshot_id"]
     preds = []
     for t, labels in labels_v2.vocabulary().items():
+        if t not in models_v2.CLIMATOLOGY["target_ids"]:     # the database refuses a target the model lacks
+            continue
         probs = {lab: 0.4 / (len(labels) - 1) for lab in labels}
         probs[labels[-1]] = 0.6                       # strictly the most probable, also with two labels
         preds.append(_issued(t, labels[-1], probs))
@@ -199,9 +201,10 @@ def test_outcome_revisions_and_explicit_selection(conn):
     v1 = store.get_prediction_outcomes(conn, outcome_revision=1)
     v2 = store.get_prediction_outcomes(conn, outcome_revision=2)
     assert {r["outcome_revision"] for r in v1} == {1} and {r["outcome_revision"] for r in v2} == {2}
-    rth = [r for r in v2 if r["target_id"] == "direction_rth"][0]
-    assert rth["actual_label"] == "up" and rth["prediction_status"] == "issued"
-    assert pd.Timestamp(rth["outcome_window_end_at"], tz="UTC") == cal.ny_instant(s.session_date, labels_v2.RTH_END)
+    hour = [r for r in v2 if r["target_id"] == "first_break_1h"][0]
+    assert hour["prediction_status"] == "issued" and hour["actual_label"] in ("above", "below", "none")
+    assert pd.Timestamp(hour["outcome_window_end_at"], tz="UTC") == s.rth_open_at + timedelta(minutes=60)
+    assert not [r for r in v2 if r["target_id"] == "direction_rth"]     # labelled, but no model forecasts it
     as_of = store.get_prediction_outcomes(conn, outcomes_as_of=pd.Timestamp.now(tz="UTC").to_pydatetime())
     assert {r["outcome_revision"] for r in as_of} == {2}
 
@@ -265,7 +268,7 @@ def test_day_forecast_for_the_dashboard(conn):
     assert store.get_day_forecast(conn, "2026-06-12", models_v2.CLIMATOLOGY["model_version"], catv2.FEATURE_VERSION) is None
     day = store.get_day_forecast(conn, "2026-06-12", "nq_sklearn_test", catv2.FEATURE_VERSION)
     assert day is not None and day["run"]["model_version"] == "nq_sklearn_test"
-    assert set(day["predictions"]) == set(labels_v2.TARGETS)
+    assert set(day["predictions"]) == set(models_v2.MODEL_TARGETS)
     p = day["predictions"]["direction_15m"]
     assert p["prediction_status"] == "issued" and set(p["probabilities"]) == {"up", "down", "flat"}
     assert set(day["outcomes"]) == set(labels_v2.TARGETS)          # recorded by the end-to-end test

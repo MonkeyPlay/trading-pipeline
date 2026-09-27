@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -516,18 +517,19 @@ class SessionExplorer:
                                           fan=self._fan()))
 
     def _fan(self) -> Optional[Dict[str, Any]]:
-        fc = (self.first_hour or {}).get("forecast")
-        if not fc or not fc.get("fan_price"):
+        fan = (self.first_hour or {}).get("fan")
+        if not fan or not fan.get("price"):
             return None
         return {"start": session_window(self.date)["open"], "bar_minutes": _BAR_MINUTES.get(self.timeframe, 1),
-                "prices": fc["fan_price"]}
+                "prices": fan["price"]}
 
     def _compute_first_hour(self) -> None:
         """The selected day's first-hour forecast from pre-open matches (forecaster/first_hour.py)."""
         symbol = self.contract["symbol"]
         try:
             if symbol not in self._first_hours:
-                self._first_hours[symbol] = first_hour.load_first_hours(self.conn, symbol)
+                # every first hour, the snapshots and the walk-forward records: once per instrument
+                self._first_hours[symbol] = first_hour.load_history(self.conn, symbol)
             self.first_hour = first_hour.outlook(self.conn, symbol, self.date, self.snapshot, self._v1_history,
                                                  self._first_hours[symbol])
         except Exception as e:  # noqa: BLE001 - the page must still load; the card says why
@@ -554,34 +556,45 @@ class SessionExplorer:
             def pts(v):
                 return "—" if v is None else f"{v:,.0f} pts"
 
-            wp, op = fc["width_pts"], fc["or_width_pts"]
+            rng, fan, brk, cal_ = fh["range"], fh["fan"], fh["breaks"], fh["calibration"]
+            op = fc["or_width_pts"]
             with ui.row().classes("w-full gap-10 items-start mt-1"):
-                _metric("First-hour range", pts(wp[50]),
-                        hint=f"likely {pts(wp[25])} – {pts(wp[75])} · usual {pts(fc['naive_width_pts'])}")
+                lo, hi = rng["band50_pts"]
+                _metric("First-hour range", pts(rng["estimate_pts"]),
+                        hint=f"likely {pts(lo)} – {pts(hi)} · usual {pts(rng['usual_pts'])}")
                 _metric("Opening range · 15 min", pts(op[50]), hint=f"likely {pts(op[25])} – {pts(op[75])}")
                 with ui.column().classes("gap-1"):
-                    ui.label("First break after 09:45").classes("text-xs uppercase tracking-wide").style(_MUTED)
-                    counts = fc["first_break_counts"]
-                    for side, label, colour in (("above", "Above ORH", "#26a69a"), ("none", "No break", "#b2b5be"),
-                                                ("below", "Below ORL", "#ef5350")):
-                        ui.label(f"{label}: {fc['first_break'][side] * 100:.0f} %   "
-                                 f"({counts[side]} of {fc['n']} matches · usually {fc['base_rates'][side] * 100:.0f} %)"
-                                 ).classes("text-sm font-mono").style(f"color:{colour}")
+                    ui.label("Break of the opening range by 10:30").classes("text-xs uppercase tracking-wide").style(_MUTED)
+                    ui.label(f"{brk['any'] * 100:.0f} % of sessions break it").classes("text-sm")
+                    ui.label(f"first break above ORH {brk['above'] * 100:.0f} % · below ORL {brk['below'] * 100:.0f} %"
+                             ).classes("text-sm").style(_MUTED)
+                    ui.label("usual rates: the side has not been predictable from pre-open data"
+                             ).classes("text-xs").style(_MUTED)
                 if actual is not None:
                     with ui.column().classes("gap-1"):
                         ui.label("Actual").classes("text-xs uppercase tracking-wide").style(_MUTED)
-                        rng = (actual.high - actual.low)
-                        inside = fc["width_pct"][25] <= actual.width <= fc["width_pct"][75]
-                        ui.label(f"range {rng:,.0f} pts {'(in the likely band)' if inside else '(outside the likely band)'}"
+                        width_pts = actual.high - actual.low
+                        inside = (lo is not None and hi is not None and lo <= width_pts <= hi)
+                        ui.label(f"range {width_pts:,.0f} pts {'(in the likely band)' if inside else '(outside the likely band)'}"
                                  ).classes("text-sm")
                         ui.label(f"opening range {actual.or_high - actual.or_low:,.0f} pts").classes("text-sm")
                         when = (f" at {(session_window(self.date)['open'] + pd.Timedelta(minutes=actual.break_minute)).strftime('%H:%M')}"
                                 if actual.break_minute is not None else "")
                         ui.label(f"first break: {actual.first_break}{when}").classes("text-sm")
-            ui.label(f"{fc['n']} closest of {fh.get('pool', 0)} earlier sessions by {fh.get('method', 'pre-open similarity')}. "
-                     f"The fan on the chart starts at the last pre-open price. Which side breaks is a question of "
-                     f"direction, which pre-open data has not predicted on this history; the width is where it "
-                     f"carries information.").classes("text-xs mt-1").style(_MUTED)
+            if rng["calibrated"]:
+                errs = rng["errors"]
+                ui.label(
+                    f"Range from the {rng['label']} - the smallest error on the {cal_['n']} earlier sessions "
+                    f"(typical miss ×{math.exp(errs[rng['method']]):.2f}; usual range ×{math.exp(errs['usual']):.2f}). "
+                    f"The likely band held half of those sessions. The fan (from the last pre-open price) is widened "
+                    f"×{fan['fan80']:.2f} / ×{fan['fan50']:.2f} so its bands held 80 % / 50 % of their 10:29 closes."
+                ).classes("text-xs mt-1").style(_MUTED)
+            else:
+                ui.label(f"Too few earlier scored sessions to calibrate yet ({cal_['n']} of "
+                         f"{first_hour.MIN_CALIBRATION}): range and fan are the matches' own spread."
+                         ).classes("text-xs mt-1").style("color:#ffa726")
+            ui.label(f"Matches: the {fc['n']} closest of {fh.get('pool', 0)} earlier sessions by "
+                     f"{fh.get('method', 'pre-open similarity')}.").classes("text-xs").style(_MUTED)
 
     def refresh_session(self, keep_forecast: bool = False) -> None:
         """

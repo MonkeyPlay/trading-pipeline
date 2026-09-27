@@ -1,5 +1,5 @@
 # tests/test_labels_v2.py
-"""nq_labels_v4_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
+"""nq_labels_v5_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
 
 import numpy as np
 import pandas as pd
@@ -142,7 +142,7 @@ def test_early_close_rth_targets_are_shortened():
 
 
 def test_windows_and_vocabulary():
-    ref = {"range_15m_atr": 0.3, "range_rth_atr": 0.8}
+    ref = {"range_15m_atr": 0.3, "range_rth_atr": 0.8, "range_1h_atr": 0.4}
     labels = lv.compute_labels(*_labels(_bars(S, _full(np.full(15, O))))[1].values(), S, reference=ref)
     assert labels["first_move_5m"]["window_end_at"] == S.rth_open_at + pd.Timedelta(minutes=5)
     assert labels["opening_type_15m"]["window_end_at"] == S.rth_open_at + pd.Timedelta(minutes=15)
@@ -152,7 +152,8 @@ def test_windows_and_vocabulary():
     rec = lv.label_registry_record()
     assert [t["target_id"] for t in rec["targets"]] == ["first_move_5m", "opening_type_15m", "direction_15m",
                                                          "direction_rth", "session_type_rth",
-                                                         "range_15m_regime", "range_rth_regime"]
+                                                         "range_15m_regime", "range_rth_regime",
+                                                         "direction_1h", "range_1h_regime", "first_break_1h"]
 
 
 def test_range_reference_needs_the_full_window():
@@ -160,7 +161,7 @@ def test_range_reference_needs_the_full_window():
     ref = lv.range_reference(hist)
     assert ref["range_15m_atr"] == pytest.approx(19.5)          # the 40 newest: 0 .. 39
     assert ref["range_rth_atr"] is None                          # 39 earlier values are not enough
-    assert lv.range_reference(None) == {"range_15m_atr": None, "range_rth_atr": None}
+    assert lv.range_reference(None) == {"range_15m_atr": None, "range_rth_atr": None, "range_1h_atr": None}
 
 
 def test_range_regime_labels():
@@ -208,3 +209,38 @@ def test_range_regime_digest_carries_the_threshold():
     assert a["labels"]["range_15m_regime"]["digest"] != b["labels"]["range_15m_regime"]["digest"]
     assert a["labels"]["range_rth_regime"]["digest"] == b["labels"]["range_rth_regime"]["digest"]
     assert "digest" not in a["labels"]["direction_15m"]
+
+
+def test_first_hour_targets():
+    # 15 minutes between 100 and 101, a break above at 09:52, the hour ending at 103 (+0.3 A)
+    closes = [100.5] * 22 + list(np.linspace(101.5, 103.0, 38))
+    highs = [101.0] * 15 + [100.8] * 7 + [c + 0.1 for c in closes[22:]]
+    lows = [100.0] * 15 + [100.2] * 7 + [c - 0.1 for c in closes[22:]]
+    opens = [100.5] + closes[:-1]
+    rest = np.full(390 - 60, closes[-1])
+    df = _bars(S, np.concatenate([closes, rest]), opens=np.concatenate([opens, rest]),
+               highs=np.concatenate([highs, rest]), lows=np.concatenate([lows, rest]))
+    res = lv.compute_metrics(df, S, A, 110.0, 90.0)
+    m = res["metrics"]
+    assert m["first_break_side_1h"] == 1.0 and m["first_break_minute_1h"] == 22
+    assert m["range_1h_atr"] == pytest.approx((103.1 - 100.0) / A)
+    assert m["first_hour_return_atr"] == pytest.approx((103.0 - 100.5) / A)
+    out = lv.compute_labels(m, res["status"], S, reference={"range_1h_atr": 0.2})
+    assert out["direction_1h"]["label"] == "up" and out["first_break_1h"]["label"] == "above"
+    assert out["range_1h_regime"]["label"] == "wide"                 # 0.31 A > 0.2
+    assert out["first_break_1h"]["available_at"] == S.rth_open_at + pd.Timedelta(minutes=60)
+
+
+def test_first_break_none_and_same_minute():
+    flat = np.full(390, O)
+    base = dict(opens=flat.copy(), highs=flat + 0.5, lows=flat - 0.5)
+    res = lv.compute_metrics(_bars(S, flat, **base), S, A, 110.0, 90.0)
+    assert res["metrics"]["first_break_side_1h"] == 0.0 and res["metrics"]["first_break_minute_1h"] is None
+    assert lv.compute_labels(res["metrics"], res["status"], S)["first_break_1h"]["label"] == "none"
+    highs, lows, closes = flat + 0.5, flat - 0.5, flat.copy()
+    highs[30], lows[30], closes[30] = O + 2, O - 2, O - 0.2             # both sides at 10:00, closing below the middle
+    res = lv.compute_metrics(_bars(S, closes, opens=flat, highs=highs, lows=lows), S, A, 110.0, 90.0)
+    assert res["metrics"]["first_break_side_1h"] == -1.0
+    gap = _bars(S, flat, **base).drop(index=[40])                       # a missing minute in the hour
+    res = lv.compute_metrics(gap, S, A, 110.0, 90.0)
+    assert lv.compute_labels(res["metrics"], res["status"], S)["first_break_1h"]["status"] == "missing_bars"

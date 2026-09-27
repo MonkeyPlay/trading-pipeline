@@ -1,8 +1,9 @@
 # dashboard/components/model_forecast.py
 """
-The v2 model forecast of a session (forecaster/models_v2.py): the five
-nq_schema_v2 targets and the two range regimes, with their status, predicted label, full probability
-distribution and - once the session is over and labelled - what happened.
+The v2 model forecast of a session (forecaster/models_v2.py): the targets the
+model forecasts - those decided between 09:30 and 10:30 - with their status,
+predicted label, full probability distribution and - once the session is over
+and labelled - what happened.
 
 It shows the newest stored run of the chosen model for the selected day (the
 live capture's when there is one). "Run model" computes one from the stored
@@ -30,6 +31,9 @@ TARGET_NAMES = {
     "session_type_rth": "Session type · RTH",
     "range_15m_regime": "Range · 15 min",
     "range_rth_regime": "Range · RTH",
+    "direction_1h": "Direction · first hour",
+    "range_1h_regime": "Range · first hour",
+    "first_break_1h": "First break · 09:45–10:30",
 }
 
 _MUTED = "color:#787b86"
@@ -42,6 +46,7 @@ _LABEL_COLOURS = {
     "two_sided": "#ab47bc", "two_sided_volatile": "#ab47bc", "reversal": "#ffa726",
     "mixed": "#5c6bc0",
     "wide": "#ffa726", "narrow": "#78909c",
+    "above": "#26a69a", "below": "#ef5350", "none": "#787b86",
 }
 _STATUS_COLOURS = {"issued": "#d1d4dc", "abstained": "#ffa726", "unavailable": "#787b86"}
 
@@ -82,7 +87,7 @@ class ModelForecastPanel:
             with ui.row().classes("items-center w-full"):
                 with ui.column().classes("gap-0"):
                     ui.label("Model forecast").classes("text-lg font-medium")
-                    ui.label("Opening, session and range targets from the trained model, with the full "
+                    ui.label("Targets decided between 09:30 and 10:30, from the trained model, with the full "
                              "probability distribution of each.").classes("text-sm").style(_MUTED)
                 ui.space()
                 ui.select({m: m for m in models_v2.MODELS}, value=self.model, label="Model",

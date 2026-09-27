@@ -4,16 +4,17 @@ The current feature version is `nq_features_v3`. It has the same features as
 `nq_features_v2` and changes two parameters: the daily ATRs skip sessions without
 complete RTH data instead of needing an unbroken run of them, and the spot
 volatility indices may be up to 20 minutes old. Records of both versions stay in the
-store; models are tied to one feature version (`nq_sklearn_v5` and
-`nq_climatology_v5` read `nq_features_v3` and predict `nq_labels_v4_candidate`).
+store; models are tied to one feature version (`nq_sklearn_v6` and
+`nq_climatology_v6` read `nq_features_v3` and predict the 09:30-10:30 targets of
+`nq_labels_v5_candidate`).
 
 | record | current | earlier versions (kept in the store) |
 |---|---|---|
 | features | `nq_features_v3` | `nq_features_v2`: ATRs needed an unbroken run of complete sessions |
-| outcome metrics | `nq_outcome_metrics_v3` (first-move barrier 0.10 A) | `nq_outcome_metrics_v2` (0.05 A) |
-| labels | `nq_labels_v4_candidate` (v3 + two range-regime targets) | `v3`: thresholds retuned; `v2`: section 11 starting values |
-| trained model | `nq_sklearn_v5` (default; + a volatility-inputs candidate) | `v4` / `v3`: the v4 model on the v3 / v2 labels; `v2`: 1-SE selection margin; `v1`: no margin, from 60 sessions |
-| baseline | `nq_climatology_v5` | `v4` / `v3`: on the v3 / v2 labels |
+| outcome metrics | `nq_outcome_metrics_v4` (+ first-hour range and first opening-range break) | `v3`: first-move barrier 0.10 A; `v2`: 0.05 A |
+| labels | `nq_labels_v5_candidate` (v4 + `direction_1h`, `range_1h_regime`, `first_break_1h`) | `v4`: + two range regimes; `v3`: thresholds retuned; `v2`: section 11 starting values |
+| trained model | `nq_sklearn_v6` (default; forecasts only the 09:30-10:30 targets) | `v5`: all v4 targets, + a volatility-inputs candidate; `v4` / `v3`: on the v3 / v2 labels; `v2`: 1-SE selection margin; `v1`: no margin, from 60 sessions |
+| baseline | `nq_climatology_v6` | `v5` / `v4` / `v3`: on the v4 / v3 / v2 labels |
 
 A new label or model version starts with no records: run `backfill` once over the
 stored history after upgrading (see [Running it](#running-it)).
@@ -167,7 +168,7 @@ event features are null with status `missing` — "no calendar" is never reporte
 event". A live capture only sees rows recorded before it froze. No loader for a
 particular vendor is included.
 
-## Targets, labels and outcome metrics (`nq_labels_v4_candidate`)
+## Targets, labels and outcome metrics (`nq_labels_v5_candidate`)
 
 [forecaster/labels_v2.py](../forecaster/labels_v2.py) implements sections 8-11 of the
 schema. Every value is measured from the snapshot contract's RTH minute bars: O is the
@@ -184,12 +185,26 @@ high/low, never post-open bars.
 | `session_type_rth` | bull_trend, bear_trend, reversal, two_sided_volatile, range, mixed | [09:30, 16:00) |
 | `range_15m_regime` | wide, narrow | [09:30, 09:45) |
 | `range_rth_regime` | wide, narrow | [09:30, 16:00) |
+| `direction_1h` | up, down, flat | [09:30, 10:30) |
+| `range_1h_regime` | wide, narrow | [09:30, 10:30) |
+| `first_break_1h` | above, below, none | [09:45, 10:30), against [09:30, 09:45) |
+
+The three first-hour targets (`nq_labels_v5_candidate`) cover the window traded most:
+`direction_1h` compares the 10:29 close with the 09:30 open (up / down beyond ±0.10 A,
+else flat); `range_1h_regime` is the first hour's high - low in A against the previous 40
+sessions' median, like the other range regimes; `first_break_1h` is the side of the
+15-minute opening range (its high and low over 09:30-09:44) that price crossed first
+between 09:45 and 10:29 - `above`, `below` or `none`, a minute crossing both decided by its
+close against the range's middle. They need every minute of the hour and are knowable at
+10:30. The model forecasts only the targets decided by 10:30 (`models_v2.MODEL_TARGETS`);
+`direction_rth`, `session_type_rth` and `range_rth_regime` are still labelled for the
+studies.
 
 The first five are the schema's section 8 targets. The two range regimes were added in
 `nq_labels_v4_candidate` because the range is where the pre-open features carry
 information (see `metric-study` below): a session is `wide` when its `range_15m_atr`
 (`range_rth_atr`) exceeds the median of that metric over the **previous 40 sessions**
-that have it, else `narrow`. The 40 values are the stored `nq_outcome_metrics_v3` rows
+that have it, else `narrow`. The 40 values are the stored `nq_outcome_metrics_v4` rows
 of the earlier sessions (one snapshot per session, latest revision;
 `forecast_store.trailing_metric_values`), so the threshold is fixed before the session
 opens; with fewer than 40 the label is ineligible (`insufficient_history`). The
@@ -198,9 +213,10 @@ new outcome revision. Outcomes must therefore be recorded in session order, whic
 `backfill` and `outcomes` do. `range_rth_regime` is ineligible on early closes, whose
 RTH range is not comparable.
 
-`nq_outcome_metrics_v3` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
+`nq_outcome_metrics_v4` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
 `return_rth_atr`, excursions, ranges, `efficiency_15m`, `rth_close_location`,
-`first_hour_return_atr`, `efficiency_rth_5m`, first up/down touch minutes, the ON-low
+`first_hour_return_atr`, `range_1h_atr`, `first_break_side_1h` (+1 / -1 / 0) and
+`first_break_minute_1h`, `efficiency_rth_5m`, first up/down touch minutes, the ON-low
 breach-and-reclaim / ON-high breach-and-reject flags) plus the first-move barrier and
 the open of a same-minute double touch. The label rules read only those metrics; a
 change of threshold is a new label version.
@@ -262,7 +278,9 @@ label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run a
 uses outcome rows that already existed when it trained. One snapshot per session is
 used (the live capture if any).
 
-**`nq_sklearn_v5`** (the default) - one scikit-learn pipeline per target:
+**`nq_sklearn_v6`** (the default) - one scikit-learn pipeline per target of
+`MODEL_TARGETS` (first move, opening type, 15-minute direction and range, first-hour
+direction, range and first break):
 
 - *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
   whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
@@ -314,7 +332,7 @@ used (the live capture if any).
   `event_policy` and a minimum top probability are available as parameters, off by
   default.
 
-**`nq_climatology_v5`** - Laplace-smoothed label frequencies of the earlier sessions;
+**`nq_climatology_v6`** - Laplace-smoothed label frequencies of the earlier sessions;
 the baseline the trained model has to beat.
 
 A run's `calibration` records the training window and class counts per target, every
@@ -422,7 +440,7 @@ that time per source and is `verified` only if every observation has one (see
    outside it; add each new year (bump `CALENDAR_VERSION`) — or pin a calendar library
    version and record it, if you prefer.
 3. **Revisit the label thresholds with more history.** The thresholds carried into
-   `nq_labels_v4_candidate` were tuned on 248 sessions of one market regime; a new label version is only worth it
+   `nq_labels_v5_candidate` were tuned on 248 sessions of one market regime; a new label version is only worth it
    if the label mix has moved materially (`label-study` shows the current and the
    previous thresholds side by side).
 4. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses

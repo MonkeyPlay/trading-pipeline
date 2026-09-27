@@ -42,9 +42,16 @@ selection rule, so training and inference are identical by construction.
     other candidates dilute them. It competes for every target under the same
     selection rule.
 
-``nq_climatology_v5``
-    Laplace-smoothed label frequencies over earlier sessions - the baseline
-    (v3 and v4: the same on nq_labels_v2_candidate and nq_labels_v3_candidate).
+    nq_sklearn_v6 (this version) is v5 bound to the window traded most, 09:30 to
+    10:30: it predicts only MODEL_TARGETS of nq_labels_v5_candidate - the first
+    move, the opening type, the 15-minute direction and range regime, and the
+    three first-hour targets (direction, range regime, first opening-range
+    break). The full-session targets (direction_rth, session_type_rth,
+    range_rth_regime) are still labelled, for the studies, but not forecast.
+
+``nq_climatology_v6``
+    Laplace-smoothed label frequencies over earlier sessions - the baseline, on
+    the same targets (v3, v4, v5: on nq_labels_v2 / v3 / v4_candidate, all targets).
 
 Prediction status (section 7):
     issued       a label (the arg-max, ties by vocabulary order) + probabilities
@@ -108,6 +115,10 @@ SKLEARN_FEATURES = {
 }
 MISSING_CATEGORY = "missing"
 
+# The targets the models forecast: those decided within 09:30-10:30.
+MODEL_TARGETS = ["first_move_5m", "opening_type_15m", "direction_15m", "range_15m_regime",
+                 "direction_1h", "range_1h_regime", "first_break_1h"]
+
 # Pre-open volatility inputs: realised and implied volatility, ranges and activity.
 # Chosen on market grounds (volatility clusters), not from the study's correlations.
 VOL_FEATURES = [
@@ -123,11 +134,11 @@ FEATURE_SETS = {
 _REQUIRED = ["daily_atr_fraction", "gap_signed_atr"]   # the labels are measured in units of A
 
 CLIMATOLOGY = {
-    "model_version": "nq_climatology_v5",
+    "model_version": "nq_climatology_v6",
     "kind": "climatology",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
-    "target_ids": list(labels_v2.TARGETS),
+    "target_ids": list(MODEL_TARGETS),
     "required_features": _REQUIRED,
     "description": "Laplace-smoothed label frequencies over earlier sessions (no features used beyond the "
                    "input-quality gate). The baseline to beat.",
@@ -135,11 +146,11 @@ CLIMATOLOGY = {
 }
 
 SKLEARN = {
-    "model_version": "nq_sklearn_v5",
+    "model_version": "nq_sklearn_v6",
     "kind": "sklearn",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
-    "target_ids": list(labels_v2.TARGETS),
+    "target_ids": list(MODEL_TARGETS),
     "required_features": _REQUIRED,
     "description": "scikit-learn classifier per target, trained walk-forward on earlier sessions' snapshots "
                    "and realised labels; the estimator is chosen by chronological cross-validated log loss "

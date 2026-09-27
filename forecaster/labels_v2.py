@@ -10,11 +10,12 @@ contract. O is the 09:30 bar's open; C5, C15 and C are the 09:34, 09:44 and
 ATR14 through the previous session), and the opening labels use the snapshot's
 frozen overnight extremes - post-open bars never redefine them.
 
-  METRIC_VERSION  nq_outcome_metrics_v3: section 10, first-move barrier 0.10 A.
-  LABEL_VERSION   nq_labels_v4_candidate: the five targets of section 8, with the
+  METRIC_VERSION  nq_outcome_metrics_v4: section 10, first-move barrier 0.10 A,
+                  plus the first hour's range and first opening-range break.
+  LABEL_VERSION   nq_labels_v5_candidate: the five targets of section 8, with the
                   section 11 thresholds retuned on the 248 labelled NQ sessions
-                  stored by 2026-09-25 (``nq_forecast_v2.py label-study``), plus
-                  two range-regime targets. Each target's vocabulary is
+                  stored by 2026-09-25 (``nq_forecast_v2.py label-study``), two
+                  range-regime targets and three first-hour targets. Each target's vocabulary is
                   registered in forecast.label_definitions; the database checks
                   predictions and realised labels against that one row.
 
@@ -29,6 +30,15 @@ pre-open features say nothing about direction but relate robustly to the range
 volume ratio, relative 1m ATR, overnight and prior ranges and VIX; for the
 15-minute label a logistic fit on volatility inputs gained 0.066 nats per
 session out of sample). The other five targets are as in nq_labels_v3_candidate.
+
+First hour (nq_labels_v5_candidate), the window traded most - 09:30 to 10:30:
+``direction_1h`` (10:29 close vs 09:30 open: up / down beyond 0.10 A, else
+flat), ``range_1h_regime`` (the first hour's high - low in A, wide / narrow
+against the previous 40 sessions' median, as the other range regimes), and
+``first_break_1h`` (which side of the 15-minute opening range - its high and
+low over 09:30-09:44 - price crossed first between 09:45 and 10:29: above /
+below / none; both in one minute are decided by that minute's close against
+the range's middle). All three need every minute of the hour.
 
 The section 11 starting values (nq_labels_v2_candidate) labelled 69 % of
 openings and 65 % of sessions 'mixed' and left 15 % of first moves ambiguous
@@ -64,8 +74,8 @@ from features.indicators import finite, path_efficiency, ratio
 ONE_MIN = timedelta(minutes=1)
 RTH_END = time(16, 0)   # the full-RTH targets' window end, whatever the scheduled close
 
-METRIC_VERSION = "nq_outcome_metrics_v3"
-LABEL_VERSION = "nq_labels_v4_candidate"
+METRIC_VERSION = "nq_outcome_metrics_v4"
+LABEL_VERSION = "nq_labels_v5_candidate"
 
 LABEL_STATUSES = ("valid", "missing_bars", "ambiguous_intrabar", "incomplete_window",
                   "shortened_session", "not_yet_available", "invalid_reference", "insufficient_history")
@@ -78,6 +88,9 @@ PARAMETERS = {
     "first_move_atr_fraction": 0.10,
     "direction_15m_band_atr": 0.10,
     "direction_rth_band_atr": 0.20,
+    "direction_1h_band_atr": 0.10,
+    "first_break_1h": "first minute in [09:45, 10:30) whose high > ORH or low < ORL, with ORH / ORL the "
+                      "high / low of [09:30, 09:45); both in one minute: its close >= (ORH + ORL) / 2 -> above",
     "on_breach_atr": 0.02,
     "opening_type_15m": {
         "two_sided": {"u_min": 0.12, "d_min": 0.12},
@@ -160,8 +173,32 @@ TARGETS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+TARGETS.update({
+    "direction_1h": {
+        "labels": ("up", "down", "flat"),
+        "window_minutes": 60,
+        "definition": "10:29 close vs 09:30 open: up if first_hour_return_atr > 0.10, down if < -0.10, else "
+                      "flat (equality is flat).",
+    },
+    "range_1h_regime": {
+        "labels": ("wide", "narrow"),
+        "window_minutes": 60,
+        "definition": "range_1h_atr (high - low of [09:30, 10:30) / A) vs the median of range_1h_atr over the "
+                      "previous 40 sessions that have it: wide if greater, else narrow; fewer than 40 earlier "
+                      "values: ineligible (insufficient_history).",
+    },
+    "first_break_1h": {
+        "labels": ("above", "below", "none"),
+        "window_minutes": 60,
+        "definition": "Which side of the 15-minute opening range (high / low of [09:30, 09:45)) price crossed "
+                      "first in [09:45, 10:30): above (a high above ORH), below (a low below ORL), none; both "
+                      "in one minute: above if its close >= the range's middle, else below.",
+    },
+})
+
 # Range-regime target -> the metric it compares with its trailing median.
-RANGE_TARGETS = {"range_15m_regime": "range_15m_atr", "range_rth_regime": "range_rth_atr"}
+RANGE_TARGETS = {"range_15m_regime": "range_15m_atr", "range_rth_regime": "range_rth_atr",
+                 "range_1h_regime": "range_1h_atr"}
 
 # Metric groups by the window they need; a group's metrics are all null when its
 # window is incomplete.
@@ -169,7 +206,7 @@ _METRICS_5M = ("return_5m_atr", "first_up_touch_minute", "first_down_touch_minut
                "first_touch_tie_open")
 _METRICS_15M = ("return_15m_atr", "up_excursion_15m_atr", "down_excursion_15m_atr", "range_15m_atr",
                 "efficiency_15m", "on_low_breach_close_reclaim_15m", "on_high_breach_close_reject_15m")
-_METRICS_60M = ("first_hour_return_atr",)
+_METRICS_60M = ("first_hour_return_atr", "range_1h_atr", "first_break_side_1h", "first_break_minute_1h")
 _METRICS_RTH = ("return_rth_atr", "up_excursion_rth_atr", "down_excursion_rth_atr", "range_rth_atr",
                 "rth_close_location", "efficiency_rth_5m")
 METRIC_NAMES = ("open_0930",) + _METRICS_5M + _METRICS_15M + _METRICS_60M + _METRICS_RTH
@@ -184,8 +221,9 @@ def label_registry_record() -> Dict[str, Any]:
     digest = hashlib.sha256(json.dumps(targets, sort_keys=True).encode()).hexdigest()
     return {"label_version": LABEL_VERSION, "definition_hash": digest, "targets": targets,
             "description": "nq_schema_v2 candidate labels, thresholds retuned on the realised label mix: first "
-                           "move, opening type, 15m and RTH direction, RTH session type (deterministic "
-                           "rules over nq_outcome_metrics_v3)."}
+                           "move, opening type, 15m, first-hour and RTH direction, RTH session type, range "
+                           "regimes and the first opening-range break (deterministic "
+                           "rules over nq_outcome_metrics_v4)."}
 
 
 # --------------------------------------------------------------------------
@@ -331,6 +369,19 @@ def compute_metrics(df: pd.DataFrame, s: cal.Session, A: Optional[float], ONH: O
         void(_METRICS_60M, "invalid_reference")
     else:
         put("first_hour_return_atr", over_a(float(w60["close"].iloc[-1]) - O))
+        put("range_1h_atr", over_a(float(w60["high"].max()) - float(w60["low"].min())))
+        orh, orl = float(w60["high"].iloc[:15].max()), float(w60["low"].iloc[:15].min())
+        side, minute_of = 0.0, None
+        for t in range(15, 60):
+            bar = w60.iloc[t]
+            up, down = bar["high"] > orh, bar["low"] < orl
+            if up or down:
+                side = (1.0 if bar["close"] >= (orh + orl) / 2 else -1.0) if up and down else (1.0 if up else -1.0)
+                minute_of = t
+                break
+        put("first_break_side_1h", side)                          # +1 above, -1 below, 0 none
+        metrics["first_break_minute_1h"] = minute_of
+        status["first_break_minute_1h"] = "valid" if minute_of is not None else "not_applicable"
 
     # --- [09:30, 16:00): full RTH ---------------------------------------------
     if s.is_early_close:
@@ -483,6 +534,15 @@ def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session,
             bad = _need(m, st, ("return_rth_atr",))
             label, why = (None, bad) if bad else (
                 label_direction(m["return_rth_atr"], params["direction_rth_band_atr"]), None)
+        elif target == "direction_1h":
+            bad = _need(m, st, ("first_hour_return_atr",))
+            label, why = (None, bad) if bad else (
+                label_direction(m["first_hour_return_atr"], params["direction_1h_band_atr"]), None)
+        elif target == "first_break_1h":
+            bad = _need(m, st, ("first_break_side_1h",))
+            side = m.get("first_break_side_1h")
+            label, why = (None, bad) if bad else (
+                ("above" if side > 0 else "below" if side < 0 else "none"), None)
         elif target in RANGE_TARGETS:
             label, why = label_range_regime(m, st, RANGE_TARGETS[target], reference.get(RANGE_TARGETS[target]))
         elif target == "opening_type_15m":
