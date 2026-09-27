@@ -8,11 +8,15 @@ Collection is organised strictly by NY trading day. Every run:
      (collector/coverage.plan_trading_days -> the session_days ledger). This
      happens BEFORE any socket is opened, so if the window is already covered no
      IB connection is made at all and nothing is re-downloaded.
-  2. requests one IB window per missing day, keeps only the bars belonging to
-     that day, and writes the day atomically with queries.save_trading_day() —
-     the day's rows are replaced as a unit and its ledger row refreshed.
-  3. records a per-day entry in collection_runs, including days IB returned
-     nothing for (stored as 'EMPTY' so they are not requested again).
+  2. requests one IB window per missing day, newest first, keeps only the bars
+     belonging to that day, and writes the day atomically with
+     queries.save_trading_day() — the day's rows are replaced as a unit and its
+     ledger row refreshed.
+  3. records a per-day entry in collection_runs. A day IB returned bars around
+     but none on is stored as 'EMPTY', so it is not requested again. A day IB has
+     no data for at all ("HMDS query returned no data") is left missing, and once
+     NO_DATA_SKIP_AFTER (3) days of a contract in a row come back like that, the
+     rest of that contract's days are skipped for the run.
 
 A future with a RollRule (config.INSTRUMENTS) is collected as a chain: each
 trading day is fetched from the contract that is front on that day, plus the
@@ -73,6 +77,12 @@ from collector.rolls import front_contracts, segments, upcoming_roll
 # or belong to a session that has not fully closed -> stored as is_completed=0.
 _PARTIAL_BAR_WINDOW = timedelta(hours=2)
 
+# IB answers "no data" for every day of a contract whose history it does not hold
+# (e.g. an expired contract of a thin micro future). After this many such days of
+# one contract in a row, its remaining days are skipped for the run instead of
+# spending the pacing budget the other instruments need.
+NO_DATA_SKIP_AFTER = 3
+
 try:
     from ibapi.client import EClient
     from ibapi.wrapper import EWrapper
@@ -127,6 +137,16 @@ def is_pacing_violation(error_code: int, error_string: str) -> bool:
     if error_code == 162:
         return "pacing violation" in (error_string or "").lower()
     return error_code in _RATE_LIMIT_CODES
+
+
+def is_no_data(error_code: int, error_string: str) -> bool:
+    """
+    Whether an IB error is "HMDS query returned no data": IB holds no bars at all
+    for the contract in the requested window. That is an answer rather than a
+    failed request, and IB gives the same one for every day of a contract whose
+    history it does not keep.
+    """
+    return error_code == 162 and "returned no data" in (error_string or "").lower()
 
 
 def _parse_ib_timestamp(raw) -> str:
@@ -216,6 +236,7 @@ class IBCollectorApp(EWrapper, EClient):
         self.contract_events = {}
         self.historical_events = {}
         self.request_failed = set()
+        self.request_no_data = set()   # failed requests IB answered with "no data"
 
         self.resolved_contracts = {}
         self.collected_bars = {}
@@ -263,6 +284,8 @@ class IBCollectorApp(EWrapper, EClient):
         if isinstance(reqId, int) and reqId > 0:
             logger.error(f"IB Error [ReqID {reqId}, Code {error_code}]: {error_string}")
             self.request_failed.add(reqId)
+            if is_no_data(error_code, error_string):
+                self.request_no_data.add(reqId)
             if reqId in self.contract_events:
                 self.contract_events[reqId].set()
             if reqId in self.historical_events:
@@ -396,6 +419,10 @@ class IBCollectorApp(EWrapper, EClient):
 
     def fetch_historical_bars(self, contract, end_dt, duration_str, what_to_show=PRICE_TYPE,
                               min_spacing=None, timeout=60.0):
+        """
+        The window's bars as bar dicts: [] when IB answers that it has no data for
+        the window, None when the request failed (timeout or any other IB error).
+        """
         req_id = self.get_next_req_id()
         self.historical_events[req_id] = threading.Event()
         self.collected_bars[req_id] = []
@@ -421,6 +448,8 @@ class IBCollectorApp(EWrapper, EClient):
         if not self.historical_events[req_id].wait(timeout=timeout):
             logger.error(f"Timeout waiting for historical data (ReqID {req_id})")
             return None
+        if req_id in self.request_no_data:
+            return []
         if req_id in self.request_failed:
             return None
         return self.collected_bars.get(req_id, [])
@@ -481,10 +510,15 @@ def _implausible(instrument: Instrument, day_bars):
             f"config.INSTRUMENTS; the day was not stored.")
 
 
+# What _fetch_and_store_day returns for a day IB has no data for at all.
+NO_DATA = "no data"
+
+
 def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc):
     """
     Downloads one trading day and stores it atomically. Returns the number of
-    bars written, or None if the request failed.
+    bars written, None if the request failed, or NO_DATA if IB has no data at all
+    in the day's window (the day is then left untouched as well).
     """
     con_id = contract_info["con_id"]
     day = date.fromisoformat(day_str)
@@ -508,6 +542,12 @@ def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc)
             update_collection_run(conn, run_id, "FAILED", errors="Download timeout or IB error.")
             logger.warning(f"{day_str}: request failed; the day is left untouched.")
             return None
+        if not bars:
+            # Nothing in the whole 48h window. IB may just not hold this contract's
+            # history, so the day is not stored as EMPTY, which is never asked again.
+            update_collection_run(conn, run_id, "FAILED", errors="IB has no data in the requested window.")
+            logger.warning(f"{day_str}: IB has no data in the day's window; the day is left untouched.")
+            return NO_DATA
 
         day_bars = _build_day_bars(bars, day_str, now_utc)
         problem = _implausible(instrument, day_bars)
@@ -693,24 +733,39 @@ def _resolve_online(app, conn, work, start_day, end_day, gap_fill):
 
 
 def _collect_work(app, conn, work):
-    """Downloads every planned day of one symbol. Returns the number of bars written."""
+    """
+    Downloads every planned day of one symbol. Returns the number of bars written.
+
+    Each contract's days are requested newest first. Once IB has answered "no
+    data" for NO_DATA_SKIP_AFTER of them in a row, the contract's remaining days
+    are skipped for this run; they stay missing, so the next run tries again.
+    Newest first means a contract is only given up on when even its most recent
+    days came back empty, not because its thinly traded warm-up days did.
+    """
     now_utc = datetime.now(timezone.utc)
     total = 0
     for contract_info, targets in work.jobs:
         if not targets:
             continue
         label = _label(work.symbol, contract_info["expiry"])
-        logger.info(f"{label}: fetching {len(targets)} trading day(s), one at a time.")
-        stored_days, failed_days = 0, []
-        for day_str in targets:
+        days = sorted(targets, reverse=True)
+        logger.info(f"{label}: fetching {len(days)} trading day(s), newest first, one at a time.")
+        stored_days, failed_days, no_data_run = 0, [], 0
+        for i, day_str in enumerate(days):
             written = _fetch_and_store_day(app, conn, work.instrument, contract_info, day_str, now_utc)
-            if written is None:
+            no_data_run = no_data_run + 1 if written == NO_DATA else 0
+            if written is None or written == NO_DATA:
                 failed_days.append(day_str)
             else:
                 total += written
                 stored_days += 1
+            rest = days[i + 1:]
+            if no_data_run >= NO_DATA_SKIP_AFTER and rest:
+                logger.warning(f"{label}: IB had no data for {no_data_run} day(s) in a row; skipping its "
+                               f"other {len(rest)} day(s) ({rest[-1]} .. {rest[0]}) until the next run.")
+                break
             time.sleep(1.0)
-        logger.info(f"{label}: {stored_days}/{len(targets)} day(s) stored.")
+        logger.info(f"{label}: {stored_days}/{len(days)} day(s) stored.")
         if failed_days:
             logger.warning(f"{label}: {len(failed_days)} day(s) failed, retried next run: {failed_days}")
     return total

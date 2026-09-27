@@ -125,13 +125,20 @@ opening a socket**:
    - `ok` — already stored, skip it
 2. If nothing needs fetching, the run ends **without connecting to IB**. Only a
    contract that has never been seen before requires a connection to plan.
-3. Each remaining day gets one IB request (a 48h window that fully contains the NY
-   session including its prior-evening Globex open). Bars outside the day are
-   discarded, and the day is stored atomically via `save_trading_day()`.
+3. Each remaining day gets one IB request, newest first (a 48h window that fully
+   contains the NY session including its prior-evening Globex open). Bars outside the
+   day are discarded, and the day is stored atomically via `save_trading_day()`.
 4. Bars within 2h of "now" are stored `is_completed = 0`, which keeps their day
    `PARTIAL` so a later run finalises it.
 5. Every attempt — including days IB had no data for — is logged per day in
    `collection_runs` (`trading_day`, `interval`, `bars_written`).
+6. When IB answers `HMDS query returned no data` for a day's whole window, the day is
+   left missing rather than stored `EMPTY`: IB may simply not hold that contract's
+   history (an expired contract of a thin future), and an `EMPTY` day is never asked
+   for again. After `NO_DATA_SKIP_AFTER` (3) such days of one contract in a row, its
+   remaining days are skipped for the run instead of using up the request budget; the
+   next run tries again. Because days go newest first, a contract is only given up on
+   when even its most recent days came back empty.
 
 ```
 python -m collector.ib_collector --days 30 --plan-only                   # report only
