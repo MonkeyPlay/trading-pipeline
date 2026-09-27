@@ -10,6 +10,7 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py train --date 2026-09-25      # fit + CV report + saved artifact
     python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
     python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25
+    python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25
 
 Forecasts come from the trained scikit-learn model (nq_sklearn_v4, the default)
 or the climatology baseline (nq_climatology_v4); ``--model`` takes one or a
@@ -47,7 +48,7 @@ from features import calendar as cal
 from features import catalogue as catv2
 from features.market_data import DbMarketData
 from features.nq_v2 import SnapshotError, build_snapshot
-from forecaster import label_study, labels_v2, models_v2, scoring_v2
+from forecaster import label_study, labels_v2, metric_study, models_v2, scoring_v2
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("nq_forecast_v2")
@@ -321,6 +322,20 @@ def cmd_label_study(conn, md, args):
     return 0
 
 
+def cmd_metric_study(conn, md, args):
+    """
+    Which pre-open features relate to the realised outcome metrics (direction vs
+    magnitude), and whether the metrics are predictable walk-forward. Writes nothing.
+    """
+    snaps = label_study.one_per_session(store.list_snapshots(conn, args.start, args.end, catv2.FEATURE_VERSION))
+    if not snaps:
+        print(f"No {catv2.FEATURE_VERSION} snapshots between {args.start} and {args.end}.")
+        return 0
+    result = metric_study.study(md, snaps, min_train=args.min_train, refit_every=args.refit_every)
+    print(metric_study.format_report(result, top=args.top))
+    return 0
+
+
 def cmd_evaluate(conn, md, args):
     """
     Per model, target and data mode: issued / abstained / unavailable counts,
@@ -412,13 +427,19 @@ def main(argv=None):
                    help="An extra variant: comma-separated path=value overrides of labels_v2.PARAMETERS, "
                         "e.g. opening_type_15m.drive.e_min=0.4,opening_type_15m.range.w_max=0.25 "
                         "(repeatable)")
+    p = sub.add_parser("metric-study", help="Feature vs outcome-metric associations and walk-forward "
+                                            "predictability (writes nothing)")
+    dates(p, single=False)
+    p.add_argument("--top", type=int, default=5, help="Strongest associations shown per metric")
+    p.add_argument("--min-train", type=int, default=120, help="Sessions before the first walk-forward prediction")
+    p.add_argument("--refit-every", type=int, default=5, help="Sessions between walk-forward refits")
     sub.add_parser("register", help="Register definitions only")
 
     args = parser.parse_args(argv)
     if args.command in ("snapshot", "forecast"):
         if not args.date and not (args.start and args.end):
             parser.error("give --date, or --start and --end")
-    if args.command in ("outcomes", "backfill", "label-study") and not (args.start and args.end):
+    if args.command in ("outcomes", "backfill", "label-study", "metric-study") and not (args.start and args.end):
         parser.error("give --start and --end")
     if args.command == "backfill":
         args.date = None
@@ -432,7 +453,8 @@ def main(argv=None):
         md = DbMarketData(conn)
         handler = {"snapshot": cmd_snapshot, "forecast": cmd_forecast, "outcomes": cmd_outcomes,
                    "backfill": cmd_backfill, "train": cmd_train, "live": cmd_live, "evaluate": cmd_evaluate,
-                   "label-study": cmd_label_study, "register": lambda *a: 0}[args.command]
+                   "label-study": cmd_label_study, "metric-study": cmd_metric_study,
+                   "register": lambda *a: 0}[args.command]
         return handler(conn, md, args)
     finally:
         conn.close()
