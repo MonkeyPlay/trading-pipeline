@@ -174,6 +174,29 @@ def contracts_with_day(conn: Database, symbol: str, trading_day: str, interval: 
     ).fetchall()
 
 
+def _expires_on_or_after(expiry: Optional[str], day: str) -> bool:
+    """Whether a contract expiry (YYYYMMDD, or a YYYYMM contract month) is not before ``day``."""
+    digits = "".join(ch for ch in str(expiry or "") if ch.isdigit())
+    if len(digits) >= 8:
+        return digits[:8] >= day.replace("-", "")
+    if len(digits) == 6:
+        return digits >= day.replace("-", "")[:6]
+    return False
+
+
+def contracts_for_day(conn: Database, symbol: str, trading_day: str) -> List[Row]:
+    """
+    Contracts of ``symbol`` holding bars for ``trading_day``, best first: the
+    closest contract expiring on or after the day (the one that was trading
+    then), then later ones, then - only if nothing later holds it - earlier ones,
+    closest first.
+    """
+    held = list(contracts_with_day(conn, symbol, trading_day))   # nearest expiry first
+    later = [c for c in held if _expires_on_or_after(c["expiry"], trading_day)]
+    earlier = [c for c in held if not _expires_on_or_after(c["expiry"], trading_day)]
+    return later + earlier[::-1]
+
+
 def list_session_days(conn: Database, symbols: List[str], interval: str = "1m", price_type: str = "TRADES",
                       limit: int = 1000) -> List[str]:
     """Trading days on which any contract of ``symbols`` holds bars, newest first."""
@@ -1358,6 +1381,7 @@ def get_evaluations(conn: Database) -> List[Row]:
     SELECT
         p.prediction_id,
         p.contract_id,
+        p.model_version,
         p.forecast_cutoff AS forecast_cutoff,
         p.opening_bias    AS predicted_bias,
         p.probabilities   AS probabilities,

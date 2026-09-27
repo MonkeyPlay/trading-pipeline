@@ -134,8 +134,13 @@ Two pages:
   active that day first). It opens on NQ's newest session. The chart shows that day's regular
   session with **15 minutes either side** - 09:15 to 16:15 ET, or to 13:15 on an early close -
   and draws the extra minutes grey (candles, volume and background), with the pre-open
-  reference levels and session VWAP drawn from the feature snapshot; run a forecast for that
-  session on demand. A forecast already stored for the day (from the dashboard or
+  reference levels and session VWAP drawn from the feature snapshot. The **opening range**
+  (the first 15 minutes after the open) is a grey box over its bars, then its high and low
+  continue as **ORH** / **ORL** lines with the channel between them shaded for the rest of the
+  session (always from the 1-minute bars, whatever the timeframe; no box on the 30-minute
+  view, where one bar spans it). Run a forecast for that session on demand: the card shows
+  the bias, how the 10 matched sessions' first hour went (up / flat / down) and each match's
+  own first-hour move. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
   above it shows the trained v2 model's run for the day (`nq_sklearn_v5`, or the
   `nq_climatology_v5` baseline): per target the status, predicted label, full probability
@@ -144,8 +149,8 @@ Two pages:
   is stored. The **Pre-open features** panel beside
   the chart shows the snapshot the forecast is built from. Below the forecast, **Matching
   historical day — RTH** charts the same window of the best-matching earlier day (its regular
-  session with the grey 15 minutes either side), with that day's own previous close, overnight
-  range and VWAP, and beside it that day's **Pre-open features**, computed exactly as for the
+  session with the grey 15 minutes either side and its own opening range), with that day's own
+  previous close, overnight range and VWAP, and beside it that day's **Pre-open features**, computed exactly as for the
   selected day; the dropdown switches to the other matches. A matched day is drawn from the closest contract expiring on
   or after it (an August day comes from September even when the page shows December).
   Beside the selectors, **Database coverage by week** is a small map of what is stored: one
@@ -155,7 +160,8 @@ Two pages:
   ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   every stored prediction joined against its realized outcome, so you can see whether the
-  bias calls were right.
+  bias calls were right - each scored over its own horizon (the first hour for
+  `analogue_baseline_v2`, open to close for the older v1 rows).
 
 ### 2. Collector — pull fresh bars from IB
 
@@ -379,21 +385,35 @@ The trading day starts at **18:00 ET the prior evening** (the Globex open), not 
 [features/session_windows.py](features/session_windows.py) owns that rule and classifies
 each bar `RTH` (09:30–16:00 ET) or `ETH`.
 
-**Matching** ([matching/normalizer.py](matching/normalizer.py)) scales the gap and overnight
-range by `previous_close × historical_volatility`, turning them into "sigma of a typical
-day". That makes 2023 sessions comparable to 2026 ones at different price levels and
-volatility regimes. Nearest neighbours by Euclidean distance on
-`[gap, overnight_range, direction]`.
+**Matching** ([forecaster/analogue.py](forecaster/analogue.py),
+[matching/normalizer.py](matching/normalizer.py)) finds the 10 closest earlier sessions. For
+NQ it compares the stored point-in-time snapshots (`nq_features_v3`) of every earlier NQ
+session, whatever contract it traded on, on the ten pre-open volatility inputs the trained
+model uses (ATR fraction and ratio, relative 1-minute ATR, overnight, last-hour and
+prior-session ranges, overnight and last-hour relative volume, VIX, VXN) plus the signed gap
+in ATR; the day's own snapshot is reconstructed from the bars when none is stored. Other
+instruments, or NQ with fewer than 20 comparable stored snapshots, are matched on gap and
+overnight range in units of `previous_close × historical_volatility`. Each input is
+standardised over the candidates and the distance is the root mean square of the
+differences, over the inputs both days have. (v1 matched on `[gap, overnight_range,
+direction]` unscaled, where the ±1 direction flag outweighed everything else.) The pre-open
+state carries information about how far a session moves, not which way (`metric-study`), so
+a match shares the day's volatility setting, not its direction.
 
-**Forecasting** ([forecaster/client.py](forecaster/client.py)) counts how the closest
-analogues actually ended (bullish, bearish, mean-reverting) and turns that into an
-`opening_bias`, two `scenarios` with triggers and invalidations, `probabilities` and a
-`forecast_horizon`. It is deterministic and offline. The trained model is the v2 pipeline
-below.
+**Forecasting** ([forecaster/client.py](forecaster/client.py), `analogue_baseline_v2`)
+measures each analogue's first hour - 09:30 open to 10:29 close, in units of that day's
+ATR (or daily σ) - as up, down or flat (within ±0.10), and reports those frequencies as the
+`probabilities`; the `opening_bias` is the most frequent outcome (a tie is NEUTRAL), with
+two `scenarios` with triggers and invalidations. The flat band in points is stored with the
+forecast, and the evaluation page scores it over that same first hour. v1 took the bias from
+the gap's sign and the frequencies from the RTH close against the previous close, and could
+show a bearish bias above a mostly bullish distribution. It is deterministic and offline.
+The trained model is the v2 pipeline below.
 
 **Evaluation** ([forecaster/evaluator.py](forecaster/evaluator.py)) computes what actually
 happened once a session closes — first 15/30 minutes, the 60-minute Initial Balance, and
-full RTH high/low/close — anchored to 09:30 ET regardless of which bar arrived first.
+full RTH high/low/close, and the 10:29 close that ends the analogue forecast's horizon —
+anchored to 09:30 ET regardless of which bar arrived first.
 
 ## v2: versioned NQ forecast records
 
@@ -459,7 +479,7 @@ database whose name contains `test`; they reset it).
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools |
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
-| [forecaster/](forecaster/) | v2 labels + scikit-learn model, v1 analogue forecast, outcome evaluator |
+| [forecaster/](forecaster/) | v2 labels + scikit-learn model, analogue forecast, outcome evaluator |
 | [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
 | [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
 | [tests/](tests/) | Calendar, feature-indicator, v2 snapshot and forecast-record tests |

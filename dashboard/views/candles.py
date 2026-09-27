@@ -35,14 +35,13 @@ from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.model_forecast import ModelForecastPanel
 from dashboard.components.spec import build_chart_spec
 from database.queries import (
-    contracts_with_day,
+    contracts_for_day,
     get_analogue_matches,
     get_bars,
     get_contract_by_expiry,
     get_daily_rth_closes,
     get_day_bars,
     get_day_prediction,
-    get_outcome,
     get_session_day,
     list_contracts,
     list_session_days,
@@ -58,8 +57,9 @@ from features.calculations import (
     enrich_candle_timezones,
 )
 from features.session_windows import NY_TZ
-from forecaster.client import PROMPT_VERSION, ForecastClient
-from matching.normalizer import find_analogues
+from forecaster.analogue import analogue_forecast
+from forecaster.client import HORIZON as FIRST_HOUR_HORIZON
+from forecaster.client import PROMPT_VERSION
 
 _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
 
@@ -136,6 +136,23 @@ def window_bars(df: Optional[pd.DataFrame], day: str, timeframe: str = "1m") -> 
     out = df[(ts + width > w["start"]) & (ts < w["end"])].copy()
     out["muted"] = (out["timestamp_ny"] < w["open"]) | (out["timestamp_ny"] >= w["close"])
     return out
+
+
+def opening_range(df: Optional[pd.DataFrame], day: str, minutes: int = 15) -> Optional[Dict[str, Any]]:
+    """
+    ``{'high', 'low', 'start', 'end'}`` of ``day``'s opening range: the high and
+    low of the 1-minute bars in its first ``minutes`` after the open (New York
+    timestamps), or None when none of those bars is stored.
+    """
+    if df is None or df.empty:
+        return None
+    start = session_window(day)["open"]
+    end = start + pd.Timedelta(minutes=minutes)
+    ts = df["timestamp_ny"]
+    w = df[(ts >= start) & (ts < end)]
+    if w.empty:
+        return None
+    return {"high": float(w["high"].max()), "low": float(w["low"].min()), "start": start, "end": end}
 
 
 def vix_bars(conn, start_day: Optional[str], end_day: str) -> Optional[pd.DataFrame]:
@@ -230,28 +247,14 @@ def _previous_rth_close(conn, contract_id: int, trading_day: str) -> Optional[fl
     return float(rth[-1]["close"]) if rth else None
 
 
-def _expires_on_or_after(expiry: Optional[str], day: str) -> bool:
-    """Whether a contract expiry (YYYYMMDD, or a YYYYMM contract month) is not before ``day``."""
-    digits = "".join(ch for ch in str(expiry or "") if ch.isdigit())
-    if len(digits) >= 8:
-        return digits[:8] >= day.replace("-", "")
-    if len(digits) == 6:
-        return digits >= day.replace("-", "")[:6]
-    return False
-
-
 def analogue_contracts(conn, symbol: str, match_date: str) -> List[Any]:
     """
-    Contracts of ``symbol`` holding bars for ``match_date``, best first: the
-    closest contract expiring on or after the day (the one that was trading
-    then), then later ones, then - only if nothing later holds it - earlier ones,
-    closest first. A forecast on the December contract can match an August day,
+    Contracts of ``symbol`` holding bars for ``match_date``, best first
+    (``database.queries.contracts_for_day``): the closest contract expiring on or
+    after the day. A forecast on the December contract can match an August day,
     which is shown from September's bars, not from December's thin history.
     """
-    held = list(contracts_with_day(conn, symbol, match_date))   # nearest expiry first
-    later = [c for c in held if _expires_on_or_after(c["expiry"], match_date)]
-    earlier = [c for c in held if not _expires_on_or_after(c["expiry"], match_date)]
-    return later + earlier[::-1]
+    return contracts_for_day(conn, symbol, match_date)
 
 
 def day_contracts(conn, symbol: str, day: str) -> List[Any]:
@@ -309,8 +312,9 @@ def load_analogue_session(conn, symbol: str, match_date: str, timeframe: str = "
             "low": float(rth["low"].min()), "close": float(rth["close"].iloc[-1]), "bars": int(len(rth)),
         }
         return {"contract": contract, "bars": shown, "levels": levels, "stats": stats,
-                "snapshot": day_snapshot(conn, contract["contract_id"], match_date)}
-    return {"contract": None, "bars": None, "levels": {}, "stats": None, "snapshot": {}}
+                "snapshot": day_snapshot(conn, contract["contract_id"], match_date),
+                "opening_range": opening_range(full, match_date)}
+    return {"contract": None, "bars": None, "levels": {}, "stats": None, "snapshot": {}, "opening_range": None}
 
 
 def _analogue_label(analogue: Dict[str, Any]) -> str:
@@ -384,6 +388,7 @@ class SessionExplorer:
 
         # Loaded per session.
         self.day_df: Optional[pd.DataFrame] = None
+        self.opening_range: Optional[Dict[str, Any]] = None
         self.recent_bars: Optional[pd.DataFrame] = None
         self.vix_bars: Optional[pd.DataFrame] = None
         # {trading_day: last RTH close} for the whole history up to the displayed
@@ -410,11 +415,13 @@ class SessionExplorer:
         contract_id = self.contract["contract_id"]
 
         rows = get_day_bars(self.conn, contract_id, self.date, interval="1m")
+        self.opening_range = None
         if not rows:
             self.day_df = None
             return
 
         df = enrich_candle_timezones(pd.DataFrame([dict(r) for r in rows]))
+        self.opening_range = opening_range(df, self.date)        # from the 1-minute bars
         self.day_df = calculate_vwap(_resample(df, self.timeframe))
 
         # The snapshot and the analogue search need earlier sessions: each candidate
@@ -501,7 +508,7 @@ class SessionExplorer:
             return
 
         self.chart.apply(build_chart_spec(window_bars(self.day_df, self.date, self.timeframe),
-                                          features=self.snapshot, fit=True))
+                                          features=self.snapshot, fit=True, opening_range=self.opening_range))
 
     def refresh_session(self, keep_forecast: bool = False) -> None:
         """
@@ -703,26 +710,20 @@ class SessionExplorer:
         self.forecast_panel.clear()
         self._show_forecast(forecast, analogues, self.contract["symbol"])
 
-    def _run_forecast(self):
-        """Analogue search plus the model call. Runs off the event loop."""
-        contract_id = self.contract["contract_id"]
-        # Analogue candidates: strictly earlier sessions only (no look-ahead).
-        hist_snapshots = []
+    def _v1_history(self) -> List[Dict[str, Any]]:
+        """The earlier sessions' v1 snapshots on this contract - the matching pool when
+        an instrument has no point-in-time snapshots (strictly earlier: no look-ahead)."""
+        out = []
         for day in self._analogue_candidates():
-            hist = calculate_pre_open_snapshot(
-                self.recent_bars, day, self.rth_closes, vix_df=self.vix_bars
-            )
-            if "error" in hist:
-                continue
-            outcome = get_outcome(self.conn, contract_id, day)
-            if outcome is not None:
-                hist["outcome"] = dict(outcome)
-            hist_snapshots.append(hist)
+            hist = calculate_pre_open_snapshot(self.recent_bars, day, self.rth_closes, vix_df=self.vix_bars)
+            if "error" not in hist:
+                out.append(hist)
+        return out
 
-        analogues = find_analogues(self.snapshot, hist_snapshots, k=3)
-        client = ForecastClient()
-        forecast = client.get_forecast(
-            self.date, self.snapshot, analogues,
+    def _run_forecast(self):
+        """Analogue search plus the forecast. Runs off the event loop."""
+        forecast, analogues, client = analogue_forecast(
+            self.conn, self.contract["symbol"], self.date, self.snapshot, self._v1_history,
             instrument=Config.describe_instrument(self.contract["symbol"]),
         )
 
@@ -829,12 +830,18 @@ class SessionExplorer:
                         ui.label(rationale).classes("text-sm").style("color:#b2b5be")
 
                 with ui.column().classes("w-96 shrink-0 gap-2"):
-                    ui.label("Path probabilities").classes("text-xs uppercase").style("color:#787b86")
-                    for label, key, color in (
-                        ("Bullish continuation", "bullish_continuation_pct", "#26a69a"),
-                        ("Mean reversion / gap fill", "mean_reversion_gap_fill_pct", "#ab47bc"),
-                        ("Bearish rejection", "bearish_rejection_pct", "#ef5350"),
-                    ):
+                    first_hour = forecast.get("forecast_horizon") == FIRST_HOUR_HORIZON
+                    ui.label("First hour of the matched sessions" if first_hour else "Path probabilities"
+                             ).classes("text-xs uppercase").style("color:#787b86")
+                    band = probabilities.get("flat_band_points")
+                    rows = ((("Up", "bullish_continuation_pct", "#26a69a"),
+                             (f"Flat (±{band:,.2f} pts)" if band else "Flat", "mean_reversion_gap_fill_pct",
+                              "#ab47bc"),
+                             ("Down", "bearish_rejection_pct", "#ef5350")) if first_hour else
+                            (("Bullish continuation", "bullish_continuation_pct", "#26a69a"),
+                             ("Mean reversion / gap fill", "mean_reversion_gap_fill_pct", "#ab47bc"),
+                             ("Bearish rejection", "bearish_rejection_pct", "#ef5350")))
+                    for label, key, color in rows:
                         value = float(probabilities.get(key, 0.0) or 0.0)
                         with ui.row().classes("items-center w-full no-wrap gap-2"):
                             ui.label(label).classes("text-sm w-48 shrink-0").style("color:#b2b5be")
@@ -851,6 +858,11 @@ class SessionExplorer:
                     for a in analogues:
                         with ui.row().classes("items-center w-full justify-between"):
                             ui.label(a["match_date"]).classes("text-sm font-mono")
+                            outcome = a.get("outcome")
+                            if outcome:
+                                ui.label(f"{outcome['label']} {outcome['move']:+,.2f}").classes(
+                                    "text-xs font-mono").style(
+                                    f"color:{ {'up': '#26a69a', 'down': '#ef5350'}.get(outcome['label'], '#b2b5be') }")
                             detail = f"{a['similarity_score'] * 100:.1f}%"
                             if a.get("distance") is not None:
                                 detail += f" · d={a['distance']:.4f}"
@@ -913,7 +925,8 @@ class SessionExplorer:
 
     @staticmethod
     def _analogue_spec(session: Dict[str, Any]) -> Dict[str, Any]:
-        return build_chart_spec(session["bars"], features=session["levels"], fit=True)
+        return build_chart_spec(session["bars"], features=session["levels"], fit=True,
+                                opening_range=session.get("opening_range"))
 
     def _push_analogue(self) -> None:
         """Redraws the matching-day chart for the current choice and timeframe."""
