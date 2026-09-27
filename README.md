@@ -432,7 +432,12 @@ python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then free
 
 The model needs at least 60 labelled sessions per target to issue a forecast (earlier ones
 are recorded as `unavailable`), and 120 before its features can outweigh the plain class
-frequencies, so backfill history first.
+frequencies, so backfill history first. The same holds after pulling a new feature, label
+or model version: the new version starts with no records, and the daily runner only labels
+the last few sessions, so run `backfill` once over the stored history (it labels every
+session under the new version and forecasts with every model; older versions' records
+stay). The current versions and what changed are listed at the top of
+[docs/forecast_contract_v2.md](docs/forecast_contract_v2.md).
 
 Tests: `pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable
 database whose name contains `test`; they reset it).

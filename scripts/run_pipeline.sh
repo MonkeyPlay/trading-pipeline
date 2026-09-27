@@ -49,7 +49,9 @@ python3 scripts/daily_forecast.py >> "$LOG_FILE" 2>&1 || log "WARNING: analogue 
 
 # 3. v2: label the sessions that have closed since the last run, so the model trains on
 # them, then the live NQ forecast: it trains first, waits for T = 09:29 ET, freezes the
-# snapshot and stores the forecast before 09:30.
+# snapshot and stores the forecast before 09:30. This only labels recent sessions: after
+# a new feature, label or model version, run nq_forecast_v2.py backfill once over the
+# stored history, or the new model has nothing to train on.
 RECENT="$(python3 -c 'import datetime as d; print(d.date.today() - d.timedelta(days=10))')"
 TODAY="$(python3 -c 'import datetime as d; print(d.date.today())')"
 log "Recording v2 outcomes since $RECENT..."
