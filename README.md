@@ -191,6 +191,12 @@ That is roughly 70 requests per instrument; the pacer keeps it under IB's limit 
 requests / 10 min), so ten instruments take a couple of hours. Later runs only fetch the
 new and trailing days.
 
+A contract IB holds no history for answers `HMDS query returned no data` for every day.
+After three such days in a row the collector skips the rest of that contract for the run,
+so it cannot use up the request budget the other instruments need; the skipped days are
+tried again next run. The skip is per contract: the next contract of the same future
+still gets its own tries.
+
 **All symbols go through one IB connection**, which matters: the request pacer that keeps
 you under IB's historical-data rate limit lives on that connection. Running one process
 per symbol would give each its own pacer, so each would undercount the others' requests
