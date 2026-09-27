@@ -427,6 +427,7 @@ python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  #
 python scripts/nq_forecast_v2.py train                                          # fit for today: CV report + data/models/ artifact
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
+python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 

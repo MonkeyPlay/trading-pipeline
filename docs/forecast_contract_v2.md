@@ -310,6 +310,7 @@ python scripts/nq_forecast_v2.py outcomes --start 2026-06-01 --end 2026-09-25   
 python scripts/nq_forecast_v2.py train                                           # CV report + data/models/ artifact
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix, alternative thresholds
+python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # features vs outcome metrics
 python scripts/nq_forecast_v2.py live                                            # at 09:29 ET
 ```
 
@@ -328,6 +329,18 @@ history lengths, so `evaluate` then compares each model with the baseline
 (`--baseline`, the climatology by default) **on the same sessions only**: both log
 losses and Brier scores, the skill scores 1 − model / baseline, and the mean
 per-session log-loss gain with its standard error ([forecaster/scoring_v2.py](../forecaster/scoring_v2.py)).
+
+`metric-study` asks whether the pre-open features carry information about the
+realised outcome metrics at all, separately for direction (signed 15-minute,
+first-hour and RTH returns) and magnitude (absolute returns, ranges, path
+efficiency), before any new target is built on them
+([forecaster/metric_study.py](../forecaster/metric_study.py)). Per metric it prints
+the walk-forward result of a ridge regression on all model inputs against the running
+mean (out-of-sample R², and the per-session squared-error gain ± SE; *predictable*
+means R² > 0 and a gain above 2 SE), and the strongest Spearman correlations with
+their Benjamini-Hochberg q-value over all feature × metric tests and the correlation
+in the earlier and the later half of the sessions. A correlation is *robust* when
+q < 0.05 and both halves agree in sign. It writes nothing.
 
 **After a version change.** New feature, label or model versions start empty, and the
 daily `run_pipeline.sh` only labels the last few sessions. Run `backfill` once over
