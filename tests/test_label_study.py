@@ -49,7 +49,29 @@ def test_study_relabels_under_each_variant():
     # the current variant agrees with the stored rules
     m = lv.compute_metrics(df, S, 10.0, 110.0, 90.0)
     stored = lv.compute_labels(m["metrics"], m["status"], S)
-    assert all(res["labels"]["current"][t] == {o["label"]: 1} for t, o in stored.items())
+    assert all(res["labels"]["current"][t] == {o["label"] or f"INELIGIBLE: {o['status']}": 1}
+               for t, o in stored.items())
+    # one session has no earlier ones: no range-regime threshold yet
+    assert res["labels"]["current"]["range_15m_regime"] == {"INELIGIBLE: insufficient_history": 1}
     n, qs = res["quantiles"]["return_15m_atr"]
     assert n == 1 and qs[2] == pytest.approx(0.15)
     assert "nq_labels_v2_candidate" in ls.format_report(res, variants)
+
+
+def test_range_regime_threshold_comes_from_earlier_sessions():
+    from features import calendar as cal
+    sessions = [s for s in cal.sessions_between("2026-03-02", "2026-06-30") if not s.is_early_close][:41]
+    frames = {}
+    for i, s in enumerate(sessions):
+        step = 0.2 if i == len(sessions) - 1 else 0.1                # the last session opens twice as wide
+        frames[s.rth_open_at] = _bars(s, _full(O + step * np.arange(1, 16), s=s))
+
+    class _Sessions:
+        def bars(self, contract_id, start, end):
+            return frames[start], "digest", "key"
+
+    snaps = [{"session_date": s.session_date, "instrument_id": 1, "data_mode": "historical_reconstruction",
+              "created_at": "1", "reference_values": {"A": 10.0, "ONH": 110.0, "ONL": 90.0}} for s in sessions]
+    res = ls.study(_Sessions(), snaps, {"current": {}})
+    c = res["labels"]["current"]["range_15m_regime"]
+    assert c == {"INELIGIBLE: insufficient_history": 40, "wide": 1}

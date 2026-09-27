@@ -297,6 +297,36 @@ def save_realised_outcome(conn: Database, snapshot_id: str, label_version: str, 
         return rev, True
 
 
+def trailing_metric_values(conn: Database, metric_version: str, feature_version: str, before_session: str,
+                           keys: List[str], limit: int, symbol: str = "NQ") -> Dict[str, List[float]]:
+    """
+    For each metric in ``keys``, its values over the sessions before
+    ``before_session``, newest first, at most ``limit`` non-null values each:
+    one snapshot per session among those with stored metrics (its live capture
+    if any, else the newest) and that snapshot's latest metric revision. The range-regime labels compare a
+    session with the median of these.
+    """
+    out: Dict[str, List[float]] = {k: [] for k in keys}
+    rows = conn.execute(
+        "SELECT DISTINCT ON (s.session_date) s.session_date, m.metrics "
+        "  FROM forecast.outcome_metrics m "
+        "  JOIN forecast.feature_snapshots s ON s.snapshot_id = m.snapshot_id "
+        "  JOIN contracts c ON c.contract_id = s.instrument_id "
+        " WHERE m.metric_version = %s AND s.feature_version = %s AND c.symbol = %s AND s.session_date < %s "
+        " ORDER BY s.session_date DESC, (s.data_mode = 'live_capture') DESC, s.created_at DESC, "
+        "          m.outcome_revision DESC "
+        " LIMIT %s;",
+        (metric_version, feature_version, symbol, before_session, 3 * limit),
+    ).fetchall()
+    for r in rows:
+        metrics = _load(r["metrics"])
+        for k in keys:
+            v = metrics.get(k)
+            if v is not None and len(out[k]) < limit:
+                out[k].append(float(v))
+    return out
+
+
 def training_outcomes(conn: Database, label_version: str, target_id: str, feature_version: str,
                       before_session: str, available_by, computed_by=None, limit: int = 250,
                       symbol: str = "NQ") -> List[Dict[str, Any]]:

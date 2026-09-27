@@ -31,11 +31,20 @@ selection rule, so training and inference are identical by construction.
     nq_sklearn_v2 asked for one standard error: in a 248-session NQ backfill it
     admitted a feature model on 48 sessions, every time at 1.1-1.6 SE, a different
     candidate at nearly every refit, and those forecasts lost to the prior.
-    nq_sklearn_v3 is this model on the previous labels, nq_labels_v2_candidate.)
+    nq_sklearn_v3 is that model on nq_labels_v2_candidate, nq_sklearn_v4 on
+    nq_labels_v3_candidate.)
 
-``nq_climatology_v4``
+    nq_sklearn_v5 predicts nq_labels_v4_candidate, which adds the two
+    range-regime targets, and adds one candidate: an L2 logistic regression on
+    the pre-open volatility inputs only (VOL_FEATURES). Those inputs are where
+    the signal is - metric-study found no robust relation of any feature with
+    the direction of the open but 20 with its range - and among ~40 inputs the
+    other candidates dilute them. It competes for every target under the same
+    selection rule.
+
+``nq_climatology_v5``
     Laplace-smoothed label frequencies over earlier sessions - the baseline
-    (nq_climatology_v3: the same on nq_labels_v2_candidate).
+    (v3 and v4: the same on nq_labels_v2_candidate and nq_labels_v3_candidate).
 
 Prediction status (section 7):
     issued       a label (the arg-max, ties by vocabulary order) + probabilities
@@ -99,10 +108,22 @@ SKLEARN_FEATURES = {
 }
 MISSING_CATEGORY = "missing"
 
+# Pre-open volatility inputs: realised and implied volatility, ranges and activity.
+# Chosen on market grounds (volatility clusters), not from the study's correlations.
+VOL_FEATURES = [
+    "daily_atr_fraction", "daily_volatility_ratio", "atr_1m_14_relative_30d",
+    "overnight_range_atr", "range_60m_atr", "prior_rth_range_atr",
+    "rvol_overnight_30d", "rvol_60m_30d", "vix_level", "vxn_level",
+]
+FEATURE_SETS = {
+    "all": SKLEARN_FEATURES,
+    "volatility": {"numeric": VOL_FEATURES, "boolean": [], "categorical": []},
+}
+
 _REQUIRED = ["daily_atr_fraction", "gap_signed_atr"]   # the labels are measured in units of A
 
 CLIMATOLOGY = {
-    "model_version": "nq_climatology_v4",
+    "model_version": "nq_climatology_v5",
     "kind": "climatology",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -114,7 +135,7 @@ CLIMATOLOGY = {
 }
 
 SKLEARN = {
-    "model_version": "nq_sklearn_v4",
+    "model_version": "nq_sklearn_v5",
     "kind": "sklearn",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -126,6 +147,7 @@ SKLEARN = {
                    "replaces the prior only with enough history and a clear, paired out-of-sample gain.",
     "parameters": {
         "features": SKLEARN_FEATURES,
+        "feature_sets": {"volatility": VOL_FEATURES},   # a candidate's "features"; default: all of the above
         "preprocessing": {
             "numeric_and_boolean": "float (booleans 0/1); median imputation fitted on the training window "
                                    "plus a missing-indicator column per feature with missing training "
@@ -142,6 +164,9 @@ SKLEARN = {
             {"name": "logistic_l1_c0.2", "estimator": "LogisticRegression",
              "params": {"C": 0.2, "l1": True, "max_iter": 5000}},
             {"name": "logistic_c0.05", "estimator": "LogisticRegression", "params": {"C": 0.05, "max_iter": 2000}},
+            # The volatility inputs alone: where metric-study found the (range) signal.
+            {"name": "logistic_vol_c0.1", "estimator": "LogisticRegression",
+             "params": {"C": 0.1, "max_iter": 2000}, "features": "volatility"},
             {"name": "hist_gradient_boosting", "estimator": "HistGradientBoostingClassifier",
              "params": {"max_depth": 3, "learning_rate": 0.05, "max_iter": 150, "min_samples_leaf": 20,
                         "l2_regularization": 1.0, "early_stopping": False}},
@@ -243,7 +268,9 @@ def _estimator(spec: Dict[str, Any], seed: int):
     return cls(**params)
 
 
-def _pipeline(spec, seed, feats=SKLEARN_FEATURES):
+def _pipeline(spec, seed, feats=None):
+    """The candidate's preprocessing + estimator, on its feature set (default: all inputs)."""
+    feats = feats or FEATURE_SETS[spec.get("features", "all")]
     from sklearn.pipeline import Pipeline
     return Pipeline([("features", _preprocessor(feats)), ("model", _estimator(spec, seed))])
 

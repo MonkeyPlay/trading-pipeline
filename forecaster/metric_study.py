@@ -59,12 +59,8 @@ METRICS: List[Tuple[str, Any, str]] = [
 ]
 RIDGE_ALPHAS = tuple(np.logspace(-1, 4, 11))
 
-# Pre-open volatility inputs: realised and implied volatility, ranges and activity.
-VOL_FEATURES = [
-    "daily_atr_fraction", "daily_volatility_ratio", "atr_1m_14_relative_30d",
-    "overnight_range_atr", "range_60m_atr", "prior_rth_range_atr",
-    "rvol_overnight_30d", "rvol_60m_30d", "vix_level", "vxn_level",
-]
+# The pre-open volatility inputs - the forecast model's own set (its logistic_vol candidate).
+VOL_FEATURES = models_v2.VOL_FEATURES
 LOG_FLOOR = 0.01   # added before the log of an absolute return, which can be 0
 
 

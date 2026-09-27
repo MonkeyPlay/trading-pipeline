@@ -4,16 +4,16 @@ The current feature version is `nq_features_v3`. It has the same features as
 `nq_features_v2` and changes two parameters: the daily ATRs skip sessions without
 complete RTH data instead of needing an unbroken run of them, and the spot
 volatility indices may be up to 20 minutes old. Records of both versions stay in the
-store; models are tied to one feature version (`nq_sklearn_v4` and
-`nq_climatology_v4` read `nq_features_v3` and predict `nq_labels_v3_candidate`).
+store; models are tied to one feature version (`nq_sklearn_v5` and
+`nq_climatology_v5` read `nq_features_v3` and predict `nq_labels_v4_candidate`).
 
 | record | current | earlier versions (kept in the store) |
 |---|---|---|
 | features | `nq_features_v3` | `nq_features_v2`: ATRs needed an unbroken run of complete sessions |
 | outcome metrics | `nq_outcome_metrics_v3` (first-move barrier 0.10 A) | `nq_outcome_metrics_v2` (0.05 A) |
-| labels | `nq_labels_v3_candidate` (thresholds retuned) | `nq_labels_v2_candidate` (section 11 starting values) |
-| trained model | `nq_sklearn_v4` (default) | `v3`: same model on the v2 labels; `v2`: 1-SE selection margin; `v1`: no margin, from 60 sessions |
-| baseline | `nq_climatology_v4` | `v3`: on the v2 labels |
+| labels | `nq_labels_v4_candidate` (v3 + two range-regime targets) | `v3`: thresholds retuned; `v2`: section 11 starting values |
+| trained model | `nq_sklearn_v5` (default; + a volatility-inputs candidate) | `v4` / `v3`: the v4 model on the v3 / v2 labels; `v2`: 1-SE selection margin; `v1`: no margin, from 60 sessions |
+| baseline | `nq_climatology_v5` | `v4` / `v3`: on the v3 / v2 labels |
 
 A new label or model version starts with no records: run `backfill` once over the
 stored history after upgrading (see [Running it](#running-it)).
@@ -167,7 +167,7 @@ event features are null with status `missing` — "no calendar" is never reporte
 event". A live capture only sees rows recorded before it froze. No loader for a
 particular vendor is included.
 
-## Targets, labels and outcome metrics (`nq_labels_v3_candidate`)
+## Targets, labels and outcome metrics (`nq_labels_v4_candidate`)
 
 [forecaster/labels_v2.py](../forecaster/labels_v2.py) implements sections 8-11 of the
 schema. Every value is measured from the snapshot contract's RTH minute bars: O is the
@@ -182,6 +182,21 @@ high/low, never post-open bars.
 | `direction_15m` | up, down, flat | [09:30, 09:45) |
 | `direction_rth` | up, down, flat | [09:30, 16:00) |
 | `session_type_rth` | bull_trend, bear_trend, reversal, two_sided_volatile, range, mixed | [09:30, 16:00) |
+| `range_15m_regime` | wide, narrow | [09:30, 09:45) |
+| `range_rth_regime` | wide, narrow | [09:30, 16:00) |
+
+The first five are the schema's section 8 targets. The two range regimes were added in
+`nq_labels_v4_candidate` because the range is where the pre-open features carry
+information (see `metric-study` below): a session is `wide` when its `range_15m_atr`
+(`range_rth_atr`) exceeds the median of that metric over the **previous 40 sessions**
+that have it, else `narrow`. The 40 values are the stored `nq_outcome_metrics_v3` rows
+of the earlier sessions (one snapshot per session, latest revision;
+`forecast_store.trailing_metric_values`), so the threshold is fixed before the session
+opens; with fewer than 40 the label is ineligible (`insufficient_history`). The
+threshold is part of the label's source digest, so a revised earlier session gives a
+new outcome revision. Outcomes must therefore be recorded in session order, which
+`backfill` and `outcomes` do. `range_rth_regime` is ineligible on early closes, whose
+RTH range is not comparable.
 
 `nq_outcome_metrics_v3` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
 `return_rth_atr`, excursions, ranges, `efficiency_15m`, `rth_close_location`,
@@ -247,7 +262,7 @@ label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run a
 uses outcome rows that already existed when it trained. One snapshot per session is
 used (the live capture if any).
 
-**`nq_sklearn_v4`** (the default) - one scikit-learn pipeline per target:
+**`nq_sklearn_v5`** (the default) - one scikit-learn pipeline per target:
 
 - *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
   whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
@@ -257,9 +272,15 @@ used (the live capture if any).
   one-hot encoded over the catalogue's allowed values plus `missing`. It is part of the
   pipeline, so training and inference are identical.
 - *Candidates*: the class prior, sparse (L1) logistic regressions (C = 0.05, 0.2), an
-  L2 logistic regression (C = 0.05) and a shallow `HistGradientBoostingClassifier`. The
-  sparse fits let the few informative inputs stand out among ~40 mostly uninformative
-  ones; a dense fit spreads weight over all of them and loses to the prior.
+  L2 logistic regression (C = 0.05), an L2 logistic regression (C = 0.1) on the ten
+  pre-open volatility inputs only (`VOL_FEATURES`: daily ATR fraction and ratio,
+  relative 1-minute ATR, overnight, last-hour and prior-session ranges, overnight and
+  last-hour relative volume, VIX, VXN) and a shallow `HistGradientBoostingClassifier`.
+  The sparse fits let the few informative inputs stand out among ~40 mostly
+  uninformative ones; a dense fit spreads weight over all of them and loses to the
+  prior. The volatility candidate (new in `nq_sklearn_v5`) is the fit `metric-study`
+  found to predict the 15-minute range regime out of sample (+0.066 ± 0.037 nats per
+  session over 128 sessions); it competes for every target.
 - *Model selection*: candidates are scored by `TimeSeriesSplit` (5 folds, folds with
   fewer than 40 training sessions skipped) on log loss. Below **120 training
   sessions** (or with fewer than 3 folds) only the prior is used. Above it, a feature
@@ -293,7 +314,7 @@ used (the live capture if any).
   `event_policy` and a minimum top probability are available as parameters, off by
   default.
 
-**`nq_climatology_v4`** - Laplace-smoothed label frequencies of the earlier sessions;
+**`nq_climatology_v5`** - Laplace-smoothed label frequencies of the earlier sessions;
 the baseline the trained model has to beat.
 
 A run's `calibration` records the training window and class counts per target, every
@@ -350,9 +371,14 @@ its running base rate - the log-loss test the forecast models have to pass. It w
 nothing.
 
 On the 248 sessions to 2026-09-25 no direction metric had a single robust
-association, while the 15-minute and full-RTH ranges had 20 between them (Spearman
-0.3-0.45 with the overnight volume ratio, the relative 1-minute ATR, the overnight
-and prior-session ranges and VIX, in both halves).
+association and none was predictable, while the magnitude metrics had 20 - 18 of them
+with the 15-minute and full-RTH ranges (Spearman 0.3-0.45 with the overnight volume
+ratio, the relative 1-minute ATR, the overnight and prior-session ranges and VIX, in
+both halves). On the volatility inputs, a ridge on the log range explained about 15 %
+of both ranges out of sample (R² 0.146 and 0.149; the RTH one above 2 SE), and the
+above-median label of the 15-minute range was predicted with 64.8 % accuracy against a
+55.5 % base rate (+0.066 ± 0.037 nats per session). The absolute returns were not
+predictable. That is the basis of the two range-regime targets.
 
 **After a version change.** New feature, label or model versions start empty, and the
 daily `run_pipeline.sh` only labels the last few sessions. Run `backfill` once over
@@ -395,8 +421,8 @@ that time per source and is `verified` only if every observation has one (see
 2. **Extend the calendar yearly.** `features/calendar.py` covers 2024–2027 and raises
    outside it; add each new year (bump `CALENDAR_VERSION`) — or pin a calendar library
    version and record it, if you prefer.
-3. **Revisit the label thresholds with more history.** `nq_labels_v3_candidate` was
-   tuned on 248 sessions of one market regime; a new label version is only worth it
+3. **Revisit the label thresholds with more history.** The thresholds carried into
+   `nq_labels_v4_candidate` were tuned on 248 sessions of one market regime; a new label version is only worth it
    if the label mix has moved materially (`label-study` shows the current and the
    previous thresholds side by side).
 4. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses

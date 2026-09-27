@@ -134,8 +134,8 @@ Two pages:
   session VWAP drawn from the feature snapshot, and run a forecast for that session on
   demand. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v4`, or the
-  `nq_climatology_v4` baseline): per target the status, predicted label, full probability
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v5`, or the
+  `nq_climatology_v5` baseline): per target the status, predicted label, full probability
   distribution, the method that won the model selection, and the actual outcome with a
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
   is stored. The **Pre-open features** panel beside
@@ -403,23 +403,27 @@ point-in-time flag. Forecast runs, per-target probability distributions (with
 abstention), realised labels and continuous outcome metrics are separate, append-only
 records; corrections become new versions or revisions, never overwrites.
 
-It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v3_candidate`):
-`first_move_5m`, `opening_type_15m`, `direction_15m`, `direction_rth` and
-`session_type_rth`, each labelled afterwards by deterministic rules from the realised
-minute bars. The schema's starting thresholds labelled about two thirds of openings and
-sessions 'mixed'; v3 retunes them on the realised label mix (`label-study`), which brings
-'mixed' to about a third.
+It predicts the five targets of the NASDAQ-100 prediction schema - `first_move_5m`,
+`opening_type_15m`, `direction_15m`, `direction_rth` and `session_type_rth` - and two
+range regimes, `range_15m_regime` and `range_rth_regime` (`wide` / `narrow`: above or
+below the median range of the previous 40 sessions), each labelled afterwards by
+deterministic rules from the realised minute bars (`nq_labels_v4_candidate`). The
+schema's starting thresholds labelled about two thirds of openings and sessions 'mixed';
+they are retuned on the realised label mix (`label-study`), which brings 'mixed' to about
+a third. The range regimes were added because the pre-open features predict how far NQ
+moves, not which way (`metric-study`).
 
-**The model** (`nq_sklearn_v4`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+**The model** (`nq_sklearn_v5`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
 scikit-learn classifier per target over an explicit allowlist of snapshot features
 (median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
 session it trains only on earlier sessions whose outcome was knowable before that
 session's 09:29 cutoff. For each target it scores the class prior, sparse (L1) and L2
-logistic regressions and a gradient-boosted tree ensemble by chronological
+logistic regressions (one on the pre-open volatility inputs only) and a gradient-boosted
+tree ensemble by chronological
 cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
 replaces the prior only from 120 training sessions on, and only when it beats the prior
 on the same validation sessions by a clear margin (more than two standard errors of the
-per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v4`
+per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v5`
 (label frequencies) is kept as the baseline to compare against.
 
 ```bash

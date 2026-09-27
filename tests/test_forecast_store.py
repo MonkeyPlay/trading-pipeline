@@ -160,8 +160,8 @@ def test_outcome_revisions_and_explicit_selection(conn):
     sid = snap["snapshot_id"]
     preds = []
     for t, labels in labels_v2.vocabulary().items():
-        probs = {lab: 0.5 / (len(labels) - 1) for lab in labels}
-        probs[labels[-1]] = 0.5
+        probs = {lab: 0.4 / (len(labels) - 1) for lab in labels}
+        probs[labels[-1]] = 0.6                       # strictly the most probable, also with two labels
         preds.append(_issued(t, labels[-1], probs))
     store.save_forecast_run(conn, _run(conn, sid), preds)
 
@@ -222,6 +222,22 @@ def test_sklearn_forecast_end_to_end(conn):
                                         None if o["label"] else o["status"], o["available_at"], out["digest"],
                                         labels_v2.METRIC_VERSION, mrev, o["window_start_at"], o["window_end_at"])
 
+    # The range-regime thresholds read the earlier sessions' stored metrics, newest first.
+    hist = store.trailing_metric_values(conn, labels_v2.METRIC_VERSION, catv2.FEATURE_VERSION, days[-1],
+                                        ["range_15m_atr", "range_rth_atr"], limit=40)
+    # per session the preferred snapshot (live first, then newest) among those with stored metrics -
+    # 06-11's live capture has no recorded outcome here, so its reconstruction counts
+    with_metrics = {str(r[0]) for r in conn.execute("SELECT snapshot_id FROM forecast.outcome_metrics;").fetchall()}
+    earlier = [labels_v2.compute_outcome(md, next(x for x in store.find_snapshots(conn, d, catv2.FEATURE_VERSION)
+                                                  if x["snapshot_id"] in with_metrics))["metrics"]
+               for d in days[:-1]]
+    measured = [m["range_15m_atr"] for m in earlier if m["range_15m_atr"] is not None]
+    assert 0 < len(measured) < len(days) - 1          # the first synthetic session has no A: no range
+    assert hist["range_15m_atr"] == pytest.approx(measured[::-1])   # nulls skipped, newest first
+    assert len(hist["range_rth_atr"]) == len(measured)
+    assert len(store.trailing_metric_values(conn, labels_v2.METRIC_VERSION, catv2.FEATURE_VERSION, days[-1],
+                                            ["range_15m_atr"], limit=2)["range_15m_atr"]) == 2
+
     small = dict(models_v2.SKLEARN, model_version="nq_sklearn_test")
     small["parameters"] = dict(small["parameters"], min_training_sessions=3)
     store.register_model_version(conn, models_v2.registry_record(small))
@@ -229,6 +245,10 @@ def test_sklearn_forecast_end_to_end(conn):
     run, preds = models_v2.predict(conn, target, small)
     for p in preds:
         n = run["calibration"]["training"][p["target_id"]]["n"]
+        if p["target_id"] in labels_v2.RANGE_TARGETS:
+            # 40 earlier sessions are needed before a range-regime label exists
+            assert n == 0 and p["prediction_status"] == "unavailable"
+            continue
         assert n >= 3, "earlier sessions' outcomes are the training set"
         assert run["calibration"]["training"][p["target_id"]]["last_session"] < days[-1]
         assert p["prediction_status"] == "issued"
