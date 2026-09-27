@@ -82,7 +82,7 @@ class ModelForecastPanel:
             with ui.row().classes("items-center w-full"):
                 with ui.column().classes("gap-0"):
                     ui.label("Model forecast").classes("text-lg font-medium")
-                    ui.label("Five opening and session targets from the trained model, with the full "
+                    ui.label("Opening, session and range targets from the trained model, with the full "
                              "probability distribution of each.").classes("text-sm").style(_MUTED)
                 ui.space()
                 ui.select({m: m for m in models_v2.MODELS}, value=self.model, label="Model",

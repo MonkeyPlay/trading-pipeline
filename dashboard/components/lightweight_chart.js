@@ -141,10 +141,101 @@ class BandFill {
 }
 
 /* ------------------------------------------------------------------ */
+/* Time shade primitive                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Paints full-height background bands over time ranges - the minutes shown
+ * around the regular session. Each range runs from its first bar to its last,
+ * widened by half a bar on either side so adjacent bars are covered edge to edge.
+ */
+class TimeShadeRenderer {
+  constructor(rects, color) {
+    this._rects = rects;
+    this._color = color;
+  }
+
+  draw(target) {
+    target.useBitmapCoordinateSpace((scope) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      ctx.save();
+      ctx.fillStyle = this._color;
+      for (const r of this._rects) {
+        ctx.fillRect(Math.round(r.x0 * hr), 0, Math.max(1, Math.round((r.x1 - r.x0) * hr)),
+                     scope.bitmapSize.height);
+      }
+      ctx.restore();
+    });
+  }
+}
+
+class TimeShadePaneView {
+  constructor(source) {
+    this._source = source;
+    this._rects = [];
+  }
+
+  update() {
+    const src = this._source;
+    this._rects = [];
+    if (!src._chart) return;
+    const timeScale = src._chart.timeScale();
+    const half = (timeScale.options().barSpacing || 6) / 2;
+    for (const range of src._ranges) {
+      const a = timeScale.timeToCoordinate(range.from);
+      const b = timeScale.timeToCoordinate(range.to);
+      if (a === null || b === null) continue;
+      this._rects.push({ x0: Math.min(a, b) - half, x1: Math.max(a, b) + half });
+    }
+  }
+
+  renderer() {
+    return new TimeShadeRenderer(this._rects, this._source._color);
+  }
+
+  zOrder() {
+    return "bottom";
+  }
+}
+
+class TimeShade {
+  constructor() {
+    this._ranges = [];
+    this._color = "rgba(120, 123, 134, 0.14)";
+    this._paneViews = [new TimeShadePaneView(this)];
+  }
+
+  attached({ chart, requestUpdate }) {
+    this._chart = chart;
+    this._requestUpdate = requestUpdate;
+  }
+
+  detached() {
+    this._chart = null;
+    this._requestUpdate = null;
+  }
+
+  setRanges(ranges, color) {
+    this._ranges = ranges || [];
+    if (color) this._color = color;
+    if (this._requestUpdate) this._requestUpdate();
+  }
+
+  updateAllViews() {
+    this._paneViews.forEach((view) => view.update());
+  }
+
+  paneViews() {
+    return this._paneViews;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Diffing                                                             */
 /* ------------------------------------------------------------------ */
 
-const FIELDS = ["value", "open", "high", "low", "close", "color"];
+const FIELDS = ["value", "open", "high", "low", "close", "color", "wickColor"];
 
 function samePoint(a, b) {
   if (a.time !== b.time) return false;
@@ -306,6 +397,8 @@ export default {
         borderVisible: false,
         priceFormat: { type: "price", precision: 2, minMove: 0.25 },
       });
+      this.shade = new TimeShade();
+      this.candles.attachPrimitive(this.shade);
     }
 
     if (this.show_volume) {
@@ -368,6 +461,7 @@ export default {
 
       this.reconcileSeries(spec.series || {});
       this.reconcileBands(spec.bands || {});
+      if (this.shade) this.shade.setRanges(spec.shades || [], spec.shade_color);
 
       this.legendSpec = spec.legend || [];
       this.legend = this.legendSpec.map((item) => ({ ...item, value: null }));

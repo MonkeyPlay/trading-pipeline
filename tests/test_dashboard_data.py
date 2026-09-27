@@ -122,16 +122,25 @@ def test_stored_forecast_reads_the_repr_without_evaluating_it(market):
     assert "analogue_rationale" not in stored_forecast({**row, "raw_response": "__import__('os').getcwd()"})
 
 
-def test_analogue_session_is_the_regular_session(market):
+def test_analogue_session_is_the_regular_session_with_15_minutes_either_side(market):
     conn, md, sessions = market
     from dashboard.views.candles import load_analogue_session
     s, prev = sessions[-4], sessions[-5]
     out = load_analogue_session(conn, "NQ", s.session_date.isoformat())
     assert out["contract"]["contract_id"] == NQ_CID
     bars = out["bars"]
-    assert len(bars) == 390 and set(bars["session_scope"]) == {"RTH"}
+    # 09:15 .. 16:14: 15 muted minutes, the 390 regular ones, 15 muted minutes
+    assert len(bars) == 420 and bars["vwap"].notna().all()
     first = pd.Timestamp(bars["timestamp_utc"].iloc[0], tz="UTC")
-    assert first == s.rth_open_at and bars["vwap"].notna().all()
+    last = pd.Timestamp(bars["timestamp_utc"].iloc[-1], tz="UTC")
+    assert first == s.rth_open_at - pd.Timedelta(minutes=15)
+    assert last == s.scheduled_close_at + pd.Timedelta(minutes=14)
+    muted = bars["muted"].tolist()
+    assert muted[:15] == [True] * 15 and muted[15:405] == [False] * 390 and muted[405:] == [True] * 15
+    assert set(bars.loc[~bars["muted"], "session_scope"]) == {"RTH"}
+    # the matched day's own pre-open features, as the selected day's panel shows them
+    assert out["snapshot"]["trading_day"] == s.session_date.isoformat()
+    assert out["snapshot"]["previous_rth_close"] == pytest.approx(out["levels"]["previous_rth_close"])
 
     nq = md._bars[(NQ_CID, "TRADES")]
     prev_rth = nq[(nq["bar_start_at"] >= prev.rth_open_at) & (nq["bar_start_at"] < prev.scheduled_close_at)]
@@ -145,7 +154,7 @@ def test_analogue_session_is_the_regular_session(market):
     assert out["stats"]["high"] == pytest.approx(rth["high"].max())
 
     five = load_analogue_session(conn, "NQ", s.session_date.isoformat(), timeframe="5m")
-    assert len(five["bars"]) == 78
+    assert len(five["bars"]) == 84 and five["bars"]["muted"].sum() == 6
 
 
 def test_analogue_day_uses_the_closest_higher_contract(market):
@@ -206,3 +215,35 @@ def test_coverage_map_scores_weeks(market):
     assert [band(s, False) for s in (None, 0.0, 0.2, 0.5, 0.95)] == [0, 1, 2, 3, 4] and band(1.0, True) == 5
     opts = chart_options(data)
     assert len(opts["series"][0]["data"]) == 3 * 3 and opts["yAxis"]["data"] == ["NQ", "ES", "RTY"]
+
+
+def test_session_window_and_early_close():
+    from dashboard.views.candles import session_window, window_bars
+    w = session_window("2026-11-27")                       # the day after Thanksgiving closes at 13:00
+    assert (w["start"].strftime("%H:%M"), w["open"].strftime("%H:%M"),
+            w["close"].strftime("%H:%M"), w["end"].strftime("%H:%M")) == ("09:15", "09:30", "13:00", "13:15")
+    outside = session_window("2023-06-01")                 # outside the calendar: 09:30-16:00
+    assert (outside["start"].strftime("%H:%M"), outside["end"].strftime("%H:%M")) == ("09:15", "16:15")
+
+    idx = pd.date_range("2026-11-27 08:00", "2026-11-27 16:59", freq="1min", tz="America/New_York")
+    df = pd.DataFrame({"timestamp_ny": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
+    shown = window_bars(df, "2026-11-27")
+    assert shown["timestamp_ny"].iloc[0].strftime("%H:%M") == "09:15"
+    assert shown["timestamp_ny"].iloc[-1].strftime("%H:%M") == "13:14"
+    assert shown["muted"].sum() == 30
+    # a 30-minute bar starting 09:00 overlaps the window and is shown, muted
+    half = df.set_index("timestamp_ny").resample("30min").agg("first").reset_index()
+    shown30 = window_bars(half, "2026-11-27", "30m")
+    assert shown30["timestamp_ny"].iloc[0].strftime("%H:%M") == "09:00" and shown30["muted"].iloc[0]
+
+
+def test_day_contracts_put_the_active_contract_first(market):
+    conn, _, sessions = market
+    from dashboard.views.candles import analogue_contracts, day_contracts
+    from database.queries import set_active_contracts
+    recent = sessions[-1].session_date.isoformat()
+    held = analogue_contracts(conn, "NQ", recent)
+    assert len(held) >= 2
+    later = held[1]["contract_id"]
+    set_active_contracts(conn, "NQ", {recent: later}, "test")
+    assert [c["contract_id"] for c in day_contracts(conn, "NQ", recent)][0] == later
