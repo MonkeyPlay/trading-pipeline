@@ -79,6 +79,26 @@ def _previous_cycle_month(month: str, rule: RollRule) -> str:
     raise ValueError(f"no contract month of {rule.months} before {month}")
 
 
+def missing_cycle_months(chain, first_day: date, rule: RollRule) -> List[str]:
+    """
+    The contract months ('YYYYMM', newest first) of the rule's cycle from
+    ``first_day``'s month up to the newest contract the chain holds that the chain
+    lacks. IB's chain lookup can leave out older expired contracts it still
+    serves when asked for by month; these are the ones to ask for.
+    """
+    held = {contract_month(row) for row in eligible_chain(chain, rule)}
+    if not held:
+        return []
+    newest, out = max(held), []
+    y, m = first_day.year, first_day.month
+    while f"{y:04d}{m:02d}" < newest:
+        month = f"{y:04d}{m:02d}"
+        if MONTH_CODES[m - 1] in rule.months and month not in held:
+            out.append(month)
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out[::-1]
+
+
 def front_contracts(chain, days: Iterable[date], rule: RollRule) -> Dict[date, object]:
     """
     ``{day: contract row}`` - for each day, the nearest eligible contract whose
