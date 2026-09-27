@@ -1,5 +1,5 @@
 # tests/test_labels_v2.py
-"""nq_labels_v2_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
+"""nq_labels_v3_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
 
 import numpy as np
 import pandas as pd

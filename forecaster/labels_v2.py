@@ -10,11 +10,28 @@ contract. O is the 09:30 bar's open; C5, C15 and C are the 09:34, 09:44 and
 ATR14 through the previous session), and the opening labels use the snapshot's
 frozen overnight extremes - post-open bars never redefine them.
 
-  METRIC_VERSION  nq_outcome_metrics_v2: section 10.
-  LABEL_VERSION   nq_labels_v2_candidate: the five targets of section 8 with the
-                  starting thresholds of section 11. Each target's vocabulary is
-                  registered in forecast.label_definitions; the database checks
-                  predictions and realised labels against that one row.
+  METRIC_VERSION  nq_outcome_metrics_v3: section 10, first-move barrier 0.10 A.
+  LABEL_VERSION   nq_labels_v3_candidate: the five targets of section 8, with the
+                  section 11 thresholds retuned on 248 realised NQ sessions
+                  (2025-09 .. 2026-09; ``nq_forecast_v2.py label-study``). Each
+                  target's vocabulary is registered in forecast.label_definitions;
+                  the database checks predictions and realised labels against
+                  that one row.
+
+The section 11 starting values (nq_labels_v2_candidate) labelled 69 % of
+openings and 65 % of sessions 'mixed' and left 15 % of first moves ambiguous
+(both barriers of 0.05 A inside the first minute). v3 changes:
+
+  first move        B = 0.10 A (was 0.05): 1 ambiguous session instead of 37 and a
+                    real 'neither' class (17 %, quiet opens).
+  opening type      two_sided u, d >= 0.12 (0.15); drive |r| >= 0.15 (0.20),
+                    counter-excursion <= 0.08 (0.05), efficiency >= 0.40 (0.50);
+                    range w <= 0.25 (0.20), |r| <= 0.08 (0.05). 'mixed' 69 -> 38 %.
+  session type      trend |r| >= 0.40 (0.50), close location >= 0.75 / <= 0.25
+                    (0.80 / 0.20), 5m efficiency >= 0.15 (0.30 - above the 90th
+                    percentile, 0.26); two_sided_volatile w >= 0.90 (1.00), u, d >=
+                    0.25 (0.30); range w <= 0.80 (0.60), |r| <= 0.25 (0.20).
+                    'mixed' 65 -> 33 %. Reversal and the directions are unchanged.
 
 The label rules consume the metrics only. A required measurement that is
 missing makes the label ineligible (``label_status``), never an automatic
@@ -35,33 +52,33 @@ from features.indicators import finite, path_efficiency, ratio
 ONE_MIN = timedelta(minutes=1)
 RTH_END = time(16, 0)   # the full-RTH targets' window end, whatever the scheduled close
 
-METRIC_VERSION = "nq_outcome_metrics_v2"
-LABEL_VERSION = "nq_labels_v2_candidate"
+METRIC_VERSION = "nq_outcome_metrics_v3"
+LABEL_VERSION = "nq_labels_v3_candidate"
 
 LABEL_STATUSES = ("valid", "missing_bars", "ambiguous_intrabar", "incomplete_window",
                   "shortened_session", "not_yet_available", "invalid_reference")
 
-# Section 11 starting configuration. Not empirically established optima: tune on
-# training/development periods only, and issue a new LABEL_VERSION after a change.
+# Section 11 rules with thresholds set from the realised label mix (see the module
+# docstring); issue a new LABEL_VERSION after any change.
 PARAMETERS = {
-    "first_move_barrier": "B = max(1.0 point, 0.05 * A); barriers O + B and O - B",
+    "first_move_barrier": "B = max(1.0 point, 0.10 * A); barriers O + B and O - B",
     "first_move_min_points": 1.0,
-    "first_move_atr_fraction": 0.05,
+    "first_move_atr_fraction": 0.10,
     "direction_15m_band_atr": 0.10,
     "direction_rth_band_atr": 0.20,
     "on_breach_atr": 0.02,
     "opening_type_15m": {
-        "two_sided": {"u_min": 0.15, "d_min": 0.15},
+        "two_sided": {"u_min": 0.12, "d_min": 0.12},
         "sweep_low_rebound": {"r_gt": 0.10},
         "sweep_high_reverse": {"r_lt": -0.10},
-        "drive": {"r_abs_min": 0.20, "counter_excursion_max": 0.05, "e_min": 0.50},
-        "range": {"w_max": 0.20, "r_abs_max": 0.05},
+        "drive": {"r_abs_min": 0.15, "counter_excursion_max": 0.08, "e_min": 0.40},
+        "range": {"w_max": 0.25, "r_abs_max": 0.08},
     },
     "session_type_rth": {
         "reversal": {"f_abs_min": 0.20, "r_abs_min": 0.20},
-        "trend": {"r_abs_min": 0.50, "q_bull_min": 0.80, "q_bear_max": 0.20, "e_min": 0.30},
-        "two_sided_volatile": {"w_min": 1.00, "u_min": 0.30, "d_min": 0.30},
-        "range": {"w_max": 0.60, "r_abs_max": 0.20},
+        "trend": {"r_abs_min": 0.40, "q_bull_min": 0.75, "q_bear_max": 0.25, "e_min": 0.15},
+        "two_sided_volatile": {"w_min": 0.90, "u_min": 0.25, "d_min": 0.25},
+        "range": {"w_max": 0.80, "r_abs_max": 0.25},
     },
     "window_coverage": "every one-minute bar of the window is required",
     "early_close": "full-RTH targets are ineligible (shortened_session); opening targets stay eligible",
@@ -71,7 +88,7 @@ TARGETS: Dict[str, Dict[str, Any]] = {
     "first_move_5m": {
         "labels": ("up_first", "down_first", "neither"),
         "window_minutes": 5,
-        "definition": "Which barrier O +/- B (B = max(1 point, 0.05 A)) is touched first in [09:30, 09:35), "
+        "definition": "Which barrier O +/- B (B = max(1 point, 0.10 A)) is touched first in [09:30, 09:35), "
                       "by first-touch minute index. Both first touched in the same minute: that minute's "
                       "open at/above the upper barrier -> up_first, at/below the lower -> down_first, "
                       "otherwise ineligible (ambiguous_intrabar).",
@@ -81,10 +98,10 @@ TARGETS: Dict[str, Dict[str, Any]] = {
                    "two_sided", "range", "mixed"),
         "window_minutes": 15,
         "definition": "First matching rule over [09:30, 09:45), with r, u, d, w, e the 15m return, up/down "
-                      "excursion, range (all / A) and efficiency: two_sided u>=0.15 and d>=0.15; "
+                      "excursion, range (all / A) and efficiency: two_sided u>=0.12 and d>=0.12; "
                       "sweep_low_rebound ON-low breach-and-close-reclaim and r>0.10; sweep_high_reverse "
-                      "ON-high breach-and-close-reject and r<-0.10; drive_up r>=0.20, d<=0.05, e>=0.50; "
-                      "drive_down r<=-0.20, u<=0.05, e>=0.50; range w<=0.20 and |r|<=0.05; else mixed. "
+                      "ON-high breach-and-close-reject and r<-0.10; drive_up r>=0.15, d<=0.08, e>=0.40; "
+                      "drive_down r<=-0.15, u<=0.08, e>=0.40; range w<=0.25 and |r|<=0.08; else mixed. "
                       "An unknown, potentially decisive higher-priority rule makes the label ineligible.",
     },
     "direction_15m": {
@@ -104,9 +121,9 @@ TARGETS: Dict[str, Dict[str, Any]] = {
         "window_minutes": None,
         "definition": "First matching rule over [09:30, 16:00), with r, u, d, w the RTH return, excursions "
                       "and range (/ A), q the close location, e the 5m path efficiency and f the first-hour "
-                      "return: reversal f>=0.20 and r<=-0.20, or f<=-0.20 and r>=0.20; bull_trend r>=0.50, "
-                      "q>=0.80, e>=0.30; bear_trend r<=-0.50, q<=0.20, e>=0.30; two_sided_volatile w>=1.00, "
-                      "u>=0.30, d>=0.30; range w<=0.60 and |r|<=0.20; else mixed. Ineligible on early-close "
+                      "return: reversal f>=0.20 and r<=-0.20, or f<=-0.20 and r>=0.20; bull_trend r>=0.40, "
+                      "q>=0.75, e>=0.15; bear_trend r<=-0.40, q<=0.25, e>=0.15; two_sided_volatile w>=0.90, "
+                      "u>=0.25, d>=0.25; range w<=0.80 and |r|<=0.25; else mixed. Ineligible on early-close "
                       "sessions.",
     },
 }
@@ -131,8 +148,9 @@ def label_registry_record() -> Dict[str, Any]:
                for t, d in TARGETS.items()]
     digest = hashlib.sha256(json.dumps(targets, sort_keys=True).encode()).hexdigest()
     return {"label_version": LABEL_VERSION, "definition_hash": digest, "targets": targets,
-            "description": "nq_schema_v2 candidate labels: first move, opening type, 15m and RTH direction, "
-                           "RTH session type (deterministic rules over nq_outcome_metrics_v2)."}
+            "description": "nq_schema_v2 candidate labels, thresholds retuned on the realised label mix: first "
+                           "move, opening type, 15m and RTH direction, RTH session type (deterministic "
+                           "rules over nq_outcome_metrics_v3)."}
 
 
 # --------------------------------------------------------------------------

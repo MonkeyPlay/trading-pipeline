@@ -134,8 +134,8 @@ Two pages:
   session VWAP drawn from the feature snapshot, and run a forecast for that session on
   demand. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v3`, or the
-  `nq_climatology_v3` baseline): per target the status, predicted label, full probability
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v4`, or the
+  `nq_climatology_v4` baseline): per target the status, predicted label, full probability
   distribution, the method that won the model selection, and the actual outcome with a
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
   is stored. The **Pre-open features** panel beside
@@ -403,12 +403,14 @@ point-in-time flag. Forecast runs, per-target probability distributions (with
 abstention), realised labels and continuous outcome metrics are separate, append-only
 records; corrections become new versions or revisions, never overwrites.
 
-It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v2_candidate`):
+It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v3_candidate`):
 `first_move_5m`, `opening_type_15m`, `direction_15m`, `direction_rth` and
 `session_type_rth`, each labelled afterwards by deterministic rules from the realised
-minute bars.
+minute bars. The schema's starting thresholds labelled about two thirds of openings and
+sessions 'mixed'; v3 retunes them on the realised label mix (`label-study`), which brings
+'mixed' to about a third.
 
-**The model** (`nq_sklearn_v3`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+**The model** (`nq_sklearn_v4`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
 scikit-learn classifier per target over an explicit allowlist of snapshot features
 (median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
 session it trains only on earlier sessions whose outcome was knowable before that
@@ -417,7 +419,7 @@ logistic regressions and a gradient-boosted tree ensemble by chronological
 cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
 replaces the prior only from 120 training sessions on, and only when it beats the prior
 on the same validation sessions by a clear margin (more than two standard errors of the
-per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v3`
+per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v4`
 (label frequencies) is kept as the baseline to compare against.
 
 ```bash

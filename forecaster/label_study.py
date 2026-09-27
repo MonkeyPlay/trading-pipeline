@@ -22,21 +22,21 @@ from features import calendar as cal
 from features.indicators import finite
 from forecaster import labels_v2
 
-# Candidates worth seeing next to the current rules. They are starting points
-# for the comparison, not a recommendation: the quantiles below decide.
+# Variants shown next to the current rules: the previous label version's
+# thresholds, for comparison. Add candidates with --set.
 PRESETS: Dict[str, Dict[str, Any]] = {
     "current": {},
-    "first_move_B0.075": {"first_move_atr_fraction": 0.075},
-    "first_move_B0.10": {"first_move_atr_fraction": 0.10},
-    "looser_types": {
-        "opening_type_15m.two_sided.u_min": 0.10, "opening_type_15m.two_sided.d_min": 0.10,
-        "opening_type_15m.drive.r_abs_min": 0.15, "opening_type_15m.drive.counter_excursion_max": 0.08,
-        "opening_type_15m.drive.e_min": 0.40,
-        "opening_type_15m.range.w_max": 0.25, "opening_type_15m.range.r_abs_max": 0.08,
-        "session_type_rth.trend.r_abs_min": 0.40, "session_type_rth.trend.q_bull_min": 0.75,
-        "session_type_rth.trend.q_bear_max": 0.25, "session_type_rth.trend.e_min": 0.25,
-        "session_type_rth.two_sided_volatile.w_min": 0.90,
-        "session_type_rth.range.w_max": 0.80, "session_type_rth.range.r_abs_max": 0.25,
+    "nq_labels_v2_candidate": {
+        "first_move_atr_fraction": 0.05,
+        "opening_type_15m.two_sided.u_min": 0.15, "opening_type_15m.two_sided.d_min": 0.15,
+        "opening_type_15m.drive.r_abs_min": 0.20, "opening_type_15m.drive.counter_excursion_max": 0.05,
+        "opening_type_15m.drive.e_min": 0.50,
+        "opening_type_15m.range.w_max": 0.20, "opening_type_15m.range.r_abs_max": 0.05,
+        "session_type_rth.trend.r_abs_min": 0.50, "session_type_rth.trend.q_bull_min": 0.80,
+        "session_type_rth.trend.q_bear_max": 0.20, "session_type_rth.trend.e_min": 0.30,
+        "session_type_rth.two_sided_volatile.w_min": 1.00,
+        "session_type_rth.two_sided_volatile.u_min": 0.30, "session_type_rth.two_sided_volatile.d_min": 0.30,
+        "session_type_rth.range.w_max": 0.60, "session_type_rth.range.r_abs_max": 0.20,
     },
 }
 
@@ -122,7 +122,7 @@ def format_report(result: Dict[str, Any], variants: Dict[str, Dict[str, Any]]) -
     for target in labels_v2.TARGETS:
         vocab = list(labels_v2.TARGETS[target]["labels"])
         lines.append(f"== {target}")
-        header = f"{'variant':20} {'elig':>5} " + " ".join(f"{lab[:18]:>18}" for lab in vocab) + "  ineligible"
+        header = f"{'variant':24} {'elig':>5} " + " ".join(f"{lab[:18]:>18}" for lab in vocab) + "  ineligible"
         lines.append(header)
         for name in variants:
             c = result["labels"][name][target]
@@ -130,7 +130,7 @@ def format_report(result: Dict[str, Any], variants: Dict[str, Dict[str, Any]]) -
             shares = " ".join(f"{(f'{c[lab]} ({100 * c[lab] / elig:.0f}%)' if elig else '-'):>18}" for lab in vocab)
             bad = ", ".join(f"{k[len('INELIGIBLE: '):]} {v}" for k, v in sorted(c.items())
                             if k.startswith("INELIGIBLE: "))
-            lines.append(f"{name:20} {elig:5d} {shares}  {bad}")
+            lines.append(f"{name:24} {elig:5d} {shares}  {bad}")
         lines.append("")
     lines.append("Metric quantiles over the sessions where each is measured (current rules; units: daily ATR "
                  "unless a ratio):")

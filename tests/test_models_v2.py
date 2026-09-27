@@ -142,7 +142,7 @@ def test_distributions_are_complete_and_argmax(store, fitted_cache):
         best = max(labels, key=lambda lab: (p["probabilities"][lab], -labels.index(lab)))
         assert p["predicted_label"] == best
     assert run["calibration"]["training"]["direction_15m"]["n"] == 260
-    assert run["model_version"] == "nq_sklearn_v3" and run["calibration_version"] is None
+    assert run["model_version"] == "nq_sklearn_v4" and run["calibration_version"] is None
 
 
 def test_invalid_required_input_is_unavailable(store, fitted_cache):
@@ -222,7 +222,7 @@ def test_registry_records_are_hashable_and_distinct():
     recs = [models_v2.registry_record(m) for m in models_v2.MODELS.values()]
     assert len({r["definition_hash"] for r in recs}) == len(recs)
     assert all("kind" not in r for r in recs)
-    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v3"
+    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v4"
 
 
 def test_feature_models_need_enough_history(store):

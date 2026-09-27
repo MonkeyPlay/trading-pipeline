@@ -4,8 +4,8 @@ The current feature version is `nq_features_v3`. It has the same features as
 `nq_features_v2` and changes two parameters: the daily ATRs skip sessions without
 complete RTH data instead of needing an unbroken run of them, and the spot
 volatility indices may be up to 20 minutes old. Records of both versions stay in the
-store; models are tied to one feature version (`nq_sklearn_v3` and
-`nq_climatology_v3` read `nq_features_v3`).
+store; models are tied to one feature version (`nq_sklearn_v4` and
+`nq_climatology_v4` read `nq_features_v3` and predict `nq_labels_v3_candidate`).
 
 This is the NQ pre-open contract: what a snapshot contains, when its inputs were
 knowable, how a forecast and its outcome are recorded, and how corrections are
@@ -156,7 +156,7 @@ event features are null with status `missing` — "no calendar" is never reporte
 event". A live capture only sees rows recorded before it froze. No loader for a
 particular vendor is included.
 
-## Targets, labels and outcome metrics (`nq_labels_v2_candidate`)
+## Targets, labels and outcome metrics (`nq_labels_v3_candidate`)
 
 [forecaster/labels_v2.py](../forecaster/labels_v2.py) implements sections 8-11 of the
 schema. Every value is measured from the snapshot contract's RTH minute bars: O is the
@@ -172,13 +172,34 @@ high/low, never post-open bars.
 | `direction_rth` | up, down, flat | [09:30, 16:00) |
 | `session_type_rth` | bull_trend, bear_trend, reversal, two_sided_volatile, range, mixed | [09:30, 16:00) |
 
-`nq_outcome_metrics_v2` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
+`nq_outcome_metrics_v3` holds the section-10 metrics (`return_5m_atr`, `return_15m_atr`,
 `return_rth_atr`, excursions, ranges, `efficiency_15m`, `rth_close_location`,
 `first_hour_return_atr`, `efficiency_rth_5m`, first up/down touch minutes, the ON-low
 breach-and-reclaim / ON-high breach-and-reject flags) plus the first-move barrier and
-the open of a same-minute double touch. The label rules read only those metrics, with the
-section-11 starting thresholds; they are not tuned optima, and a change is a new label
-version.
+the open of a same-minute double touch. The label rules read only those metrics; a
+change of threshold is a new label version.
+
+The thresholds are the section-11 rules retuned on 248 realised NQ sessions
+(2025-09 to 2026-09) with `label-study`; the starting values
+(`nq_labels_v2_candidate`, `nq_outcome_metrics_v2`) labelled 69 % of openings and 65 %
+of sessions `mixed` and left 15 % of first moves ambiguous. Units are daily ATR (A):
+
+| rule | v3 | v2 (section 11) |
+|---|---|---|
+| first-move barrier B | 0.10 A | 0.05 A |
+| opening `two_sided` u, d | >= 0.12 | >= 0.15 |
+| opening `drive` \|r\| / counter-excursion / efficiency | >= 0.15 / <= 0.08 / >= 0.40 | >= 0.20 / <= 0.05 / >= 0.50 |
+| opening `range` w / \|r\| | <= 0.25 / <= 0.08 | <= 0.20 / <= 0.05 |
+| session trend \|r\| / close location / 5m efficiency | >= 0.40 / >= 0.75, <= 0.25 / >= 0.15 | >= 0.50 / >= 0.80, <= 0.20 / >= 0.30 |
+| session `two_sided_volatile` w / u, d | >= 0.90 / >= 0.25 | >= 1.00 / >= 0.30 |
+| session `range` w / \|r\| | <= 0.80 / <= 0.25 | <= 0.60 / <= 0.20 |
+
+Reversal, the sweeps and both direction bands are unchanged. On those sessions v3 gives
+first move up / down / neither 39 / 44 / 17 % (1 ambiguous instead of 37), opening
+`mixed` 38 %, `range` 21 %, `two_sided` 18 %, drives 9-10 % each, sweeps 1-2 %, and
+session `mixed` 33 %, `range` 27 %, bull / bear trend 17 / 10 %, `two_sided_volatile`
+7 %, `reversal` 5 %. The sweeps stay rare by nature: the open seldom reaches an
+overnight extreme within 15 minutes.
 
 - A window needs every one of its minute bars; otherwise the label is ineligible with
   `missing_bars`. A missing A or ON extreme gives `invalid_reference`.
@@ -209,7 +230,7 @@ label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run a
 uses outcome rows that already existed when it trained. One snapshot per session is
 used (the live capture if any).
 
-**`nq_sklearn_v3`** (the default) - one scikit-learn pipeline per target:
+**`nq_sklearn_v4`** (the default) - one scikit-learn pipeline per target:
 
 - *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
   whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
@@ -246,7 +267,7 @@ used (the live capture if any).
   `event_policy` and a minimum top probability are available as parameters, off by
   default.
 
-**`nq_climatology_v3`** - Laplace-smoothed label frequencies of the earlier sessions;
+**`nq_climatology_v4`** - Laplace-smoothed label frequencies of the earlier sessions;
 the baseline the trained model has to beat.
 
 A run's `calibration` records the training window and class counts per target, every
