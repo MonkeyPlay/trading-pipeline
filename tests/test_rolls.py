@@ -4,7 +4,7 @@
 from datetime import date
 
 from collector.ib_collector import is_pacing_violation
-from collector.rolls import front_contracts
+from collector.rolls import front_contracts, missing_cycle_months
 from config import INSTRUMENTS
 
 ES_RULE = INSTRUMENTS["ES"].roll          # HMUZ, roll 8 days before expiry
@@ -58,6 +58,16 @@ def test_monthly_cycle_with_a_missing_month():
     assert _front([sep, oct_, nov], date(2026, 9, 15), YIELD_RULE) == 9
 
 
+def test_missing_cycle_months_names_what_the_chain_lacks():
+    # IB's chain lookup returned only September 2025 onward; a window from
+    # November 2024 also needs Dec 2024, Mar 2025 and Jun 2025 (newest first).
+    assert missing_cycle_months(FULL[1:], date(2024, 11, 18), ES_RULE) == ["202506", "202503", "202412"]
+    assert missing_cycle_months(FULL, date(2025, 5, 1), ES_RULE) == []
+    # An interior gap is named too, and nothing beyond the newest contract held.
+    assert missing_cycle_months([ESM5, ESZ5], date(2025, 5, 1), ES_RULE) == ["202509"]
+    assert missing_cycle_months([], date(2025, 5, 1), ES_RULE) == []
+
+
 def test_only_real_pacing_violations_back_off():
     assert is_pacing_violation(162, "Historical Market Data Service error message:Historical data request "
                                     "pacing violation")
@@ -67,3 +77,22 @@ def test_only_real_pacing_violations_back_off():
                                         "query cancelled: 5")
     assert is_pacing_violation(420, "Invalid Real-time Query:Historical data request pacing violation")
     assert not is_pacing_violation(200, "No security definition has been found for the request")
+
+
+def test_missing_months_are_resolved_until_ib_gives_up(monkeypatch):
+    from types import SimpleNamespace
+    from collector import ib_collector
+
+    stored, asked = [], []
+    monkeypatch.setattr(ib_collector, "list_future_chain", lambda conn, symbol: FULL[1:])
+    monkeypatch.setattr(ib_collector, "_store_contract", lambda conn, info: stored.append(info["contract_month"]))
+
+    class _App:
+        def resolve_contract(self, instrument, month):
+            asked.append(month)
+            return None if month == "202503" else {"contract_month": month}
+
+    work = SimpleNamespace(symbol="ES", instrument=INSTRUMENTS["ES"])
+    ib_collector._resolve_missing_months(_App(), None, work, date(2024, 11, 18))
+    assert asked == ["202506", "202503"]          # stops at the first month IB cannot resolve
+    assert stored == ["202506"]

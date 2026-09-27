@@ -71,7 +71,7 @@ from collector.coverage import (
     plan_trading_days, days_to_fetch, summarise, expected_trading_days, previous_trading_day,
     day_expectation,
 )
-from collector.rolls import front_contracts, segments, upcoming_roll
+from collector.rolls import front_contracts, missing_cycle_months, segments, upcoming_roll
 
 # Bars whose timestamp is within this window of "now" may still be revised by IB
 # or belong to a session that has not fully closed -> stored as is_completed=0.
@@ -714,11 +714,33 @@ def _record_assignment(conn, work):
             logger.info(f"{work.symbol}: cleared {n} stale active-contract assignment(s).")
 
 
+def _resolve_missing_months(app, conn, work, start_day):
+    """
+    Asks IB for each contract month the discovered chain lacks between the
+    window's start and its newest contract, one month at a time: the chain lookup
+    can omit older expired contracts that IB still resolves (and serves bars for)
+    when named. Newest first; the first month IB cannot resolve ends the search,
+    as every older one is further out of its reach.
+    """
+    months = missing_cycle_months(list_future_chain(conn, work.symbol), start_day, work.instrument.roll)
+    if not months:
+        return
+    logger.info(f"{work.symbol}: the chain lacks {len(months)} contract month(s) in the window "
+                f"({', '.join(months)}); resolving them one by one.")
+    for month in months:
+        info = app.resolve_contract(work.instrument, month)
+        if not info:
+            logger.warning(f"{work.symbol}: IB does not resolve {month}; days before it stay uncovered.")
+            return
+        _store_contract(conn, info)
+
+
 def _resolve_online(app, conn, work, start_day, end_day, gap_fill):
     """Fills in ``work.jobs`` for a symbol whose contract(s) the database lacks."""
     if work.rolling:
         for info in app.discover_chain(work.instrument):
             _store_contract(conn, info)
+        _resolve_missing_months(app, conn, work, start_day)
         _plan_rolling(conn, work, start_day, end_day, gap_fill, allow_gaps=True)
         return
 
