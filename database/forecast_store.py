@@ -201,6 +201,25 @@ def list_snapshots(conn: Database, start: str, end: str, feature_version: str,
     return [_snapshot_dict(r) for r in rows]
 
 
+def snapshots_before(conn: Database, before_session: str, feature_version: str,
+                     symbol: str = "NQ") -> List[Dict[str, Any]]:
+    """
+    One snapshot per session before ``before_session`` (its live capture if any,
+    else the newest), oldest first, across every contract of ``symbol``:
+    ``{'session_date', 'features', 'reference_values', 'snapshot_id'}``.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT ON (s.session_date) s.session_date, s.features, s.reference_values, s.snapshot_id "
+        "  FROM forecast.feature_snapshots s JOIN contracts c ON c.contract_id = s.instrument_id "
+        " WHERE s.feature_version = %s AND c.symbol = %s AND s.session_date < %s "
+        " ORDER BY s.session_date, (s.data_mode = 'live_capture') DESC, s.created_at DESC;",
+        (feature_version, symbol, before_session),
+    ).fetchall()
+    return [{"session_date": str(r["session_date"]), "features": _load(r["features"]),
+             "reference_values": _load(r["reference_values"]), "snapshot_id": str(r["snapshot_id"])}
+            for r in rows]
+
+
 # --------------------------------------------------------------------------
 # Forecast runs
 # --------------------------------------------------------------------------

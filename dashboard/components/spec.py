@@ -25,6 +25,11 @@ MUTED_CANDLE = "#6b6f7a"
 MUTED_VOLUME = "rgba(120, 123, 134, 0.35)"
 MUTED_BACKGROUND = "rgba(120, 123, 134, 0.14)"
 
+# Opening range: a grey box over its own minutes, then its high-low channel.
+OR_BOX = "rgba(150, 153, 164, 0.30)"
+OR_FILL = "rgba(38, 166, 154, 0.13)"
+OR_LINE = "#26a69a"
+
 # Pre-open reference levels drawn from the feature snapshot, in draw order.
 _FEATURE_LEVELS = (
     ("previous_rth_close", "Prev RTH Close", "#29b6f6", 2, 2),
@@ -132,12 +137,52 @@ def _level_series(times: np.ndarray, value: float, label: str, color: str,
     }
 
 
+def _hidden(points: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """An invisible line - one edge of a filled box."""
+    return {"points": points, "style": {"color": OR_LINE, "width": 1, "dash": 0, "title": "",
+                                        "axis_label": False, "line_visible": False}}
+
+
+def opening_range_series(df: pd.DataFrame, opening_range: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ``{'series', 'bands', 'legend'}`` drawing an opening range
+    ({'high', 'low', 'start', 'end'}: its price extremes and its minutes
+    [start, end) as New York timestamps): a grey box over the bars inside it
+    (when there are at least two), then ORH and ORL lines with the channel
+    between them filled, from the first bar after it to the last bar shown.
+    """
+    out: Dict[str, Any] = {"series": {}, "bands": {}, "legend": []}
+    if df is None or df.empty or not opening_range:
+        return out
+    hi, lo = float(opening_range["high"]), float(opening_range["low"])
+    ts = pd.to_datetime(df["timestamp_ny"])
+    times = to_epoch(ts)
+    start, end = opening_range["start"], opening_range["end"]
+    inside = times[((ts >= start) & (ts < end)).to_numpy()]
+    after = times[(ts >= end).to_numpy()]
+    if len(inside) >= 2:
+        out["series"]["or:box_high"] = _hidden(level_points(inside[0], inside[-1], hi))
+        out["series"]["or:box_low"] = _hidden(level_points(inside[0], inside[-1], lo))
+        out["bands"]["or:box"] = {"upper": "or:box_high", "lower": "or:box_low", "color": OR_BOX}
+    if len(after) >= 1:
+        for key, label, value in (("features:orh", "ORH", hi), ("features:orl", "ORL", lo)):
+            out["series"][key] = {
+                "points": level_points(after[0], after[-1], value),
+                "style": {"color": OR_LINE, "width": 1, "dash": 0, "title": label, "axis_label": True},
+            }
+            out["legend"].append({"key": key, "label": label, "color": OR_LINE})
+        if len(after) >= 2:
+            out["bands"]["or:range"] = {"upper": "features:orh", "lower": "features:orl", "color": OR_FILL}
+    return out
+
+
 def build_chart_spec(
     df: pd.DataFrame,
     *,
     features: Optional[Dict[str, Any]] = None,
     show_vwap: bool = True,
     fit: bool = False,
+    opening_range: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Assembles the full chart spec for one session. Rows with a true ``muted``
@@ -177,6 +222,12 @@ def build_chart_spec(
             },
         }
         legend.append({"key": "features:vwap", "label": "Session VWAP", "color": "#ab47bc"})
+
+    if opening_range and "timestamp_ny" in df.columns:
+        drawn = opening_range_series(df, opening_range)
+        series.update(drawn["series"])
+        bands.update(drawn["bands"])
+        legend.extend(drawn["legend"])
 
     return {
         "candles": candle_points(df),

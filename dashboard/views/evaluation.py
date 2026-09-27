@@ -2,6 +2,10 @@
 """
 Model evaluation and analytics view for the NQ Opening Forecast System.
 Compares historical forecasts against realized session outcomes to measure accuracy.
+
+Each forecast is scored over its own horizon: analogue_baseline_v2 forecasts the
+first hour (09:30 open to 10:29 close, flat within the band stored with the
+forecast), the older analogue_baseline_v1 rows are scored open to close.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ from nicegui import ui
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.spec import build_accuracy_spec
 from database.queries import get_evaluations
+from forecaster.analogue import first_hour_on
+from forecaster.client import MODEL_VERSION as FIRST_HOUR_MODEL
 
 # Below this fraction of the open, a session is called flat rather than directional.
 _NEUTRAL_BAND = 0.0005
@@ -41,20 +47,47 @@ def _actual_bias(rth_open, rth_close) -> str:
     return "NEUTRAL"
 
 
+def _actual_first_hour(conn, row, raw_outcomes: Dict[str, Any], band) -> str:
+    """The first hour of the forecast's session against the forecast's own flat band."""
+    if band is None:
+        return "UNKNOWN"
+    rth_open, close60 = raw_outcomes.get("rth_open"), raw_outcomes.get("first_60_minute_close")
+    if rth_open is None or close60 is None:
+        # Outcomes recorded before the 60-minute close was kept: read it from the bars.
+        move = first_hour_on(conn, row["contract_id"], str(row["session_date"])[:10]) if conn else None
+        if move is None:
+            return "UNKNOWN"
+        rth_open, close60 = move["open"], move["close"]
+    change = close60 - rth_open
+    if change > band:
+        return "BULLISH"
+    if change < -band:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _pct(value) -> str:
+    return "—" if value is None else f"{float(value):.1f}%"
+
+
 def _metric(label: str, value: str, accent: str = "#d1d4dc") -> None:
     with ui.card().classes("grow").style("background:#1c212e"):
         ui.label(label).classes("text-xs uppercase tracking-wide").style("color:#787b86")
         ui.label(value).classes("text-2xl font-medium").style(f"color:{accent}")
 
 
-def _build_records(rows) -> List[Dict[str, Any]]:
+def _build_records(rows, conn=None) -> List[Dict[str, Any]]:
     records = []
     for row in rows:
         probabilities = _load_json(row["probabilities"])
         raw_outcomes = _load_json(row["raw_outcomes"])
 
         rth_close = row["rth_close"]
-        actual = _actual_bias(raw_outcomes.get("rth_open"), rth_close)
+        first_hour = row["model_version"] == FIRST_HOUR_MODEL
+        if first_hour:
+            actual = _actual_first_hour(conn, row, raw_outcomes, probabilities.get("flat_band_points"))
+        else:
+            actual = _actual_bias(raw_outcomes.get("rth_open"), rth_close)
         predicted = row["predicted_bias"] or "UNKNOWN"
         correct = predicted == actual and actual != "UNKNOWN"
 
@@ -67,10 +100,12 @@ def _build_records(rows) -> List[Dict[str, Any]]:
             "actual": actual,
             "correct": correct,
             "result": "Match" if correct else "Miss",
+            "model": row["model_version"],
+            "horizon": "first hour" if first_hour else "open to close",
             "rth_close": f"{rth_close:,.2f}" if rth_close is not None else "—",
-            "bullish": f"{probabilities.get('bullish_continuation_pct', 0.0):.1f}%",
-            "gap_fill": f"{probabilities.get('mean_reversion_gap_fill_pct', 0.0):.1f}%",
-            "bearish": f"{probabilities.get('bearish_rejection_pct', 0.0):.1f}%",
+            "bullish": _pct(probabilities.get("bullish_continuation_pct")),
+            "gap_fill": _pct(probabilities.get("mean_reversion_gap_fill_pct")),
+            "bearish": _pct(probabilities.get("bearish_rejection_pct")),
         })
     return records
 
@@ -127,7 +162,7 @@ def _evaluation_body(conn) -> None:
             ).classes("text-sm").style("color:#787b86")
         return
 
-    records = _build_records(rows)
+    records = _build_records(rows, conn)
     total = len(records)
     correct = sum(1 for r in records if r["correct"])
     accuracy = (correct / total * 100) if total else 0.0
@@ -154,10 +189,12 @@ def _evaluation_body(conn) -> None:
             {"name": "predicted", "label": "Predicted", "field": "predicted", "align": "left"},
             {"name": "actual", "label": "Actual", "field": "actual", "align": "left"},
             {"name": "result", "label": "Result", "field": "result", "align": "left"},
+            {"name": "model", "label": "Model", "field": "model", "align": "left"},
+            {"name": "horizon", "label": "Scored over", "field": "horizon", "align": "left"},
             {"name": "rth_close", "label": "RTH close", "field": "rth_close", "align": "right"},
-            {"name": "bullish", "label": "Bullish", "field": "bullish", "align": "right"},
-            {"name": "gap_fill", "label": "Gap fill", "field": "gap_fill", "align": "right"},
-            {"name": "bearish", "label": "Bearish", "field": "bearish", "align": "right"},
+            {"name": "bullish", "label": "Bullish / up", "field": "bullish", "align": "right"},
+            {"name": "gap_fill", "label": "Gap fill / flat", "field": "gap_fill", "align": "right"},
+            {"name": "bearish", "label": "Bearish / down", "field": "bearish", "align": "right"},
         ],
         rows=records,
         row_key="key",

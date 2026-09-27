@@ -6,8 +6,10 @@ Ties the pieces together and PERSISTS the results, once per instrument:
   1. load recent 1-minute bars for the contract
   2. evaluate realized outcomes for every completed prior session   -> outcomes
   3. compute the pre-open feature snapshot for the target session   -> feature_snapshots
-  4. find volatility-normalized historical analogues
-  5. build the analogue-baseline opening forecast (offline)         -> predictions
+  4. find the historical analogues (forecaster/analogue.py: for NQ the stored
+     point-in-time snapshots of every earlier session, else standardised gap
+     and overnight range) and measure their first hour
+  5. build the analogue opening forecast (offline)                  -> predictions
   6. store the analogue matches                                     -> analogue_matches
 
 Each instrument is forecast independently: analogues for ES are drawn only from
@@ -44,9 +46,9 @@ from database.queries import (
 )
 from features.calculations import calculate_pre_open_snapshot
 from features.session_windows import enrich_candle_timezones, NY_TZ
+from forecaster.analogue import analogue_forecast
 from forecaster.evaluator import evaluate_session_outcomes
-from forecaster.client import MODEL_VERSION, PROMPT_VERSION, ForecastClient
-from matching.normalizer import find_analogues
+from forecaster.client import MODEL_VERSION, PROMPT_VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("daily_forecast")
@@ -160,26 +162,21 @@ def run(dsn, symbol, expiry, model, lookback_days, target_date=None):
         )
         logger.info(f"Saved feature snapshot #{snapshot_id} for {target}.")
 
-        # --- 4. Historical analogues (strictly earlier sessions) ---
-        hist_snapshots = []
-        for day in trading_days:
-            if day >= target:
-                continue
-            hist = calculate_pre_open_snapshot(df, day, vix_df=vix_df)
-            if not hist or "error" in hist:
-                continue
-            out_row = get_outcome(conn, contract_id, day)
-            if out_row is not None:
-                hist["outcome"] = dict(out_row)
-            hist_snapshots.append(hist)
+        # --- 4 + 5. Historical analogues (strictly earlier sessions) and the forecast ---
+        def v1_history():
+            out = []
+            for day in trading_days:
+                if day >= target:
+                    continue
+                hist = calculate_pre_open_snapshot(df, day, vix_df=vix_df)
+                if hist and "error" not in hist:
+                    out.append(hist)
+            return out
 
-        analogues = find_analogues(snapshot, hist_snapshots, k=5)
-
-        # --- 5. Forecast ---
-        client = ForecastClient(model_name=model)
-        forecast = client.get_forecast(
-            target, snapshot, analogues, instrument=Config.describe_instrument(symbol)
-        )
+        forecast, analogues, client = analogue_forecast(
+            conn, symbol, target, snapshot, v1_history, instrument=Config.describe_instrument(symbol))
+        if model:
+            client.model_name = model
 
         prediction_id = save_prediction(
             conn, contract_id=contract_id, forecast_cutoff=cutoff, snapshot_id=snapshot_id,

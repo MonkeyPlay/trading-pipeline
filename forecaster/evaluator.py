@@ -70,6 +70,8 @@ def evaluate_session_outcomes(df, target_date):
         "raw_outcomes": {
             "session_total_volume": int(rth_df["volume"].sum()),
             "rth_open": float(rth_df.iloc[0]["open"]),
+            # The analogue forecast's horizon ends here: the close of the last bar before 10:30.
+            "first_60_minute_close": _close(rth_ib),
             "trend_type": "UP" if rth_df.iloc[-1]["close"] > rth_df.iloc[0]["open"] else "DOWN",
         },
     }

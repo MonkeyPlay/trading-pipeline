@@ -175,9 +175,10 @@ def test_analogue_day_uses_the_closest_higher_contract(market):
 
 def test_contract_order_for_a_day(monkeypatch):
     from dashboard.views import candles
+    from database import queries
     held = [{"contract_id": i, "expiry": e} for i, e in
             ((1, "20260320"), (2, "202606"), (3, "20260918"), (4, "20261218"))]   # nearest expiry first
-    monkeypatch.setattr(candles, "contracts_with_day", lambda conn, symbol, day: held)
+    monkeypatch.setattr(queries, "contracts_with_day", lambda conn, symbol, day: held)
     order = lambda day: [c["contract_id"] for c in candles.analogue_contracts(None, "NQ", day)]
     assert order("2026-08-07") == [3, 4, 2, 1]      # Sep, then Dec; expired ones last, closest first
     assert order("2026-06-15") == [2, 3, 4, 1]      # a contract month counts through its month
@@ -247,3 +248,49 @@ def test_day_contracts_put_the_active_contract_first(market):
     later = held[1]["contract_id"]
     set_active_contracts(conn, "NQ", {recent: later}, "test")
     assert [c["contract_id"] for c in day_contracts(conn, "NQ", recent)][0] == later
+
+
+def test_first_hour_move_from_the_stored_bars(market):
+    conn, md, sessions = market
+    from forecaster.analogue import first_hour_move
+    from forecaster.evaluator import evaluate_session_outcomes
+    s = sessions[-4]
+    got = first_hour_move(conn, "NQ", s.session_date.isoformat())
+    nq = md._bars[(NQ_CID, "TRADES")]
+    hour = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.rth_open_at + timedelta(hours=1))]
+    assert got["contract_id"] == NQ_CID
+    assert got["open"] == pytest.approx(hour["open"].iloc[0]) and got["close"] == pytest.approx(hour["close"].iloc[-1])
+    assert got["move"] == pytest.approx(got["close"] - got["open"])
+    assert first_hour_move(conn, "NQ", "2026-01-05") is None                  # nothing stored that day
+
+    # the post-close outcome keeps the same 10:29 close
+    df = nq.assign(timestamp_utc=nq["bar_start_at"].dt.strftime("%Y-%m-%d %H:%M:%S"))
+    out = evaluate_session_outcomes(df, s.session_date.isoformat())
+    assert out["raw_outcomes"]["first_60_minute_close"] == pytest.approx(got["close"])
+
+
+def test_opening_range_box_and_channel():
+    from dashboard.components.spec import build_chart_spec
+    from dashboard.views.candles import opening_range, window_bars
+    idx = pd.date_range("2026-06-10 09:00", "2026-06-10 16:30", freq="1min", tz="America/New_York")
+    df = pd.DataFrame({"timestamp_ny": idx, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0,
+                       "volume": 1})
+    df.loc[df["timestamp_ny"] == pd.Timestamp("2026-06-10 09:37", tz="America/New_York"), "high"] = 110.0
+    df.loc[df["timestamp_ny"] == pd.Timestamp("2026-06-10 09:45", tz="America/New_York"), "low"] = 80.0  # after it
+    orr = opening_range(df, "2026-06-10")
+    assert (orr["high"], orr["low"]) == (110.0, 99.0)
+    assert orr["start"].strftime("%H:%M") == "09:30" and orr["end"].strftime("%H:%M") == "09:45"
+
+    spec = build_chart_spec(window_bars(df, "2026-06-10"), opening_range=orr)
+    box, orh = spec["series"]["or:box_high"], spec["series"]["features:orh"]
+    epoch = lambda hhmm: int(pd.Timestamp(f"2026-06-10 {hhmm}").value // 10 ** 9)   # wall clock, as drawn
+    assert [p["time"] for p in box["points"]] == [epoch("09:30"), epoch("09:44")]
+    assert box["style"]["line_visible"] is False and spec["bands"]["or:box"]["lower"] == "or:box_low"
+    assert [p["time"] for p in orh["points"]] == [epoch("09:45"), epoch("16:14")]    # to the last bar shown
+    assert orh["points"][0]["value"] == 110.0 and spec["series"]["features:orl"]["points"][0]["value"] == 99.0
+    assert spec["bands"]["or:range"] == {"upper": "features:orh", "lower": "features:orl",
+                                         "color": spec["bands"]["or:range"]["color"]}
+    assert {"ORH", "ORL"} <= {item["label"] for item in spec["legend"]}
+    # no opening range, no drawing
+    assert not any(k.startswith("or:") for k in build_chart_spec(window_bars(df, "2026-06-10"))["series"])
+    assert opening_range(df[df["timestamp_ny"].dt.hour < 9], "2026-06-10") is None
