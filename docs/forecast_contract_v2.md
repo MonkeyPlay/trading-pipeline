@@ -7,6 +7,17 @@ volatility indices may be up to 20 minutes old. Records of both versions stay in
 store; models are tied to one feature version (`nq_sklearn_v4` and
 `nq_climatology_v4` read `nq_features_v3` and predict `nq_labels_v3_candidate`).
 
+| record | current | earlier versions (kept in the store) |
+|---|---|---|
+| features | `nq_features_v3` | `nq_features_v2`: ATRs needed an unbroken run of complete sessions |
+| outcome metrics | `nq_outcome_metrics_v3` (first-move barrier 0.10 A) | `nq_outcome_metrics_v2` (0.05 A) |
+| labels | `nq_labels_v3_candidate` (thresholds retuned) | `nq_labels_v2_candidate` (section 11 starting values) |
+| trained model | `nq_sklearn_v4` (default) | `v3`: same model on the v2 labels; `v2`: 1-SE selection margin; `v1`: no margin, from 60 sessions |
+| baseline | `nq_climatology_v4` | `v3`: on the v2 labels |
+
+A new label or model version starts with no records: run `backfill` once over the
+stored history after upgrading (see [Running it](#running-it)).
+
 This is the NQ pre-open contract: what a snapshot contains, when its inputs were
 knowable, how a forecast and its outcome are recorded, and how corrections are
 versioned instead of overwritten. The market-data store (`contracts`,
@@ -179,8 +190,8 @@ breach-and-reclaim / ON-high breach-and-reject flags) plus the first-move barrie
 the open of a same-minute double touch. The label rules read only those metrics; a
 change of threshold is a new label version.
 
-The thresholds are the section-11 rules retuned on 248 realised NQ sessions
-(2025-09 to 2026-09) with `label-study`; the starting values
+The thresholds are the section-11 rules retuned with `label-study` on the 248
+labelled NQ sessions stored by 2026-09-25; the starting values
 (`nq_labels_v2_candidate`, `nq_outcome_metrics_v2`) labelled 69 % of openings and 65 %
 of sessions `mixed` and left 15 % of first moves ambiguous. Units are daily ATR (A):
 
@@ -200,6 +211,12 @@ first move up / down / neither 39 / 44 / 17 % (1 ambiguous instead of 37), openi
 session `mixed` 33 %, `range` 27 %, bull / bear trend 17 / 10 %, `two_sided_volatile`
 7 %, `reversal` 5 %. The sweeps stay rare by nature: the open seldom reaches an
 overnight extreme within 15 minutes.
+
+The thresholds were chosen from those sessions' label mix - class sizes only, never
+from any feature or forecast - so a backtest over the same sessions has a mild
+look-ahead in where the class boundaries sit, not in what the models learn. Sessions
+after 2026-09-25 are free of it; re-run `label-study` once the history has roughly
+doubled and issue a new label version only if the mix has moved materially.
 
 - A window needs every one of its minute bars; otherwise the label is ineligible with
   `missing_bars`. A missing A or ON extreme gives `invalid_reference`.
@@ -249,9 +266,18 @@ used (the live capture if any).
   model replaces the prior only when, on the same validation sessions, it lowers the
   log loss by more than 0.005 nats **and** more than two standard errors of the
   per-session gain; among those the lowest log loss wins (ties: the simpler one). The
-  reason is recorded per target (`selection_reason`). In simulation this keeps the
-  prior on pure-noise inputs while still finding a one-feature signal of 0.035 nats
-  in 500 sessions and one of 0.1 nats in 250; `nq_sklearn_v1`, which took any
+  reason is recorded per target (`selection_reason`).
+
+  Why two standard errors: in a 248-session NQ backfill, `nq_sklearn_v2` (one standard
+  error) admitted a feature model on 48 sessions, every time at 1.1-1.6 SE and with a
+  different candidate at nearly every refit, and those forecasts lost to the
+  climatology (`opening_type_15m` -0.018 ± 0.012 nats, `first_move_5m`
+  -0.002 ± 0.001). At two SE none of them passes. In simulation the stricter rule
+  still finds a one-feature signal worth 0.1 nats in 250 sessions (8 of 8 trials,
+  +0.041 nats out of sample) and one worth 0.035 nats in 500 (7 of 8); it misses the
+  0.035-nat signal at 250 sessions more often (1 of 8 instead of 3 of 8), where the
+  gain was under 0.01 nats anyway. On pure-noise inputs it admits a feature model 2
+  times in 25 at 150 sessions (one SE: 6 in 25). `nq_sklearn_v1`, which took any
   improvement from 60 sessions on, picked a feature model on pure noise one time in
   four at 60 sessions.
 - *Probabilities* are shrunk toward the uniform distribution with weight
@@ -295,12 +321,22 @@ pipelines (`joblib`) with a JSON report. `forecast --artifact <file>` forecasts 
 model instead of training; it is refused for any session before the one it was
 trained for, since it may have seen outcomes that were not yet knowable. `evaluate` lists issued / abstained /
 unavailable counts, the accuracy of issued labels, and log loss and Brier score of every
-probability distribution with an eligible outcome, per model, target and data mode.
+probability distribution with an eligible outcome, per model, target and data mode; a
+session forecast more than once (a re-run backfill) counts once, by its newest run.
 Those rows cover different sessions whenever the models start issuing at different
 history lengths, so `evaluate` then compares each model with the baseline
 (`--baseline`, the climatology by default) **on the same sessions only**: both log
 losses and Brier scores, the skill scores 1 − model / baseline, and the mean
 per-session log-loss gain with its standard error ([forecaster/scoring_v2.py](../forecaster/scoring_v2.py)).
+
+**After a version change.** New feature, label or model versions start empty, and the
+daily `run_pipeline.sh` only labels the last few sessions. Run `backfill` once over
+the stored history: it reconstructs the snapshots under the current feature version,
+records every session's outcome under the current label version (in session order, so
+each forecast trains only on earlier outcomes) and forecasts with every model. Until
+then the new model has no training labels and `live` records its forecasts as
+`unavailable` (`uncertainty`). Records of the earlier versions stay in the store and in
+`evaluate`; pass `--model` to show only the current one.
 
 **History needed.** With the 5n warm-up rule, A needs 70 valid daily true ranges
 (about 71 sessions; a few missing days only reach further back) and
@@ -334,6 +370,10 @@ that time per source and is `verified` only if every observation has one (see
 2. **Extend the calendar yearly.** `features/calendar.py` covers 2024–2027 and raises
    outside it; add each new year (bump `CALENDAR_VERSION`) — or pin a calendar library
    version and record it, if you prefer.
-3. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses
+3. **Revisit the label thresholds with more history.** `nq_labels_v3_candidate` was
+   tuned on 248 sessions of one market regime; a new label version is only worth it
+   if the label mix has moved materially (`label-study` shows the current and the
+   previous thresholds side by side).
+4. **Retire the v1 snapshot for evaluation.** The v1 snapshot is stamped 09:30 and uses
    the 09:30 opening bar's open as its gap, and v1 records are overwritten on re-run.
    Keep it for the dashboard until that is moved to the v2 views.

@@ -12,8 +12,8 @@ frozen overnight extremes - post-open bars never redefine them.
 
   METRIC_VERSION  nq_outcome_metrics_v3: section 10, first-move barrier 0.10 A.
   LABEL_VERSION   nq_labels_v3_candidate: the five targets of section 8, with the
-                  section 11 thresholds retuned on 248 realised NQ sessions
-                  (2025-09 .. 2026-09; ``nq_forecast_v2.py label-study``). Each
+                  section 11 thresholds retuned on the 248 labelled NQ sessions
+                  stored by 2026-09-25 (``nq_forecast_v2.py label-study``). Each
                   target's vocabulary is registered in forecast.label_definitions;
                   the database checks predictions and realised labels against
                   that one row.
