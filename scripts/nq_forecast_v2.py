@@ -11,6 +11,7 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
     python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25
+    python scripts/nq_forecast_v2.py range-backtest
     python scripts/nq_forecast_v2.py first-hour-backtest
     python scripts/nq_forecast_v2.py scenario-backfill --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py scenario-backtest
@@ -51,7 +52,8 @@ from features import calendar as cal
 from features import catalogue as catv2
 from features.market_data import DbMarketData
 from features.nq_v2 import SnapshotError, build_snapshot
-from forecaster import analogue, first_hour, label_study, labels_v2, metric_study, models_v2, scoring_v2
+from forecaster import (analogue, first_hour, label_study, labels_v2, metric_study, models_v2, range_nowcast,
+                        scoring_v2)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("nq_forecast_v2")
@@ -343,6 +345,15 @@ def cmd_metric_study(conn, md, args):
     return 0
 
 
+def cmd_range_backtest(conn, md, args):
+    """
+    Replays the range nowcast (forecaster/range_nowcast.py) walk-forward on
+    every complete session and scores it against the usual range. Writes nothing.
+    """
+    print(range_nowcast.format_backtest(range_nowcast.backtest(range_nowcast.load_history(conn, args.symbol))))
+    return 0
+
+
 def cmd_first_hour_backtest(conn, md, args):
     """
     Replays the first-hour forecast (forecaster/first_hour.py) on every stored
@@ -466,6 +477,9 @@ def main(argv=None):
     p.add_argument("--refit-every", type=int, default=5, help="Sessions between walk-forward refits")
     p.add_argument("--median-window", type=int, default=40,
                    help="Previous sessions whose median defines the 'above median' candidate label")
+    p = sub.add_parser("range-backtest", help="Walk-forward score of the range nowcast: the range still to come "
+                                              "before 09:45, 10:30 and 16:00 (writes nothing)")
+    p.add_argument("--symbol", default="NQ", help="Forecast instrument (any in SYMBOLS)")
     p = sub.add_parser("first-hour-backtest", help="Walk-forward score of the 09:30-10:30 forecast from "
                                                    "pre-open matches (writes nothing)")
     p.add_argument("--k", type=int, default=first_hour.K, help="Pre-open matches per forecast")
@@ -499,7 +513,7 @@ def main(argv=None):
         handler = {"snapshot": cmd_snapshot, "forecast": cmd_forecast, "outcomes": cmd_outcomes,
                    "backfill": cmd_backfill, "train": cmd_train, "live": cmd_live, "evaluate": cmd_evaluate,
                    "label-study": cmd_label_study, "metric-study": cmd_metric_study,
-                   "first-hour-backtest": cmd_first_hour_backtest,
+                   "range-backtest": cmd_range_backtest, "first-hour-backtest": cmd_first_hour_backtest,
                    "scenario-backfill": cmd_scenario_backfill, "scenario-backtest": cmd_scenario_backtest,
                    "register": lambda *a: 0}[args.command]
         return handler(conn, md, args)

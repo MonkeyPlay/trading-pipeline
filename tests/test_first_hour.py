@@ -102,19 +102,6 @@ def test_backtest_walks_forward(monkeypatch):
     assert "regression" in text and "calibrated" in text
 
 
-def test_fan_series_on_the_chart():
-    from dashboard.components.spec import build_chart_spec
-    idx = pd.date_range("2026-06-10 09:15", "2026-06-10 11:00", freq="5min", tz="America/New_York")
-    df = pd.DataFrame({"timestamp_ny": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
-    prices = {q: np.arange(60, dtype=float) + q for q in fh.QUANTILES}
-    fan = {"start": pd.Timestamp("2026-06-10 09:30", tz="America/New_York"), "bar_minutes": 5, "prices": prices}
-    spec = build_chart_spec(df, fan=fan)
-    p50 = spec["series"]["fan:p50"]["points"]
-    assert len(p50) == 12                                       # 09:30 .. 10:25 five-minute bars
-    assert p50[0]["value"] == 54.0 and p50[-1]["value"] == 109.0   # value at each bar's last minute
-    assert spec["bands"]["fan:inner"]["upper"] == "fan:p75" and spec["bands"]["fan:outer"]["lower"] == "fan:p10"
-
-
 def test_a_first_hour_that_never_moved_is_not_a_session():
     # placeholder bars: 60 identical prices (the backtest used to divide by its zero range)
     assert fh.first_hour(_bars([100.0] * 60, [100.0] * 60, [100.0] * 60), OPEN, "d") is None

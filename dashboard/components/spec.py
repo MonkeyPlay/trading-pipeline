@@ -30,10 +30,10 @@ OR_BOX = "rgba(150, 153, 164, 0.30)"
 OR_FILL = "rgba(38, 166, 154, 0.13)"
 OR_LINE = "#26a69a"
 
-# First-hour forecast fan: 10-90 % and 25-75 % bands of the matched sessions' paths.
-FAN_OUTER = "rgba(255, 167, 38, 0.10)"
-FAN_INNER = "rgba(255, 167, 38, 0.20)"
-FAN_LINE = "#ffa726"
+# Range nowcast cone: 10-90 % and 25-75 % bands of where the price may be, minute by minute.
+CONE_OUTER = "rgba(255, 167, 38, 0.10)"
+CONE_INNER = "rgba(255, 167, 38, 0.20)"
+CONE_LINE = "#ffa726"
 
 # Pre-open reference levels drawn from the feature snapshot, in draw order.
 _FEATURE_LEVELS = (
@@ -181,36 +181,42 @@ def opening_range_series(df: pd.DataFrame, opening_range: Dict[str, Any]) -> Dic
     return out
 
 
-def fan_series(df: pd.DataFrame, fan: Dict[str, Any]) -> Dict[str, Any]:
+def cone_series(cone: Dict[str, Any]) -> Dict[str, Any]:
     """
-    ``{'series', 'bands', 'legend'}`` drawing a first-hour forecast fan
-    ({'start': the open as a New York timestamp, 'bar_minutes', 'prices':
-    {10|25|50|75|90: one price per minute of the hour}}): at each shown bar
-    inside the hour, the fan's value at the bar's last minute.
+    ``{'series', 'bands', 'legend'}`` drawing a range-nowcast cone: {'open': the
+    session open as a New York timestamp, 't': the minute it is as of, 'end': the
+    horizon's last minute + 1, 'price': the price at t, 'bar_minutes', 'prices':
+    {10|25|50|75|90: the close of each minute t .. end - 1}, 'label'}. It has its
+    own times - one point per bar of the timeframe, at the bar's last minute -
+    so it reaches past the last bar of a live session. It starts from the price
+    at t on the last completed bar.
     """
     out: Dict[str, Any] = {"series": {}, "bands": {}, "legend": []}
-    if df is None or df.empty or not fan or not fan.get("prices"):
+    if not cone or not cone.get("prices"):
         return out
-    ts = pd.to_datetime(df["timestamp_ny"])
-    offsets = ((ts - fan["start"]).dt.total_seconds() // 60).astype(int).to_numpy()
-    times = to_epoch(ts)
-    minutes = len(next(iter(fan["prices"].values())))
-    idx = [i for i, o in enumerate(offsets) if 0 <= o < minutes]
-    if len(idx) < 2:
+    n, t0, end = int(cone.get("bar_minutes", 1)), int(cone["t"]), int(cone["end"])
+    if t0 >= end:
         return out
-    last = [min(offsets[i] + int(fan.get("bar_minutes", 1)) - 1, minutes - 1) for i in idx]
+    bars = range(t0 // n, (end - 1) // n + 1)
+    times = to_epoch(pd.DatetimeIndex([cone["open"] + pd.Timedelta(minutes=k * n) for k in bars]))
+    index = [min((k + 1) * n - 1, end - 1) - t0 for k in bars]
+    anchor = []
+    if t0 % n == 0:        # the price at t closes the bar before the cone's first
+        at = to_epoch(pd.DatetimeIndex([cone["open"] + pd.Timedelta(minutes=(t0 // n - 1) * n)]))[0]
+        anchor = [{"time": int(at), "value": round(float(cone["price"]), 2)}]
 
     def points(q):
-        return [{"time": int(times[i]), "value": round(float(fan["prices"][q][m]), 2)} for i, m in zip(idx, last)]
+        return anchor + [{"time": int(tm), "value": round(float(cone["prices"][q][i]), 2)}
+                         for tm, i in zip(times, index)]
 
     for q in (10, 90, 25, 75):
-        out["series"][f"fan:p{q}"] = _hidden(points(q))
-    out["bands"]["fan:outer"] = {"upper": "fan:p90", "lower": "fan:p10", "color": FAN_OUTER}
-    out["bands"]["fan:inner"] = {"upper": "fan:p75", "lower": "fan:p25", "color": FAN_INNER}
-    out["series"]["fan:p50"] = {"points": points(50), "style": {"color": FAN_LINE, "width": 1, "dash": 2,
-                                                              "title": "", "axis_label": False}}
-    out["legend"].append({"key": "fan:p50", "label": "First-hour forecast (median, 25-75 %, 10-90 %)",
-                          "color": FAN_LINE})
+        out["series"][f"cone:p{q}"] = _hidden(points(q))
+    out["bands"]["cone:outer"] = {"upper": "cone:p90", "lower": "cone:p10", "color": CONE_OUTER}
+    out["bands"]["cone:inner"] = {"upper": "cone:p75", "lower": "cone:p25", "color": CONE_INNER}
+    out["series"]["cone:p50"] = {"points": points(50), "style": {"color": CONE_LINE, "width": 1, "dash": 2,
+                                                                "title": "", "axis_label": False}}
+    out["legend"].append({"key": "cone:p50", "label": cone.get("label") or "Range nowcast (median, 25-75 %, 10-90 %)",
+                          "color": CONE_LINE})
     return out
 
 
@@ -221,7 +227,7 @@ def build_chart_spec(
     show_vwap: bool = True,
     fit: bool = False,
     opening_range: Optional[Dict[str, Any]] = None,
-    fan: Optional[Dict[str, Any]] = None,
+    cone: Optional[Dict[str, Any]] = None,
     overlay: Optional[pd.DataFrame] = None,
     visible_range: Optional[Sequence[Any]] = None,
     keep_view: bool = False,
@@ -271,7 +277,7 @@ def build_chart_spec(
 
     for drawn in ((opening_range_series(df, opening_range) if opening_range and "timestamp_ny" in df.columns
                    else None),
-                  (fan_series(df, fan) if fan and "timestamp_ny" in df.columns else None)):
+                  cone_series(cone) if cone else None):
         if drawn:
             series.update(drawn["series"])
             bands.update(drawn["bands"])

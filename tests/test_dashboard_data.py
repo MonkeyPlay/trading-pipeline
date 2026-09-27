@@ -369,3 +369,42 @@ def test_backtests_page_rows():
     sc = scenario_rows({"probabilities": s(0.0, 0.01), "hits": s(0.02, 0.05), "hit_rate": 0.424,
                         "base_hit_rate": 0.407})
     assert sc[1]["forecast"] == "42.4 %" and sc[1]["gain"].startswith("+1.7 pp")
+
+
+def test_range_nowcast_reads_active_contracts_and_vix(market):
+    # Last in the module: it stores VIX, which the tests above do not expect.
+    conn, md, sessions = market
+    from database.queries import active_contract_bars, preopen_levels
+    from forecaster import range_nowcast as rn
+    from tests.synthetic import VIX_CID
+    days = [s.session_date.isoformat() for s in sessions]
+
+    def history():
+        return rn.sessions_from_bars(pd.DataFrame([dict(r) for r in active_contract_bars(conn, "NQ")]))
+
+    set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
+    got = history()
+    assert [g.day for g in got] == days
+    assert {g.contract_id for g in got} == {NQ_CID}               # never the June or December copies of a day
+    set_active_contracts(conn, "NQ", {days[-1]: NQ_DEC}, "test")  # the roll: the day now comes from December
+    rolled = history()[-1]
+    assert rolled.contract_id == NQ_DEC and rolled.close[-1] == pytest.approx(got[-1].close[-1] + 50.0)
+    set_active_contracts(conn, "NQ", {days[-1]: NQ_CID}, "test")
+    s, last = sessions[-1], got[-1]
+    nq = md._bars[(NQ_CID, "TRADES")]
+    rth = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.scheduled_close_at)]
+    pre = nq[(nq["bar_start_at"] >= s.overnight_start_at) & (nq["bar_start_at"] < s.cutoff_at)]
+    assert last.held == 390 and last.open == pytest.approx(rth["open"].iloc[0])
+    assert last.close[-1] == pytest.approx(rth["close"].iloc[-1])      # nothing from 16:00 on is read
+    assert last.pre_price == pytest.approx(pre["close"].iloc[-1])      # the 09:28 bar
+    upsert_contract(conn, VIX_CID, "VIX", None, "CBOE", sec_type="IND")
+    _store(conn, md._bars[(VIX_CID, "TRADES")], VIX_CID)
+    vix = md._bars[(VIX_CID, "TRADES")]
+    day_vix = vix[(vix["bar_start_at"] >= s.rth_open_at - timedelta(hours=7)) & (vix["bar_start_at"] < s.cutoff_at)]
+    levels = {str(r["trading_day"]): r for r in preopen_levels(conn, VIX_CID)}
+    level = levels[s.session_date.isoformat()]
+    assert level["pre"] == pytest.approx(day_vix["close"].iloc[-1])
+    assert level["last"] == pytest.approx(vix[vix["bar_start_at"] < s.scheduled_close_at + timedelta(minutes=15)]
+                                          ["close"].iloc[-1])
+    one = preopen_levels(conn, VIX_CID, trading_day=s.session_date.isoformat())
+    assert [str(r["trading_day"]) for r in one] == [s.session_date.isoformat()]
