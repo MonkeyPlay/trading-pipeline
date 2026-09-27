@@ -111,3 +111,8 @@ def test_fan_series_on_the_chart():
     assert len(p50) == 12                                       # 09:30 .. 10:25 five-minute bars
     assert p50[0]["value"] == 54.0 and p50[-1]["value"] == 109.0   # value at each bar's last minute
     assert spec["bands"]["fan:inner"]["upper"] == "fan:p75" and spec["bands"]["fan:outer"]["lower"] == "fan:p10"
+
+
+def test_a_first_hour_that_never_moved_is_not_a_session():
+    # placeholder bars: 60 identical prices (the backtest used to divide by its zero range)
+    assert fh.first_hour(_bars([100.0] * 60, [100.0] * 60, [100.0] * 60), OPEN, "d") is None
