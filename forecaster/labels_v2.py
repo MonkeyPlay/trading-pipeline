@@ -193,12 +193,14 @@ def _window(df: pd.DataFrame, start, minutes: int) -> Optional[pd.DataFrame]:
 
 
 def compute_metrics(df: pd.DataFrame, s: cal.Session, A: Optional[float], ONH: Optional[float],
-                    ONL: Optional[float]) -> Dict[str, Any]:
+                    ONL: Optional[float], params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Section 10 metrics from RTH bars ``df`` (bar_start_at UTC, open/high/low/close).
     Returns {'metrics': {...}, 'status': {...}}; every metric is present, null
-    with a status when it cannot be measured.
+    with a status when it cannot be measured. ``params`` (default: PARAMETERS)
+    exists for threshold studies; stored outcomes always use PARAMETERS.
     """
+    params = params or PARAMETERS
     metrics: Dict[str, Any] = {}
     status: Dict[str, str] = {}
 
@@ -229,7 +231,7 @@ def compute_metrics(df: pd.DataFrame, s: cal.Session, A: Optional[float], ONH: O
     elif not A_ok:
         void(_METRICS_5M, "invalid_reference")
     else:
-        B = max(PARAMETERS["first_move_min_points"], PARAMETERS["first_move_atr_fraction"] * A)
+        B = max(params["first_move_min_points"], params["first_move_atr_fraction"] * A)
         up = [i for i, h in enumerate(w5["high"]) if h >= O + B]
         dn = [i for i, lo in enumerate(w5["low"]) if lo <= O - B]
         put("return_5m_atr", over_a(float(w5["close"].iloc[-1]) - O))
@@ -254,7 +256,7 @@ def compute_metrics(df: pd.DataFrame, s: cal.Session, A: Optional[float], ONH: O
         put("down_excursion_15m_atr", over_a(max(0.0, O - L15)))
         put("range_15m_atr", over_a(H15 - L15))
         put("efficiency_15m", path_efficiency([O] + w15["close"].tolist()))
-        breach = PARAMETERS["on_breach_atr"] * A
+        breach = params["on_breach_atr"] * A
         for key, level, breached, confirmed in (
             ("on_low_breach_close_reclaim_15m", ONL,
              lambda bar, lv: bar["low"] <= lv - breach, lambda c, lv: c > lv),
@@ -334,12 +336,12 @@ def label_direction(r, band):
     return "up" if r > band else "down" if r < -band else "flat"
 
 
-def label_opening_type(m, st):
+def label_opening_type(m, st, params=None):
     bad = _need(m, st, ("return_15m_atr", "up_excursion_15m_atr", "down_excursion_15m_atr",
                         "range_15m_atr", "efficiency_15m"))
     if bad:
         return None, bad
-    p = PARAMETERS["opening_type_15m"]
+    p = (params or PARAMETERS)["opening_type_15m"]
     r, u, d = m["return_15m_atr"], m["up_excursion_15m_atr"], m["down_excursion_15m_atr"]
     w, e = m["range_15m_atr"], m["efficiency_15m"]
     reclaim, reject = m.get("on_low_breach_close_reclaim_15m"), m.get("on_high_breach_close_reject_15m")
@@ -356,12 +358,12 @@ def label_opening_type(m, st):
     ])
 
 
-def label_session_type(m, st):
+def label_session_type(m, st, params=None):
     bad = _need(m, st, ("return_rth_atr", "up_excursion_rth_atr", "down_excursion_rth_atr", "range_rth_atr",
                         "efficiency_rth_5m", "first_hour_return_atr"))
     if bad:
         return None, bad
-    p = PARAMETERS["session_type_rth"]
+    p = (params or PARAMETERS)["session_type_rth"]
     r, u, d, w = m["return_rth_atr"], m["up_excursion_rth_atr"], m["down_excursion_rth_atr"], m["range_rth_atr"]
     q, e, f = m.get("rth_close_location"), m["efficiency_rth_5m"], m["first_hour_return_atr"]
     rv, tr = p["reversal"], p["trend"]
@@ -378,8 +380,10 @@ def label_session_type(m, st):
     ])
 
 
-def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session) -> Dict[str, Dict[str, Any]]:
+def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session,
+                   params: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """{target_id: {'label', 'status', 'window_start_at', 'window_end_at', 'available_at'}}."""
+    params = params or PARAMETERS
     out = {}
     for target, d in TARGETS.items():
         end = (s.rth_open_at + d["window_minutes"] * ONE_MIN if d["window_minutes"]
@@ -391,15 +395,15 @@ def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session) -> Dic
         elif target == "direction_15m":
             bad = _need(m, st, ("return_15m_atr",))
             label, why = (None, bad) if bad else (
-                label_direction(m["return_15m_atr"], PARAMETERS["direction_15m_band_atr"]), None)
+                label_direction(m["return_15m_atr"], params["direction_15m_band_atr"]), None)
         elif target == "direction_rth":
             bad = _need(m, st, ("return_rth_atr",))
             label, why = (None, bad) if bad else (
-                label_direction(m["return_rth_atr"], PARAMETERS["direction_rth_band_atr"]), None)
+                label_direction(m["return_rth_atr"], params["direction_rth_band_atr"]), None)
         elif target == "opening_type_15m":
-            label, why = label_opening_type(m, st)
+            label, why = label_opening_type(m, st, params)
         else:
-            label, why = label_session_type(m, st)
+            label, why = label_session_type(m, st, params)
         out[target] = {"label": label, "status": "valid" if label is not None else why,
                        "window_start_at": s.rth_open_at, "window_end_at": end,
                        "available_at": min(end, s.scheduled_close_at)}

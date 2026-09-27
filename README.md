@@ -134,7 +134,7 @@ Two pages:
   session VWAP drawn from the feature snapshot, and run a forecast for that session on
   demand. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
-  above it shows the trained v2 model's run for the day (`nq_sklearn_v2`, or the
+  above it shows the trained v2 model's run for the day (`nq_sklearn_v3`, or the
   `nq_climatology_v3` baseline): per target the status, predicted label, full probability
   distribution, the method that won the model selection, and the actual outcome with a
   hit/miss mark once it is labelled. **Run model** computes one from the stored bars if none
@@ -408,7 +408,7 @@ It predicts the five targets of the NASDAQ-100 prediction schema (`nq_labels_v2_
 `session_type_rth`, each labelled afterwards by deterministic rules from the realised
 minute bars.
 
-**The model** (`nq_sklearn_v2`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
+**The model** (`nq_sklearn_v3`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
 scikit-learn classifier per target over an explicit allowlist of snapshot features
 (median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
 session it trains only on earlier sessions whose outcome was knowable before that
@@ -416,7 +416,7 @@ session's 09:29 cutoff. For each target it scores the class prior, sparse (L1) a
 logistic regressions and a gradient-boosted tree ensemble by chronological
 cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
 replaces the prior only from 120 training sessions on, and only when it beats the prior
-on the same validation sessions by a clear margin (more than one standard error of the
+on the same validation sessions by a clear margin (more than two standard errors of the
 per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v3`
 (label frequencies) is kept as the baseline to compare against.
 
@@ -424,6 +424,7 @@ per-session gain); otherwise the forecast is the class frequencies. `nq_climatol
 python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + walk-forward backtest (both models)
 python scripts/nq_forecast_v2.py train                                          # fit for today: CV report + data/models/ artifact
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
+python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 
