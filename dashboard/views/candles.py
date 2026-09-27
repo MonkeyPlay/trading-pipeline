@@ -414,6 +414,25 @@ def nowcast_rows(nc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+def describe_releases(releases: Optional[List[Dict[str, Any]]], t: int) -> tuple:
+    """
+    (text, warn) for the day's scheduled releases (``nowcast()['releases']``;
+    None: no calendar covers the day). ``warn`` while an FOMC decision is still
+    ahead: the forecast does not use the calendar, and FOMC afternoons have
+    often run far wider than it said.
+    """
+    if releases is None:
+        return "No economic calendar covers this day (python -m database.events loads one).", False
+    if not releases:
+        return "No scheduled release today among those the calendar covers (FOMC, CPI, jobs, PPI, JOLTS, ISM).", False
+    text = "Scheduled today: " + " · ".join(f"{r['time']} {r['name']} ({r['tier']})" for r in releases)
+    text += " - not part of the forecast, which has shown no gain from them yet."
+    fomc_ahead = any("FOMC rate decision" in r["name"] and r["minute"] >= t for r in releases)
+    if fomc_ahead:
+        text += " FOMC afternoons have often run far wider than forecast."
+    return text, fomc_ahead
+
+
 def describe_inputs(inputs: Dict[str, Optional[float]], t: int) -> str:
     """The main inputs as multiples of their usual ('1.27×'); those since the open once it has begun."""
     parts = []
@@ -696,6 +715,8 @@ class SessionExplorer:
             inputs = describe_inputs(nc.get("inputs") or {}, nc["t"])
             if inputs:
                 ui.label(f"Against the usual: {inputs}").classes("text-xs mt-1").style(_MUTED)
+            releases, warn = describe_releases(nc.get("releases"), nc["t"])
+            ui.label(releases).classes("text-xs").style("color:#ffa726" if warn else _MUTED)
             brk = first_hour.break_rates(self._hours(self.contract["symbol"]), self.date)
             if brk["n"]:
                 ui.label(f"The opening range breaks by 10:30 on {brk['any'] * 100:.0f} % of sessions (first above "

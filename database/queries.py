@@ -262,6 +262,15 @@ def preopen_levels(conn: Database, contract_id: int, fresh_minutes: int = 20,
     ).fetchall()
 
 
+def economic_calendar(conn: Database):
+    """(every loaded economic event, every coverage row) - ``database/events.py`` loads them."""
+    events = conn.execute(
+        "SELECT source, event_key, scheduled_at, name, tier FROM economic_events ORDER BY scheduled_at;").fetchall()
+    coverage = conn.execute(
+        "SELECT source, covered_from, covered_to FROM economic_event_coverage ORDER BY source, covered_from;").fetchall()
+    return events, coverage
+
+
 def list_session_days(conn: Database, symbols: List[str], interval: str = "1m", price_type: str = "TRADES",
                       limit: int = 1000) -> List[str]:
     """Trading days on which any contract of ``symbols`` holds bars, newest first."""

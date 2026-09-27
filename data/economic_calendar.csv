@@ -1,0 +1,105 @@
+source,event_key,date,time_et,name,tier,country
+fed,fomc-decision:2025-01,2025-01-29,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-03,2025-03-19,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-05,2025-05-07,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-06,2025-06-18,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-07,2025-07-30,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-09,2025-09-17,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-10,2025-10-29,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2025-12,2025-12-10,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-01,2026-01-28,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-03,2026-03-18,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-04,2026-04-29,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-06,2026-06-17,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-07,2026-07-29,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-09,2026-09-16,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-10,2026-10-28,14:00,FOMC rate decision,high,US
+fed,fomc-decision:2026-12,2026-12-09,14:00,FOMC rate decision,high,US
+fed,fomc-minutes:2025-01,2025-02-19,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-03,2025-04-09,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-05,2025-05-28,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-06,2025-07-09,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-07,2025-08-20,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-09,2025-10-08,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-10,2025-11-19,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2025-12,2025-12-30,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-01,2026-02-18,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-03,2026-04-08,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-04,2026-05-20,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-06,2026-07-08,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-07,2026-08-19,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-09,2026-10-07,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-10,2026-11-18,14:00,FOMC minutes,moderate,US
+fed,fomc-minutes:2026-12,2026-12-30,14:00,FOMC minutes,moderate,US
+bls,cpi:2025-05,2025-06-11,08:30,Consumer Price Index,high,US
+bls,cpi:2025-06,2025-07-15,08:30,Consumer Price Index,high,US
+bls,cpi:2025-07,2025-08-12,08:30,Consumer Price Index,high,US
+bls,cpi:2025-08,2025-09-11,08:30,Consumer Price Index,high,US
+bls,cpi:2025-09,2025-10-24,08:30,Consumer Price Index,high,US
+bls,cpi:2025-11,2025-12-18,08:30,Consumer Price Index,high,US
+bls,cpi:2025-12,2026-01-13,08:30,Consumer Price Index,high,US
+bls,cpi:2026-01,2026-02-13,08:30,Consumer Price Index,high,US
+bls,cpi:2026-02,2026-03-11,08:30,Consumer Price Index,high,US
+bls,cpi:2026-03,2026-04-10,08:30,Consumer Price Index,high,US
+bls,cpi:2026-04,2026-05-12,08:30,Consumer Price Index,high,US
+bls,cpi:2026-05,2026-06-10,08:30,Consumer Price Index,high,US
+bls,cpi:2026-06,2026-07-14,08:30,Consumer Price Index,high,US
+bls,cpi:2026-07,2026-08-12,08:30,Consumer Price Index,high,US
+bls,cpi:2026-08,2026-09-11,08:30,Consumer Price Index,high,US
+bls,cpi:2026-09,2026-10-14,08:30,Consumer Price Index,high,US
+bls,cpi:2026-10,2026-11-10,08:30,Consumer Price Index,high,US
+bls,cpi:2026-11,2026-12-10,08:30,Consumer Price Index,high,US
+bls,empsit:2025-05,2025-06-06,08:30,Employment Situation,high,US
+bls,empsit:2025-06,2025-07-03,08:30,Employment Situation,high,US
+bls,empsit:2025-07,2025-08-01,08:30,Employment Situation,high,US
+bls,empsit:2025-08,2025-09-05,08:30,Employment Situation,high,US
+bls,empsit:2025-09,2025-11-20,08:30,Employment Situation,high,US
+bls,empsit:2025-11,2025-12-16,08:30,Employment Situation,high,US
+bls,empsit:2025-12,2026-01-09,08:30,Employment Situation,high,US
+bls,empsit:2026-01,2026-02-11,08:30,Employment Situation,high,US
+bls,empsit:2026-02,2026-03-06,08:30,Employment Situation,high,US
+bls,empsit:2026-03,2026-04-03,08:30,Employment Situation,high,US
+bls,empsit:2026-04,2026-05-08,08:30,Employment Situation,high,US
+bls,empsit:2026-05,2026-06-05,08:30,Employment Situation,high,US
+bls,empsit:2026-06,2026-07-02,08:30,Employment Situation,high,US
+bls,empsit:2026-07,2026-08-07,08:30,Employment Situation,high,US
+bls,empsit:2026-08,2026-09-04,08:30,Employment Situation,high,US
+bls,empsit:2026-09,2026-10-02,08:30,Employment Situation,high,US
+bls,empsit:2026-10,2026-11-06,08:30,Employment Situation,high,US
+bls,empsit:2026-11,2026-12-04,08:30,Employment Situation,high,US
+bls,ppi:2025-05,2025-06-12,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-06,2025-07-16,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-07,2025-08-14,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-08,2025-09-10,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-09,2025-11-25,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-11,2026-01-14,08:30,Producer Price Index,moderate,US
+bls,ppi:2025-12,2026-01-30,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-01,2026-02-27,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-02,2026-03-18,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-03,2026-04-14,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-04,2026-05-13,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-05,2026-06-11,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-06,2026-07-15,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-07,2026-08-13,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-08,2026-09-10,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-09,2026-10-15,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-10,2026-11-13,08:30,Producer Price Index,moderate,US
+bls,ppi:2026-11,2026-12-15,08:30,Producer Price Index,moderate,US
+bls,jolts:2025-04,2025-06-03,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-05,2025-07-01,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-06,2025-07-29,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-07,2025-09-03,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-08,2025-09-30,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-10,2025-12-09,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-11,2026-01-07,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2025-12,2026-02-05,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-01,2026-03-13,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-02,2026-03-31,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-03,2026-05-05,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-04,2026-06-02,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-05,2026-06-30,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-06,2026-08-04,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-07,2026-09-01,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-08,2026-09-29,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-09,2026-11-03,10:00,Job Openings and Labor Turnover Survey,moderate,US
+bls,jolts:2026-10,2026-12-01,10:00,Job Openings and Labor Turnover Survey,moderate,US

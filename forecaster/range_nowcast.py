@@ -240,6 +240,76 @@ def _padded(s: Session) -> Session:
 
 
 # --------------------------------------------------------------------------
+# Scheduled releases (economic_events)
+# --------------------------------------------------------------------------
+
+@dataclass
+class Events:
+    """
+    Scheduled releases by session day - (minute from the day's 09:30, tier,
+    name, New York time) - and the days the calendar covers. On a covered day
+    without releases there were none; on any other day the calendar is missing.
+
+    The nowcast shows a day's releases but does not use them: as inputs (a high
+    release before the open; a high / moderate one still ahead) they changed
+    nothing walk-forward (187 NQ sessions to 2026-09: opening range -0.0001,
+    first hour -0.0006, session +0.0030 +- 0.0045 in |log error|). FOMC days,
+    the worst forecast, improved from 0.63 to 0.52 - on 6 days, too few to tell.
+    """
+    by_day: Dict[str, List[Tuple[int, str, str, str]]] = field(default_factory=dict)
+    covered: set = field(default_factory=set)
+
+    def of(self, day: str) -> Optional[List[Tuple[int, str, str, str]]]:
+        """The day's releases, or None when the calendar does not cover it."""
+        return self.by_day.get(day, []) if day in self.covered else None
+
+
+def events_from_rows(events: Sequence[Any], coverage: Sequence[Any]) -> Events:
+    """
+    ``Events`` from calendar rows (source, scheduled_at, name, tier) and coverage
+    rows (source, covered_from, covered_to). As in the v2 snapshot, a day counts
+    the releases of the sources covering it.
+    """
+    out = Events()
+    by_source: Dict[str, List[Tuple[date, date]]] = {}
+    for c in coverage:
+        a, b = (date.fromisoformat(str(c[k])[:10]) for k in ("covered_from", "covered_to"))
+        by_source.setdefault(c["source"], []).append((a, b))
+    if not by_source:
+        return out
+    first, last = min(a for w in by_source.values() for a, _ in w), max(b for w in by_source.values() for _, b in w)
+    for s in cal.sessions_between(first, last):
+        d = s.session_date
+        if any(a <= d <= b for w in by_source.values() for a, b in w):
+            out.covered.add(d.isoformat())
+    for e in events:
+        at = pd.Timestamp(e["scheduled_at"])
+        at = at.tz_localize("UTC") if at.tzinfo is None else at
+        ny = at.tz_convert("America/New_York")
+        day = ny.date()
+        if not any(a <= day <= b for a, b in by_source.get(e["source"], [])):
+            continue
+        try:
+            s = cal.session(day)
+        except cal.CalendarCoverageError:
+            continue
+        if s.rth_open_at is None:
+            continue
+        minute = int((at - pd.Timestamp(s.rth_open_at)).total_seconds() // 60)
+        out.by_day.setdefault(day.isoformat(), []).append((minute, e["tier"], e["name"], ny.strftime("%H:%M")))
+    for v in out.by_day.values():
+        v.sort()
+    return out
+
+
+def load_events(conn) -> Events:
+    """The loaded economic calendar (``economic_events`` within ``economic_event_coverage``)."""
+    from database.queries import economic_calendar
+    events, coverage = economic_calendar(conn)
+    return events_from_rows(events, coverage)
+
+
+# --------------------------------------------------------------------------
 # Inputs
 # --------------------------------------------------------------------------
 
@@ -411,6 +481,7 @@ class History:
     start: int                                   # first session with a walk-forward forecast
     alpha: float = ALPHA
     vix: Dict[str, Tuple[Optional[float], Optional[float]]] = field(default_factory=dict)
+    events: Events = field(default_factory=Events)
     models: Dict[Tuple[str, int], LinearModel] = field(default_factory=dict)
 
     @property
@@ -472,14 +543,15 @@ class History:
 
 
 def build_history(symbol: str, sessions: Sequence[Session], vix: Optional[Dict[str, Tuple]] = None,
-                  alpha: float = ALPHA) -> History:
+                  alpha: float = ALPHA, events: Optional[Events] = None) -> History:
     """
     The walk-forward history of ``symbol`` from its sessions (complete full days
-    are kept) and spot VIX per day ({day: (pre, last)}). Every session from
-    ``start`` on gets the forecasts of the model fitted on the sessions before
-    its block.
+    are kept) and spot VIX per day ({day: (pre, last)}); ``events``, the
+    economic calendar, is kept for display. Every session from ``start`` on
+    gets the forecasts of the model fitted on the sessions before its block.
     """
     vix = vix or {}
+    events = events or Events()
     kept = []
     for s in sessions:
         if s.minutes == SESSION_MINUTES and s.complete:
@@ -513,7 +585,7 @@ def build_history(symbol: str, sessions: Sequence[Session], vix: Optional[Dict[s
         log_ref=np.hstack([np.log([[s.open] for s in kept]), lc[:, :-1]]) if n else lc,
         log_close=lc, log_high=np.vstack([np.log(s.high) for s in kept]) if n else lc,
         log_low=np.vstack([np.log(s.low) for s in kept]) if n else lc,
-        start=USUAL_SESSIONS + MIN_TRAIN, alpha=alpha, vix=dict(vix))
+        start=USUAL_SESSIONS + MIN_TRAIN, alpha=alpha, vix=dict(vix), events=events)
     for h in HORIZONS:
         t = np.arange(h.end)
         for i in range(history.start, n):
@@ -527,7 +599,7 @@ def load_history(conn, symbol: str, alpha: float = ALPHA) -> History:
     """``build_history`` from the stored bars of ``symbol``'s active contracts and spot VIX."""
     from database.queries import active_contract_bars
     bars = pd.DataFrame([dict(r) for r in active_contract_bars(conn, symbol)])
-    return build_history(symbol, sessions_from_bars(bars), load_vix(conn), alpha)
+    return build_history(symbol, sessions_from_bars(bars), load_vix(conn), alpha, load_events(conn))
 
 
 def day_session(conn, rows: Sequence[Any], history: History) -> Optional[Session]:
@@ -621,6 +693,7 @@ def nowcast(history: History, today: Session, t: Optional[int] = None) -> Dict[s
                          f"has {position}")
         return out
     prev = {k: v[:position] for k, v in history.daily.items()}
+    releases = history.events.of(today.day)
     pre = pre_inputs(prev, today)
     stats = intraday_stats(today)
     usual_stats, usual_y = history.usual_before(position)
@@ -629,7 +702,9 @@ def nowcast(history: History, today: Session, t: Optional[int] = None) -> Dict[s
     lo_so_far = min(today.open, float(today.low[:t].min())) if t else None
     intra = intraday_inputs(stats, usual_stats, np.array([t]))[0]
     out.update(available=True, price=price, high_so_far=hi_so_far, low_so_far=lo_so_far,
-               inputs=_explain(pre, intra))
+               inputs=_explain(pre, intra),
+               releases=None if releases is None else [
+                   {"time": hhmm, "name": name, "tier": tier, "minute": m} for m, tier, name, hhmm in releases])
     for h in HORIZONS:
         row: Dict[str, Any] = {"key": h.key, "label": h.label, "end": h.end, "end_time": today.time_at(h.end)}
         out["horizons"].append(row)

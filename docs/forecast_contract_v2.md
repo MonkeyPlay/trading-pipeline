@@ -165,8 +165,14 @@ implemented (no side/quote/constituent data is recorded).
 **Events.** `economic_event_coverage` and `economic_events` (in `public`) hold an
 economic calendar when one is loaded. Without a coverage row for the session, the three
 event features are null with status `missing` — "no calendar" is never reported as "no
-event". A live capture only sees rows recorded before it froze. No loader for a
-particular vendor is included.
+event". A live capture only sees rows recorded before it froze.
+[database/events.py](../database/events.py) (`python -m database.events`) loads
+`data/economic_calendar.csv` - FOMC decisions and minutes, BLS CPI, Employment Situation,
+PPI and JOLTS as released, the 2025 shutdown rescheduling included - with
+`data/economic_calendar_coverage.csv`, plus the ISM PMIs by ISM's first / third business
+day rule. GDP, PCE and retail sales are not in it, so within its coverage "no event" means
+none of those types. Snapshots stored before it was loaded keep `missing`; the models
+trained on them give the event features no weight.
 
 ## Targets, labels and outcome metrics (`nq_labels_v5_candidate`)
 

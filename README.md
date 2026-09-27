@@ -463,6 +463,29 @@ shows exactly what `range-backtest` scored. When this was written (187 NQ sessio
 in the first hour and ±39 % against ±51 % over the session, better at every checkpoint from
 09:30 on, and the 50 % / 80 % bands held about 50 % / 80 % of outcomes.
 
+The economic calendar (below) was tested as a nowcast input - a high release before the open,
+a high or moderate one still ahead, and on its own an FOMC decision still ahead - and changed
+nothing measurable walk-forward. FOMC days are the nowcast's worst (the rest of the session
+often came in several times the forecast once the morning had passed), and an FOMC input
+improved 4 of the 6 in the test but made 2 worse; too few to tell. So the card lists the day's
+releases, and warns while an FOMC decision is still ahead, but the forecast does not use them.
+
+**Economic calendar** ([database/events.py](database/events.py)):
+
+```bash
+python -m database.events        # load data/economic_calendar.csv (+ ISM by rule); idempotent
+```
+
+It holds FOMC decisions and minutes (federalreserve.gov), BLS CPI, Employment Situation, PPI
+and JOLTS as released - the October-November 2025 shutdown rescheduling included - and the
+ISM PMIs at 10:00 on the first / third exchange session of the month (ISM's own calendar needs
+a login). GDP, PCE and retail sales are not included: their 2025 dates could not be sourced
+reliably. `data/economic_calendar_coverage.csv` says which days each source covers; within it
+a day without a release had none, outside it the calendar is missing - never "no event". The
+CSVs are the source of truth: when the agencies publish the next year's schedules (BLS in the
+autumn), add the rows, extend the coverage, and load again; a release whose date changed
+replaces its row. The v2 snapshot's event features read the same tables.
+
 ## v2: versioned NQ forecast records
 
 A second, stricter pipeline runs beside the one above
@@ -533,7 +556,7 @@ database whose name contains `test`; they reset it).
 | Path | What lives there |
 |---|---|
 | [collector/](collector/) | IB API client, coverage planner, request pacing, real-time bar streamer |
-| [database/](database/) | Connection, queries, migrations, backfill/repair tools |
+| [database/](database/) | Connection, queries, migrations, backfill/repair tools, economic calendar loader |
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
 | [forecaster/](forecaster/) | Range nowcast, v2 labels + scikit-learn model, analogue forecast, outcome evaluator |

@@ -1,0 +1,4 @@
+source,covered_from,covered_to,notes
+fed,2025-01-01,2026-12-31,"FOMC rate decisions and minutes, 14:00 ET, from federalreserve.gov/monetarypolicy/fomccalendars.htm; minutes not yet published by the three-week rule"
+bls,2025-06-01,2026-12-31,"BLS Consumer Price Index, Employment Situation, Producer Price Index and JOLTS as released, including the 2025 shutdown rescheduling (bls.gov release schedules)"
+ism_rule,2025-06-01,2026-12-31,"ISM Manufacturing (first business day) and Services (third business day) PMIs at 10:00 ET, by ISM's rule - business days are exchange sessions"
