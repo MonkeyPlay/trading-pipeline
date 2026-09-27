@@ -340,7 +340,19 @@ mean (out-of-sample R², and the per-session squared-error gain ± SE; *predicta
 means R² > 0 and a gain above 2 SE), and the strongest Spearman correlations with
 their Benjamini-Hochberg q-value over all feature × metric tests and the correlation
 in the earlier and the later half of the sessions. A correlation is *robust* when
-q < 0.05 and both halves agree in sign. It writes nothing.
+q < 0.05 and both halves agree in sign. For the magnitude metrics it then repeats the
+walk-forward on a fixed set of pre-open volatility inputs (`VOL_FEATURES`, chosen on
+market grounds rather than from the correlations): a ridge regression on the metric's
+log (ranges are right-skewed, so squared error on raw values is dominated by a few
+large days), and the candidate label *above the median of the previous 40 sessions*
+(`--median-window`; known before the session) fitted by logistic regression against
+its running base rate - the log-loss test the forecast models have to pass. It writes
+nothing.
+
+On the 248 sessions to 2026-09-25 no direction metric had a single robust
+association, while the 15-minute and full-RTH ranges had 20 between them (Spearman
+0.3-0.45 with the overnight volume ratio, the relative 1-minute ATR, the overnight
+and prior-session ranges and VIX, in both halves).
 
 **After a version change.** New feature, label or model versions start empty, and the
 daily `run_pipeline.sh` only labels the last few sessions. Run `backfill` once over

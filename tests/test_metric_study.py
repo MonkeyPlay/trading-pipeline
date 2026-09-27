@@ -80,7 +80,34 @@ def test_collect_measures_metrics_from_bars():
 def test_report_lists_every_metric():
     X, Y = _data(n=160)
     res = {"sessions": 160, "first": "d0000", "last": "d0159", "associations": ms.associations(X, Y),
-           "walk_forward": {m: ms.walk_forward(X, Y[m], 120, 10) for m in Y.columns}, "min_train": 120}
+           "walk_forward": {m: ms.walk_forward(X, Y[m], 120, 10) for m in Y.columns}, "min_train": 120,
+           "median_window": 40,
+           "volatility": {"range_15m": {
+               "log_ridge": ms.walk_forward(X, np.log(Y["range_15m"]), 120, 10, features=ms.VOL_FEATURES),
+               "above_median": ms.walk_forward_binary(X, Y["range_15m"], ms.VOL_FEATURES, 40, 100, 10)}}}
     text = ms.format_report(res, top=3)
     assert "== range_15m (magnitude)" in text and "== return_15m (direction)" in text
     assert "overnight_range_atr" in text and "Robust associations:" in text
+    assert "Volatility inputs only" in text and "previous 40 sessions" in text
+
+
+def test_above_trailing_median_uses_earlier_sessions_only():
+    y = pd.Series([1.0, 2.0, 3.0, np.nan, 0.5, 10.0], index=list("abcdef"))
+    lab = ms.above_trailing_median(y, window=3)
+    assert lab.isna().tolist() == [True, True, True, True, False, False]
+    assert lab["e"] == 0.0            # 0.5 vs median(1, 2, 3) = 2
+    assert lab["f"] == 1.0            # 10 vs median(2, 3, 0.5) = 2 - the gap on 'd' is skipped
+    # changing a later value never changes an earlier label
+    y2 = y.copy()
+    y2["f"] = -5.0
+    assert ms.above_trailing_median(y2, window=3)["e"] == lab["e"]
+
+
+def test_volatility_checks_separate_signal_from_noise():
+    X, Y = _data(n=260, beta=1.0)
+    sig = ms.walk_forward_binary(X, Y["range_15m"], ms.VOL_FEATURES, median_window=40, min_train=120)
+    noise = ms.walk_forward_binary(X, Y["return_15m"].abs(), ms.VOL_FEATURES, median_window=40, min_train=120)
+    assert sig["n_test"] == 140 and sig["gain"] > 2 * sig["gain_se"] and sig["accuracy"] > sig["base_accuracy"]
+    assert not noise["gain"] > 2 * noise["gain_se"]
+    logr = ms.walk_forward(X, np.log(Y["range_15m"]), 120, 10, features=ms.VOL_FEATURES)
+    assert logr["r2"] > 0.1 and logr["gain"] > 2 * logr["gain_se"]
