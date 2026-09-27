@@ -1,0 +1,94 @@
+248 session(s), 2025-10-01 .. 2026-09-25; 336 feature x metric tests (robust: BH q < 0.05 and the same sign in both halves).
+Walk-forward: ridge on all model inputs vs the running mean, from session 121 on; R2 > 0 and gain > 2 SE = predictable out of sample.
+
+== return_15m (direction): walk-forward R2 -0.000, gain -0.00002 ± 0.00010 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   nq_es_relative_return_60m           248  -0.102   0.3948  -0.119  -0.068
+   nq_es_relative_return               248  -0.097   0.4209  -0.090  -0.094
+   return_60m_atr                      248  -0.078   0.5507  -0.022  -0.123
+   return_15m_atr                      248  -0.075   0.5816  -0.021  -0.137
+   distance_onh_atr                    248  -0.073   0.5967  -0.110  -0.031
+
+== first_hour_return (direction): walk-forward R2 -0.020, gain -0.00201 ± 0.00133 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   vix_level                           248  +0.136   0.2621  +0.156  +0.076
+   us10y_yield_fut_change_bps          248  -0.126   0.2910  -0.108  -0.145
+   prior_rth_range_atr                 248  +0.117   0.3119  +0.053  +0.190
+   nq_es_relative_return               248  -0.106   0.3675  -0.049  -0.168
+   overnight_range_atr                 248  +0.087   0.4917  +0.109  +0.050
+
+== return_rth (direction): walk-forward R2 -0.038, gain -0.01112 ± 0.00598 over 126 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   days_to_nq_expiry                   246  -0.124   0.2960  -0.245  +0.006
+   atr_1m_14_relative_30d              246  +0.121   0.2960  +0.185  +0.089
+   rvol_overnight_30d                  246  +0.108   0.3664  +0.238  +0.007
+   vix_level                           246  +0.107   0.3675  +0.162  +0.062
+   overnight_range_atr                 246  +0.097   0.4209  +0.099  +0.098
+
+== |return_15m| (magnitude): walk-forward R2 -0.069, gain -0.00097 ± 0.00095 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   prior_rth_range_atr                 248  +0.166   0.1095  +0.167  +0.149
+   is_early_close                      248  -0.153   0.1638  -0.212    +nan
+   efficiency_60m                      248  +0.146   0.1920  +0.178  +0.123
+   rvol_overnight_30d                  248  +0.122   0.2960  +0.144  +0.089
+   daily_atr_fraction                  248  -0.115   0.3150  -0.187  -0.049
+
+== range_15m (magnitude): walk-forward R2 +0.029, gain +0.00032 ± 0.00107 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   rvol_overnight_30d                  248  +0.446   0.0000  +0.502  +0.361  robust
+   atr_1m_14_relative_30d              248  +0.384   0.0000  +0.387  +0.365  robust
+   overnight_range_atr                 248  +0.360   0.0000  +0.457  +0.276  robust
+   prior_rth_range_atr                 248  +0.312   0.0000  +0.385  +0.170  robust
+   distance_onh_atr                    248  -0.294   0.0001  -0.340  -0.265  robust
+
+== efficiency_15m (magnitude): walk-forward R2 +0.013, gain +0.00053 ± 0.00175 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   is_early_close                      248  -0.151   0.1680  -0.210    +nan
+   efficiency_60m                      248  +0.145   0.1940  +0.200  +0.083
+   prior_range_position                248  +0.127   0.2910  +0.085  +0.163
+   vix_level                           248  -0.125   0.2910  -0.140  -0.110
+   ema200_distance_5m_atr              248  +0.124   0.2960  +0.109  +0.143
+
+== |first_hour_return| (magnitude): walk-forward R2 -0.002, gain -0.00009 ± 0.00029 over 128 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   prior_rth_range_atr                 248  +0.208   0.0210  +0.253  +0.103  robust
+   rvol_overnight_30d                  248  +0.201   0.0277  +0.269  +0.073  robust
+   overnight_range_atr                 248  +0.142   0.2113  +0.226  +0.067
+   atr_1m_14_relative_30d              248  +0.133   0.2629  +0.173  +0.038
+   prior_rth_return_atr                248  -0.128   0.2910  -0.119  -0.114
+
+== |return_rth| (magnitude): walk-forward R2 -0.008, gain -0.00099 ± 0.00079 over 126 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   prior_rth_range_atr                 246  +0.130   0.2888  +0.081  +0.127
+   atr_1m_14_relative_30d              246  +0.130   0.2894  +0.127  +0.070
+   prior_rth_return_atr                246  -0.121   0.2960  -0.175  -0.006
+   return_15m_atr                      246  -0.111   0.3471  -0.151  -0.065
+   distance_onl_atr                    246  +0.109   0.3644  +0.117  +0.100
+
+== range_rth (magnitude): walk-forward R2 +0.049, gain +0.00792 ± 0.01007 over 126 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   atr_1m_14_relative_30d              246  +0.392   0.0000  +0.393  +0.336  robust
+   rvol_overnight_30d                  246  +0.380   0.0000  +0.445  +0.256  robust
+   vix_level                           246  +0.322   0.0000  +0.282  +0.273  robust
+   overnight_range_atr                 246  +0.313   0.0000  +0.372  +0.236  robust
+   prior_rth_range_atr                 246  +0.275   0.0004  +0.303  +0.159  robust
+
+== efficiency_rth_5m (magnitude): walk-forward R2 -0.003, gain -0.00003 ± 0.00012 over 126 sessions -> not predictable
+   feature                               n     rho        q   early    late
+   rty_preopen_return                  246  +0.167   0.1095  +0.098  +0.270
+   distance_onh_atr                    246  +0.156   0.1528  +0.104  +0.209
+   es_preopen_return                   246  +0.134   0.2629  +0.058  +0.233
+   range_60m_atr                       246  -0.132   0.2747  -0.092  -0.202
+   vix_change_points                   246  -0.126   0.2910  -0.092  -0.179
+
+Robust associations: 0 with direction metrics, 20 with magnitude metrics.
+
+Volatility inputs only (daily_atr_fraction, daily_volatility_ratio, atr_1m_14_relative_30d, overnight_range_atr, range_60m_atr, prior_rth_range_atr, rvol_overnight_30d, rvol_60m_30d, vix_level, vxn_level):
+  log ridge: the metric's log, ridge vs the running mean; above median: the label 'above the median of the previous 40 sessions', logistic vs the running base rate (log-loss gain per session). Predictable = gain > 2 SE.
+   metric                 log ridge R2              gain ± SE   above median: n    acc   base     log-loss gain ± SE
+   |return_15m|                 +0.003   +0.00267 ± 0.01407               128  0.461  0.406    -0.0047 ± 0.0187
+   range_15m                    +0.146   +0.01703 ± 0.00984               128  0.648  0.555    +0.0660 ± 0.0371
+   |first_hour_return|          +0.001   +0.00070 ± 0.00591               128  0.547  0.492    -0.0046 ± 0.0258
+   |return_rth|                 -0.054   -0.04293 ± 0.01918               128  0.453  0.508    -0.0206 ± 0.0235
+   range_rth                    +0.149   +0.02422 ± 0.01125 *             128  0.609  0.539    +0.0268 ± 0.0286
+   * predictable out of sample (gain > 2 SE)
