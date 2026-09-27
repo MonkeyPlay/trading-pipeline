@@ -82,7 +82,9 @@ def first_hour(bars: pd.DataFrame, open_at, session_date: str,
                contract_id: Optional[int] = None) -> Optional[FirstHour]:
     """
     One session's first hour from its 1-minute bars (``timestamp_utc``, OHLC).
-    None without the 09:30 bar or with fewer than MIN_BARS of the 60 minutes.
+    None without the 09:30 bar, with fewer than MIN_BARS of the 60 minutes, or
+    when the price never moved in the hour (high == low: placeholder or stale
+    bars, not a real session).
     """
     if bars is None or bars.empty:
         return None
@@ -97,7 +99,7 @@ def first_hour(bars: pd.DataFrame, open_at, session_date: str,
     w["high"] = w["high"].fillna(w["close"])
     w["low"] = w["low"].fillna(w["close"])
     o = float(w.at[0, "open"])
-    if not o:
+    if not o or not float(w["high"].max()) > float(w["low"].min()):
         return None
     orh, orl = float(w["high"].iloc[:OR_MINUTES].max()), float(w["low"].iloc[:OR_MINUTES].min())
     side, minute_of = "none", None
@@ -254,7 +256,7 @@ def backtest(conn, symbol: str = "NQ", k: int = K, min_history: int = 60) -> Dic
         cands = [{"session_date": s["session_date"], "vector": _v2_vector(s["features"])} for s in earlier]
         ranked = rank_analogues(_v2_vector(snap["features"]), cands, MATCH_FEATURES, MIN_V2_DIMS)
         fc = forecast(day, [r["session_date"] for r in ranked], hours, None, k)
-        if fc is None or not fc["naive_width_pct"]:
+        if fc is None or not fc["naive_width_pct"] or not fc["width_pct"][50] > 0:
             continue
         width_m.append(abs(math.log(actual.width / fc["width_pct"][50])))
         width_b.append(abs(math.log(actual.width / fc["naive_width_pct"])))
