@@ -68,6 +68,18 @@ def test_missing_cycle_months_names_what_the_chain_lacks():
     assert missing_cycle_months([], date(2025, 5, 1), ES_RULE) == []
 
 
+def test_missing_cycle_months_ignores_unlisted_far_dated_months():
+    # IB lists only some far-dated contracts (Dec, some Jun, out to 2031). Their
+    # gaps are not listed yet and IB cannot resolve them; asking for them first
+    # used to end the search before the expired months the window needs.
+    far = [_row(20 + i, m, m + "15") for i, m in enumerate(
+        ["202703", "202706", "202709", "202712", "202803", "202806", "202812",
+         "202906", "202912", "203012", "203112"])]
+    chain = FULL[1:] + far
+    assert missing_cycle_months(chain, date(2024, 11, 16), ES_RULE, date(2026, 9, 27)) == [
+        "202506", "202503", "202412"]
+
+
 def test_only_real_pacing_violations_back_off():
     assert is_pacing_violation(162, "Historical Market Data Service error message:Historical data request "
                                     "pacing violation")

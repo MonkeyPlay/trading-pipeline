@@ -714,7 +714,7 @@ def _record_assignment(conn, work):
             logger.info(f"{work.symbol}: cleared {n} stale active-contract assignment(s).")
 
 
-def _resolve_missing_months(app, conn, work, start_day):
+def _resolve_missing_months(app, conn, work, start_day, end_day=None):
     """
     Asks IB for each contract month the discovered chain lacks between the
     window's start and its newest contract, one month at a time: the chain lookup
@@ -722,7 +722,8 @@ def _resolve_missing_months(app, conn, work, start_day):
     when named. Newest first; the first month IB cannot resolve ends the search,
     as every older one is further out of its reach.
     """
-    months = missing_cycle_months(list_future_chain(conn, work.symbol), start_day, work.instrument.roll)
+    months = missing_cycle_months(list_future_chain(conn, work.symbol), start_day,
+                                  work.instrument.roll, end_day)
     if not months:
         return
     logger.info(f"{work.symbol}: the chain lacks {len(months)} contract month(s) in the window "
@@ -740,7 +741,7 @@ def _resolve_online(app, conn, work, start_day, end_day, gap_fill):
     if work.rolling:
         for info in app.discover_chain(work.instrument):
             _store_contract(conn, info)
-        _resolve_missing_months(app, conn, work, start_day)
+        _resolve_missing_months(app, conn, work, start_day, end_day)
         _plan_rolling(conn, work, start_day, end_day, gap_fill, allow_gaps=True)
         return
 

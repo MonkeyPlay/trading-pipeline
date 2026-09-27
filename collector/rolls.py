@@ -79,17 +79,27 @@ def _previous_cycle_month(month: str, rule: RollRule) -> str:
     raise ValueError(f"no contract month of {rule.months} before {month}")
 
 
-def missing_cycle_months(chain, first_day: date, rule: RollRule) -> List[str]:
+def missing_cycle_months(chain, first_day: date, rule: RollRule,
+                         last_day: Optional[date] = None) -> List[str]:
     """
     The contract months ('YYYYMM', newest first) of the rule's cycle from
     ``first_day``'s month up to the newest contract the chain holds that the chain
     lacks. IB's chain lookup can leave out older expired contracts it still
     serves when asked for by month; these are the ones to ask for.
+
+    With ``last_day``, the search stops at the first held contract expiring on or
+    after it: months beyond that lie past the window, and far-dated ones are
+    simply not listed yet (IB cannot resolve them).
     """
-    held = {contract_month(row) for row in eligible_chain(chain, rule)}
+    rows = eligible_chain(chain, rule)
+    held = {contract_month(row) for row in rows}
     if not held:
         return []
     newest, out = max(held), []
+    if last_day is not None:
+        covering = [contract_month(row) for row in rows if expiry_date(row) >= last_day]
+        if covering:
+            newest = min(covering)
     y, m = first_day.year, first_day.month
     while f"{y:04d}{m:02d}" < newest:
         month = f"{y:04d}{m:02d}"
