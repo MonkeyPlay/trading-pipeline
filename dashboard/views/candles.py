@@ -57,6 +57,7 @@ from features.calculations import (
     enrich_candle_timezones,
 )
 from features.session_windows import NY_TZ
+from forecaster import first_hour
 from forecaster.analogue import analogue_forecast
 from forecaster.client import HORIZON as FIRST_HOUR_HORIZON
 from forecaster.client import PROMPT_VERSION
@@ -389,6 +390,9 @@ class SessionExplorer:
         # Loaded per session.
         self.day_df: Optional[pd.DataFrame] = None
         self.opening_range: Optional[Dict[str, Any]] = None
+        # The first-hour forecast of the selected day, and each symbol's first hours (loaded once).
+        self.first_hour: Optional[Dict[str, Any]] = None
+        self._first_hours: Dict[str, Dict[str, Any]] = {}
         self.recent_bars: Optional[pd.DataFrame] = None
         self.vix_bars: Optional[pd.DataFrame] = None
         # {trading_day: last RTH close} for the whole history up to the displayed
@@ -508,7 +512,76 @@ class SessionExplorer:
             return
 
         self.chart.apply(build_chart_spec(window_bars(self.day_df, self.date, self.timeframe),
-                                          features=self.snapshot, fit=True, opening_range=self.opening_range))
+                                          features=self.snapshot, fit=True, opening_range=self.opening_range,
+                                          fan=self._fan()))
+
+    def _fan(self) -> Optional[Dict[str, Any]]:
+        fc = (self.first_hour or {}).get("forecast")
+        if not fc or not fc.get("fan_price"):
+            return None
+        return {"start": session_window(self.date)["open"], "bar_minutes": _BAR_MINUTES.get(self.timeframe, 1),
+                "prices": fc["fan_price"]}
+
+    def _compute_first_hour(self) -> None:
+        """The selected day's first-hour forecast from pre-open matches (forecaster/first_hour.py)."""
+        symbol = self.contract["symbol"]
+        try:
+            if symbol not in self._first_hours:
+                self._first_hours[symbol] = first_hour.load_first_hours(self.conn, symbol)
+            self.first_hour = first_hour.outlook(self.conn, symbol, self.date, self.snapshot, self._v1_history,
+                                                 self._first_hours[symbol])
+        except Exception as e:  # noqa: BLE001 - the page must still load; the card says why
+            self.first_hour = {"forecast": None, "actual": None, "method": "", "pool": 0, "error": str(e)}
+
+    def _render_first_hour(self) -> None:
+        self.first_hour_panel.clear()
+        with self.first_hour_panel:
+            fh = self.first_hour or {}
+            fc, actual = fh.get("forecast"), fh.get("actual")
+            with ui.column().classes("gap-0"):
+                ui.label("First hour forecast · 09:30–10:30").classes("text-lg font-medium")
+                ui.label("From pre-open data only: how the closest pre-open matches' first hour went. "
+                         "Run nq_forecast_v2.py first-hour-backtest to see how it has scored on your history."
+                         ).classes("text-sm").style(_MUTED)
+            if fh.get("error"):
+                ui.label(f"Not available: {fh['error']}").classes("text-sm").style("color:#ffa726")
+                return
+            if fc is None:
+                ui.label("Not enough earlier sessions with a stored first hour to match against yet."
+                         ).classes("text-sm").style(_MUTED)
+                return
+
+            def pts(v):
+                return "—" if v is None else f"{v:,.0f} pts"
+
+            wp, op = fc["width_pts"], fc["or_width_pts"]
+            with ui.row().classes("w-full gap-10 items-start mt-1"):
+                _metric("First-hour range", pts(wp[50]),
+                        hint=f"likely {pts(wp[25])} – {pts(wp[75])} · usual {pts(fc['naive_width_pts'])}")
+                _metric("Opening range · 15 min", pts(op[50]), hint=f"likely {pts(op[25])} – {pts(op[75])}")
+                with ui.column().classes("gap-1"):
+                    ui.label("First break after 09:45").classes("text-xs uppercase tracking-wide").style(_MUTED)
+                    counts = fc["first_break_counts"]
+                    for side, label, colour in (("above", "Above ORH", "#26a69a"), ("none", "No break", "#b2b5be"),
+                                                ("below", "Below ORL", "#ef5350")):
+                        ui.label(f"{label}: {fc['first_break'][side] * 100:.0f} %   "
+                                 f"({counts[side]} of {fc['n']} matches · usually {fc['base_rates'][side] * 100:.0f} %)"
+                                 ).classes("text-sm font-mono").style(f"color:{colour}")
+                if actual is not None:
+                    with ui.column().classes("gap-1"):
+                        ui.label("Actual").classes("text-xs uppercase tracking-wide").style(_MUTED)
+                        rng = (actual.high - actual.low)
+                        inside = fc["width_pct"][25] <= actual.width <= fc["width_pct"][75]
+                        ui.label(f"range {rng:,.0f} pts {'(in the likely band)' if inside else '(outside the likely band)'}"
+                                 ).classes("text-sm")
+                        ui.label(f"opening range {actual.or_high - actual.or_low:,.0f} pts").classes("text-sm")
+                        when = (f" at {(session_window(self.date)['open'] + pd.Timedelta(minutes=actual.break_minute)).strftime('%H:%M')}"
+                                if actual.break_minute is not None else "")
+                        ui.label(f"first break: {actual.first_break}{when}").classes("text-sm")
+            ui.label(f"{fc['n']} closest of {fh.get('pool', 0)} earlier sessions by {fh.get('method', 'pre-open similarity')}. "
+                     f"The fan on the chart starts at the last pre-open price. Which side breaks is a question of "
+                     f"direction, which pre-open data has not predicted on this history; the width is where it "
+                     f"carries information.").classes("text-xs mt-1").style(_MUTED)
 
     def refresh_session(self, keep_forecast: bool = False) -> None:
         """
@@ -519,8 +592,13 @@ class SessionExplorer:
         if self.contract is None or self.date is None:
             return
         self.load_day()
+        if not keep_forecast:
+            self.first_hour = None
+            if self.day_df is not None:
+                self._compute_first_hour()
         self._render_status()
         self._render_features()
+        self._render_first_hour()
         self.push()
         if keep_forecast:
             self._push_analogue()
@@ -638,6 +716,9 @@ class SessionExplorer:
                 with ui.card().classes("w-72 shrink-0").style("background:#1c212e"):
                     ui.label("Pre-open features").classes("text-sm font-medium")
                     self.features_panel = ui.column().classes("gap-3 w-full")
+
+            with ui.card().classes("w-full").style("background:#1c212e"):
+                self.first_hour_panel = ui.column().classes("w-full gap-1")
 
             self.model_panel = ModelForecastPanel(self.conn)
             self.model_panel.build()

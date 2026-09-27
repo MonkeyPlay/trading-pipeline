@@ -197,6 +197,24 @@ def contracts_for_day(conn: Database, symbol: str, trading_day: str) -> List[Row
     return later + earlier[::-1]
 
 
+def opening_window_bars(conn: Database, symbol: str, minutes: int = 30, interval: str = "1m",
+                        price_type: str = "TRADES") -> List[Row]:
+    """
+    The first ``minutes`` of every stored regular session of ``symbol``, on every
+    contract holding it: trading_day, contract_id, expiry, timestamp_utc and OHLC,
+    in time order. One query for the whole history (for opening-path analogues).
+    """
+    return conn.execute(
+        "SELECT b.trading_day, b.contract_id, c.expiry, b.timestamp_utc, b.open, b.high, b.low, b.close "
+        "  FROM bars b JOIN contracts c ON c.contract_id = b.contract_id "
+        " WHERE c.symbol = %s AND b.interval = %s AND b.price_type = %s AND b.session_scope = 'RTH' "
+        "   AND (b.timestamp_utc AT TIME ZONE 'America/New_York')::time >= TIME '09:30' "
+        "   AND (b.timestamp_utc AT TIME ZONE 'America/New_York')::time < TIME '09:30' + make_interval(mins => %s) "
+        " ORDER BY b.trading_day, b.contract_id, b.timestamp_utc;",
+        (symbol, interval, price_type, int(minutes)),
+    ).fetchall()
+
+
 def list_session_days(conn: Database, symbols: List[str], interval: str = "1m", price_type: str = "TRADES",
                       limit: int = 1000) -> List[str]:
     """Trading days on which any contract of ``symbols`` holds bars, newest first."""

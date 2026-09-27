@@ -30,6 +30,11 @@ OR_BOX = "rgba(150, 153, 164, 0.30)"
 OR_FILL = "rgba(38, 166, 154, 0.13)"
 OR_LINE = "#26a69a"
 
+# First-hour forecast fan: 10-90 % and 25-75 % bands of the matched sessions' paths.
+FAN_OUTER = "rgba(255, 167, 38, 0.10)"
+FAN_INNER = "rgba(255, 167, 38, 0.20)"
+FAN_LINE = "#ffa726"
+
 # Pre-open reference levels drawn from the feature snapshot, in draw order.
 _FEATURE_LEVELS = (
     ("previous_rth_close", "Prev RTH Close", "#29b6f6", 2, 2),
@@ -176,6 +181,39 @@ def opening_range_series(df: pd.DataFrame, opening_range: Dict[str, Any]) -> Dic
     return out
 
 
+def fan_series(df: pd.DataFrame, fan: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ``{'series', 'bands', 'legend'}`` drawing a first-hour forecast fan
+    ({'start': the open as a New York timestamp, 'bar_minutes', 'prices':
+    {10|25|50|75|90: one price per minute of the hour}}): at each shown bar
+    inside the hour, the fan's value at the bar's last minute.
+    """
+    out: Dict[str, Any] = {"series": {}, "bands": {}, "legend": []}
+    if df is None or df.empty or not fan or not fan.get("prices"):
+        return out
+    ts = pd.to_datetime(df["timestamp_ny"])
+    offsets = ((ts - fan["start"]).dt.total_seconds() // 60).astype(int).to_numpy()
+    times = to_epoch(ts)
+    minutes = len(next(iter(fan["prices"].values())))
+    idx = [i for i, o in enumerate(offsets) if 0 <= o < minutes]
+    if len(idx) < 2:
+        return out
+    last = [min(offsets[i] + int(fan.get("bar_minutes", 1)) - 1, minutes - 1) for i in idx]
+
+    def points(q):
+        return [{"time": int(times[i]), "value": round(float(fan["prices"][q][m]), 2)} for i, m in zip(idx, last)]
+
+    for q in (10, 90, 25, 75):
+        out["series"][f"fan:p{q}"] = _hidden(points(q))
+    out["bands"]["fan:outer"] = {"upper": "fan:p90", "lower": "fan:p10", "color": FAN_OUTER}
+    out["bands"]["fan:inner"] = {"upper": "fan:p75", "lower": "fan:p25", "color": FAN_INNER}
+    out["series"]["fan:p50"] = {"points": points(50), "style": {"color": FAN_LINE, "width": 1, "dash": 2,
+                                                              "title": "", "axis_label": False}}
+    out["legend"].append({"key": "fan:p50", "label": "First-hour forecast (median, 25-75 %, 10-90 %)",
+                          "color": FAN_LINE})
+    return out
+
+
 def build_chart_spec(
     df: pd.DataFrame,
     *,
@@ -183,6 +221,7 @@ def build_chart_spec(
     show_vwap: bool = True,
     fit: bool = False,
     opening_range: Optional[Dict[str, Any]] = None,
+    fan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Assembles the full chart spec for one session. Rows with a true ``muted``
@@ -223,11 +262,13 @@ def build_chart_spec(
         }
         legend.append({"key": "features:vwap", "label": "Session VWAP", "color": "#ab47bc"})
 
-    if opening_range and "timestamp_ny" in df.columns:
-        drawn = opening_range_series(df, opening_range)
-        series.update(drawn["series"])
-        bands.update(drawn["bands"])
-        legend.extend(drawn["legend"])
+    for drawn in ((opening_range_series(df, opening_range) if opening_range and "timestamp_ny" in df.columns
+                   else None),
+                  (fan_series(df, fan) if fan and "timestamp_ny" in df.columns else None)):
+        if drawn:
+            series.update(drawn["series"])
+            bands.update(drawn["bands"])
+            legend.extend(drawn["legend"])
 
     return {
         "candles": candle_points(df),

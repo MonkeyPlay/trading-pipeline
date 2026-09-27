@@ -294,3 +294,18 @@ def test_opening_range_box_and_channel():
     # no opening range, no drawing
     assert not any(k.startswith("or:") for k in build_chart_spec(window_bars(df, "2026-06-10"))["series"])
     assert opening_range(df[df["timestamp_ny"].dt.hour < 9], "2026-06-10") is None
+
+
+def test_first_hours_from_one_query(market):
+    conn, md, sessions = market
+    from forecaster.first_hour import load_first_hours
+    hours = load_first_hours(conn, "NQ")
+    s = sessions[-1]
+    day = s.session_date.isoformat()
+    assert day in hours
+    h = hours[day]
+    assert h.contract_id == NQ_CID                    # September, not December's warm-up copy of the day
+    nq = md._bars[(NQ_CID, "TRADES")]
+    hour = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.rth_open_at + timedelta(hours=1))]
+    assert h.open == pytest.approx(hour["open"].iloc[0]) and h.close == pytest.approx(hour["close"].iloc[-1])
+    assert h.high == pytest.approx(hour["high"].max()) and h.low == pytest.approx(hour["low"].min())

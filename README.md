@@ -138,7 +138,17 @@ Two pages:
   (the first 15 minutes after the open) is a grey box over its bars, then its high and low
   continue as **ORH** / **ORL** lines with the channel between them shaded for the rest of the
   session (always from the 1-minute bars, whatever the timeframe; no box on the 30-minute
-  view, where one bar spans it). Run a forecast for that session on demand: the card shows
+  view, where one bar spans it). The **First hour forecast · 09:30–10:30** card below the chart
+  forecasts the first hour from pre-open data only, from how the 20 closest pre-open matches'
+  first hour went ([forecaster/first_hour.py](forecaster/first_hour.py)): the first-hour range
+  (median and 25–75 % band, in points, next to the usual range of the last 40 sessions), the
+  15-minute opening range, and which side of the opening range price breaks first after 09:45
+  (above ORH / no break / below ORL, shrunk toward and shown next to the base rates). An orange
+  fan on the chart (median, 25–75 % and 10–90 % of the matches' paths, from the last pre-open
+  price) spans 09:30–10:30, so the real candles draw over it; once the day's first hour is
+  stored the card shows the actual range and break. On this history the range is where
+  pre-open data carries information; which side breaks is a question of direction, which it
+  has not predicted - `first-hour-backtest` scores both on your data. Run a forecast for that session on demand: the card shows
   the bias, how the 10 matched sessions' first hour went (up / flat / down) and each match's
   own first-hour move. A forecast already stored for the day (from the dashboard or
   `scripts/daily_forecast.py`) is shown straight away. For NQ, the **Model forecast** card
@@ -456,6 +466,7 @@ python scripts/nq_forecast_v2.py train                                          
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
 python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
+python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the 09:30-10:30 forecast (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
 ```
 
