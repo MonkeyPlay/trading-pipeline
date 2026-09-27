@@ -1,5 +1,5 @@
 # tests/test_labels_v2.py
-"""nq_labels_v3_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
+"""nq_labels_v4_candidate rules (nq_schema_v2 sections 10-11) on hand-built minute paths."""
 
 import numpy as np
 import pandas as pd
@@ -142,7 +142,8 @@ def test_early_close_rth_targets_are_shortened():
 
 
 def test_windows_and_vocabulary():
-    labels = lv.compute_labels(*_labels(_bars(S, _full(np.full(15, O))))[1].values(), S)
+    ref = {"range_15m_atr": 0.3, "range_rth_atr": 0.8}
+    labels = lv.compute_labels(*_labels(_bars(S, _full(np.full(15, O))))[1].values(), S, reference=ref)
     assert labels["first_move_5m"]["window_end_at"] == S.rth_open_at + pd.Timedelta(minutes=5)
     assert labels["opening_type_15m"]["window_end_at"] == S.rth_open_at + pd.Timedelta(minutes=15)
     for t, o in labels.items():
@@ -150,4 +151,60 @@ def test_windows_and_vocabulary():
         assert o["label"] in lv.TARGETS[t]["labels"]
     rec = lv.label_registry_record()
     assert [t["target_id"] for t in rec["targets"]] == ["first_move_5m", "opening_type_15m", "direction_15m",
-                                                         "direction_rth", "session_type_rth"]
+                                                         "direction_rth", "session_type_rth",
+                                                         "range_15m_regime", "range_rth_regime"]
+
+
+def test_range_reference_needs_the_full_window():
+    hist = {"range_15m_atr": [float(i) for i in range(45)], "range_rth_atr": [1.0] * 39}
+    ref = lv.range_reference(hist)
+    assert ref["range_15m_atr"] == pytest.approx(19.5)          # the 40 newest: 0 .. 39
+    assert ref["range_rth_atr"] is None                          # 39 earlier values are not enough
+    assert lv.range_reference(None) == {"range_15m_atr": None, "range_rth_atr": None}
+
+
+def test_range_regime_labels():
+    # 15 minutes rising 0.1 point a minute: range 1.5 points = 0.15 A; the rest of the day flat.
+    df = _bars(S, _full(O + 0.1 * np.arange(1, 16)))
+    res = lv.compute_metrics(df, S, A, 110.0, 90.0)
+    assert res["metrics"]["range_15m_atr"] == pytest.approx(0.15)
+
+    def lab(ref):
+        return {t: (o["label"], o["status"]) for t, o in
+                lv.compute_labels(res["metrics"], res["status"], S, reference=ref).items()}
+
+    assert lab({"range_15m_atr": 0.10, "range_rth_atr": 0.10})["range_15m_regime"] == ("wide", "valid")
+    assert lab({"range_15m_atr": 0.15, "range_rth_atr": 0.10})["range_15m_regime"] == ("narrow", "valid")  # equal
+    assert lab({"range_15m_atr": 0.30, "range_rth_atr": 0.10})["range_rth_regime"] == ("wide", "valid")
+    none = lab(None)
+    assert none["range_15m_regime"] == (None, "insufficient_history")
+    assert none["range_rth_regime"] == (None, "insufficient_history")
+
+
+def test_range_regime_on_early_close_and_missing_bars():
+    early = cal.session("2026-11-27")
+    res = lv.compute_metrics(_bars(early, _full(np.full(15, O), s=early)), early, A, 110.0, 90.0)
+    out = lv.compute_labels(res["metrics"], res["status"], early,
+                            reference={"range_15m_atr": 0.1, "range_rth_atr": 0.5})
+    assert out["range_rth_regime"]["status"] == "shortened_session"
+    assert out["range_15m_regime"]["label"] == "narrow"            # the opening window is complete
+    gap = _bars(S, _full(np.full(15, O))).drop(index=[7])           # 09:37 missing
+    res = lv.compute_metrics(gap, S, A, 110.0, 90.0)
+    out = lv.compute_labels(res["metrics"], res["status"], S, reference={"range_15m_atr": 0.1, "range_rth_atr": 0.5})
+    assert out["range_15m_regime"]["status"] == "missing_bars"
+
+
+def test_range_regime_digest_carries_the_threshold():
+    class _Bars:
+        def bars(self, cid, start, end):
+            return _bars(S, _full(np.full(15, O))), "d", "k"
+
+    snap = {"session_date": S.session_date, "instrument_id": 1,
+            "reference_values": {"A": A, "ONH": 110.0, "ONL": 90.0}}
+    hist = {"range_15m_atr": [0.2] * 40, "range_rth_atr": [0.6] * 40}
+    a = lv.compute_outcome(_Bars(), snap, hist)
+    b = lv.compute_outcome(_Bars(), snap, {**hist, "range_15m_atr": [0.3] * 40})
+    assert a["digest"] == b["digest"]                               # the session's own inputs are the same
+    assert a["labels"]["range_15m_regime"]["digest"] != b["labels"]["range_15m_regime"]["digest"]
+    assert a["labels"]["range_rth_regime"]["digest"] == b["labels"]["range_rth_regime"]["digest"]
+    assert "digest" not in a["labels"]["direction_15m"]

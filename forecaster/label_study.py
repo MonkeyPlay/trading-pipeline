@@ -95,6 +95,8 @@ def study(md, snapshots: Iterable[Dict[str, Any]], variants: Dict[str, Dict[str,
     """
     params = {name: with_overrides(o) for name, o in variants.items()}
     labels = {name: {t: Counter() for t in labels_v2.TARGETS} for name in variants}
+    # earlier sessions' range metrics, newest first, for the range-regime thresholds
+    history = {name: {m: [] for m in labels_v2.RANGE_TARGETS.values()} for name in variants}
     values: Dict[str, List[float]] = {name: [] for name, _ in QUANTILE_METRICS}
     snapshots = list(snapshots)
     for snap in snapshots:
@@ -104,8 +106,12 @@ def study(md, snapshots: Iterable[Dict[str, Any]], variants: Dict[str, Dict[str,
         df, _, _ = md.bars(int(snap["instrument_id"]), s.rth_open_at, s.scheduled_close_at)
         for name, p in params.items():
             res = labels_v2.compute_metrics(df, s, A, ONH, ONL, p)
-            for target, o in labels_v2.compute_labels(res["metrics"], res["status"], s, p).items():
+            reference = labels_v2.range_reference(history[name], p)
+            for target, o in labels_v2.compute_labels(res["metrics"], res["status"], s, p, reference).items():
                 labels[name][target][o["label"] or f"INELIGIBLE: {o['status']}"] += 1
+            for metric, vals in history[name].items():
+                if res["metrics"].get(metric) is not None:
+                    vals.insert(0, float(res["metrics"][metric]))
         base = labels_v2.compute_metrics(df, s, A, ONH, ONL)["metrics"]
         for name, fn in QUANTILE_METRICS:
             v = fn(base) if fn else base.get(name)
@@ -117,7 +123,8 @@ def study(md, snapshots: Iterable[Dict[str, Any]], variants: Dict[str, Dict[str,
 
 
 def format_report(result: Dict[str, Any], variants: Dict[str, Dict[str, Any]]) -> str:
-    lines = [f"{result['sessions']} session(s), one snapshot each. Label shares are of the eligible "
+    lines = [f"{result['sessions']} session(s), one snapshot each, in session order (the range-regime "
+             f"thresholds come from the earlier sessions in the range). Label shares are of the eligible "
              f"sessions; ineligible ones are counted separately.", ""]
     for target in labels_v2.TARGETS:
         vocab = list(labels_v2.TARGETS[target]["labels"])

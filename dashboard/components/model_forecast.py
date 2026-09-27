@@ -1,7 +1,7 @@
 # dashboard/components/model_forecast.py
 """
 The v2 model forecast of a session (forecaster/models_v2.py): the five
-nq_schema_v2 targets with their status, predicted label, full probability
+nq_schema_v2 targets and the two range regimes, with their status, predicted label, full probability
 distribution and - once the session is over and labelled - what happened.
 
 It shows the newest stored run of the chosen model for the selected day (the
@@ -28,6 +28,8 @@ TARGET_NAMES = {
     "direction_15m": "Direction · 15 min",
     "direction_rth": "Direction · RTH",
     "session_type_rth": "Session type · RTH",
+    "range_15m_regime": "Range · 15 min",
+    "range_rth_regime": "Range · RTH",
 }
 
 _MUTED = "color:#787b86"
@@ -39,6 +41,7 @@ _LABEL_COLOURS = {
     "flat": "#787b86", "neither": "#787b86", "range": "#787b86",
     "two_sided": "#ab47bc", "two_sided_volatile": "#ab47bc", "reversal": "#ffa726",
     "mixed": "#5c6bc0",
+    "wide": "#ffa726", "narrow": "#78909c",
 }
 _STATUS_COLOURS = {"issued": "#d1d4dc", "abstained": "#ffa726", "unavailable": "#787b86"}
 

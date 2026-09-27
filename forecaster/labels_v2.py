@@ -11,12 +11,24 @@ ATR14 through the previous session), and the opening labels use the snapshot's
 frozen overnight extremes - post-open bars never redefine them.
 
   METRIC_VERSION  nq_outcome_metrics_v3: section 10, first-move barrier 0.10 A.
-  LABEL_VERSION   nq_labels_v3_candidate: the five targets of section 8, with the
+  LABEL_VERSION   nq_labels_v4_candidate: the five targets of section 8, with the
                   section 11 thresholds retuned on the 248 labelled NQ sessions
-                  stored by 2026-09-25 (``nq_forecast_v2.py label-study``). Each
-                  target's vocabulary is registered in forecast.label_definitions;
-                  the database checks predictions and realised labels against
-                  that one row.
+                  stored by 2026-09-25 (``nq_forecast_v2.py label-study``), plus
+                  two range-regime targets. Each target's vocabulary is
+                  registered in forecast.label_definitions; the database checks
+                  predictions and realised labels against that one row.
+
+Range regime (nq_labels_v4_candidate): ``range_15m_regime`` and
+``range_rth_regime`` are 'wide' when the session's range_15m_atr /
+range_rth_atr exceeds the median of the same metric over the previous 40
+sessions that have it, else 'narrow'; fewer than 40 earlier values make the
+label ineligible (insufficient_history). Those values are the stored metrics
+of earlier sessions, so the threshold is known before the session opens. The
+pre-open features say nothing about direction but relate robustly to the range
+(``nq_forecast_v2.py metric-study``: Spearman 0.3-0.45 with the overnight
+volume ratio, relative 1m ATR, overnight and prior ranges and VIX; for the
+15-minute label a logistic fit on volatility inputs gained 0.066 nats per
+session out of sample). The other five targets are as in nq_labels_v3_candidate.
 
 The section 11 starting values (nq_labels_v2_candidate) labelled 69 % of
 openings and 65 % of sessions 'mixed' and left 15 % of first moves ambiguous
@@ -53,10 +65,10 @@ ONE_MIN = timedelta(minutes=1)
 RTH_END = time(16, 0)   # the full-RTH targets' window end, whatever the scheduled close
 
 METRIC_VERSION = "nq_outcome_metrics_v3"
-LABEL_VERSION = "nq_labels_v3_candidate"
+LABEL_VERSION = "nq_labels_v4_candidate"
 
 LABEL_STATUSES = ("valid", "missing_bars", "ambiguous_intrabar", "incomplete_window",
-                  "shortened_session", "not_yet_available", "invalid_reference")
+                  "shortened_session", "not_yet_available", "invalid_reference", "insufficient_history")
 
 # Section 11 rules with thresholds set from the realised label mix (see the module
 # docstring); issue a new LABEL_VERSION after any change.
@@ -79,6 +91,11 @@ PARAMETERS = {
         "trend": {"r_abs_min": 0.40, "q_bull_min": 0.75, "q_bear_max": 0.25, "e_min": 0.15},
         "two_sided_volatile": {"w_min": 0.90, "u_min": 0.25, "d_min": 0.25},
         "range": {"w_max": 0.80, "r_abs_max": 0.25},
+    },
+    "range_regime": {
+        "median_window": 40,
+        "rule": "wide if the metric > the median of its values over the previous median_window sessions "
+                "(one snapshot per session, same metric version), else narrow",
     },
     "window_coverage": "every one-minute bar of the window is required",
     "early_close": "full-RTH targets are ineligible (shortened_session); opening targets stay eligible",
@@ -126,7 +143,25 @@ TARGETS: Dict[str, Dict[str, Any]] = {
                       "u>=0.25, d>=0.25; range w<=0.80 and |r|<=0.25; else mixed. Ineligible on early-close "
                       "sessions.",
     },
+    "range_15m_regime": {
+        "labels": ("wide", "narrow"),
+        "window_minutes": 15,
+        "definition": "range_15m_atr over [09:30, 09:45) vs the median of range_15m_atr over the previous "
+                      "40 sessions that have it: wide if greater, else narrow; fewer than 40 earlier values: "
+                      "ineligible (insufficient_history).",
+    },
+    "range_rth_regime": {
+        "labels": ("wide", "narrow"),
+        "window_minutes": None,
+        "definition": "range_rth_atr over [09:30, 16:00) vs the median of range_rth_atr over the previous 40 "
+                      "sessions that have it (early closes have none): wide if greater, else narrow; fewer "
+                      "than 40 earlier values: ineligible (insufficient_history). Ineligible on early-close "
+                      "sessions.",
+    },
 }
+
+# Range-regime target -> the metric it compares with its trailing median.
+RANGE_TARGETS = {"range_15m_regime": "range_15m_atr", "range_rth_regime": "range_rth_atr"}
 
 # Metric groups by the window they need; a group's metrics are all null when its
 # window is incomplete.
@@ -398,10 +433,40 @@ def label_session_type(m, st, params=None):
     ])
 
 
+def range_reference(history: Optional[Dict[str, List[float]]],
+                    params: Optional[Dict[str, Any]] = None) -> Dict[str, Optional[float]]:
+    """
+    The range-regime thresholds: per RANGE_TARGETS metric, the median of its
+    ``median_window`` most recent earlier values (``history[metric]``, newest
+    first), or None with fewer.
+    """
+    window = int((params or PARAMETERS)["range_regime"]["median_window"])
+    out: Dict[str, Optional[float]] = {}
+    for metric in RANGE_TARGETS.values():
+        vals = [v for v in (history or {}).get(metric, []) if v is not None][:window]
+        out[metric] = float(pd.Series(vals).median()) if len(vals) == window else None
+    return out
+
+
+def label_range_regime(m, st, metric, reference):
+    bad = _need(m, st, (metric,))
+    if bad:
+        return None, bad
+    if reference is None:
+        return None, "insufficient_history"
+    return ("wide" if m[metric] > reference else "narrow"), None
+
+
 def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session,
-                   params: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """{target_id: {'label', 'status', 'window_start_at', 'window_end_at', 'available_at'}}."""
+                   params: Optional[Dict[str, Any]] = None,
+                   reference: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Dict[str, Any]]:
+    """
+    {target_id: {'label', 'status', 'window_start_at', 'window_end_at', 'available_at'}}.
+    ``reference`` holds the range-regime thresholds (``range_reference``); without
+    it the range-regime labels are insufficient_history.
+    """
     params = params or PARAMETERS
+    reference = reference or {}
     out = {}
     for target, d in TARGETS.items():
         end = (s.rth_open_at + d["window_minutes"] * ONE_MIN if d["window_minutes"]
@@ -418,6 +483,8 @@ def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session,
             bad = _need(m, st, ("return_rth_atr",))
             label, why = (None, bad) if bad else (
                 label_direction(m["return_rth_atr"], params["direction_rth_band_atr"]), None)
+        elif target in RANGE_TARGETS:
+            label, why = label_range_regime(m, st, RANGE_TARGETS[target], reference.get(RANGE_TARGETS[target]))
         elif target == "opening_type_15m":
             label, why = label_opening_type(m, st, params)
         else:
@@ -428,11 +495,15 @@ def compute_labels(m: Dict[str, Any], st: Dict[str, str], s: cal.Session,
     return out
 
 
-def compute_outcome(md, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def compute_outcome(md, snapshot: Dict[str, Any],
+                    history: Optional[Dict[str, List[float]]] = None) -> Dict[str, Any]:
     """
     Metrics and labels for one stored snapshot (a dict from forecast_store).
+    ``history`` holds the earlier sessions' range metrics, newest first
+    (``forecast_store.trailing_metric_values``), for the range-regime labels.
     Returns {'metrics', 'metric_status', 'available_at', 'digest', 'labels':
-    {target_id: {'label', 'status', 'window_start_at', 'window_end_at', 'available_at'}}}.
+    {target_id: {'label', 'status', 'window_start_at', 'window_end_at', 'available_at',
+    and for the range-regime targets 'digest' (the session digest plus the threshold)}}}.
     """
     s = cal.session(snapshot["session_date"])
     ref = snapshot["reference_values"]
@@ -441,8 +512,13 @@ def compute_outcome(md, snapshot: Dict[str, Any]) -> Dict[str, Any]:
     df, digest, _ = md.bars(cid, s.rth_open_at, s.scheduled_close_at)
     digest = hashlib.sha256(f"{digest}|A={A!r}|ONH={ONH!r}|ONL={ONL!r}".encode()).hexdigest()[:24]
     res = compute_metrics(df, s, A, ONH, ONL)
+    reference = range_reference(history)
+    labels = compute_labels(res["metrics"], res["status"], s, reference=reference)
+    for target, metric in RANGE_TARGETS.items():
+        labels[target]["digest"] = hashlib.sha256(
+            f"{digest}|{metric}_median={reference[metric]!r}".encode()).hexdigest()[:24]
     return {"metrics": res["metrics"], "metric_status": res["status"], "available_at": s.scheduled_close_at,
-            "digest": digest, "labels": compute_labels(res["metrics"], res["status"], s)}
+            "digest": digest, "labels": labels}
 
 
 def session_finalised(snapshot: Dict[str, Any], now, settle: timedelta = timedelta(hours=2)) -> bool:

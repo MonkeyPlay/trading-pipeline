@@ -12,8 +12,8 @@ The v2 NQ opening-forecast pipeline (docs/forecast_contract_v2.md).
     python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25
     python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25
 
-Forecasts come from the trained scikit-learn model (nq_sklearn_v4, the default)
-or the climatology baseline (nq_climatology_v4); ``--model`` takes one or a
+Forecasts come from the trained scikit-learn model (nq_sklearn_v5, the default)
+or the climatology baseline (nq_climatology_v5); ``--model`` takes one or a
 comma-separated list. No language model or external API is called.
 
 Every command registers the feature, label and model definitions first; a
@@ -112,14 +112,17 @@ def record_outcomes(conn, md, snapshot, now=None):
     now = now or datetime.now(timezone.utc)
     if not labels_v2.session_finalised(snapshot, now):
         return False
-    out = labels_v2.compute_outcome(md, snapshot)
+    history = store.trailing_metric_values(
+        conn, labels_v2.METRIC_VERSION, snapshot["feature_version"], str(snapshot["session_date"]),
+        list(labels_v2.RANGE_TARGETS.values()), labels_v2.PARAMETERS["range_regime"]["median_window"])
+    out = labels_v2.compute_outcome(md, snapshot, history)
     mrev, _ = store.save_outcome_metrics(conn, snapshot["snapshot_id"], labels_v2.METRIC_VERSION,
                                          out["metrics"], out["metric_status"], out["available_at"],
                                          out["digest"])
     for target, o in out["labels"].items():
         rev, created = store.save_realised_outcome(
             conn, snapshot["snapshot_id"], labels_v2.LABEL_VERSION, target, o["label"],
-            None if o["label"] is not None else o["status"], o["available_at"], out["digest"],
+            None if o["label"] is not None else o["status"], o["available_at"], o.get("digest", out["digest"]),
             labels_v2.METRIC_VERSION, mrev, o["window_start_at"], o["window_end_at"])
         if created and rev > 1:
             logger.warning(f"{snapshot['session_date']} {target}: outcome revised to revision {rev} "
