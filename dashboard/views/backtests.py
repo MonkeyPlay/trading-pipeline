@@ -3,10 +3,15 @@
 Backtests: how each forecast has done, every one against a simple guess on the
 same sessions, so skill can be told from luck.
 
-  First hour forecast      forecaster/first_hour.backtest - walk-forward over the
-                           stored pre-open snapshots: the first-hour range (two
-                           estimators) against the usual range, the opening-range
-                           break against the base rates, and the fan's coverage.
+  Range nowcast            forecaster/range_nowcast.backtest - walk-forward over every
+                           complete session: the range still to come before 09:45,
+                           10:30 and 16:00, at every grid minute, against the usual
+                           range at that minute, and how often its bands held.
+  First hour forecast      forecaster/first_hour.backtest - the pre-open-match forecast
+  (pre-open matches)       the range nowcast replaced, kept for comparison: the
+                           first-hour range (two estimators) against the usual range,
+                           the opening-range break against the base rates, and the
+                           fan's coverage.
   Opening scenario         forecaster/analogue.backtest - walk-forward: the first-hour
   generator                up / flat / down probabilities and the bias against the
                            base rates.
@@ -15,8 +20,8 @@ same sessions, so skill can be told from luck.
                            (forecaster/scoring_v2.paired_comparison), from the
                            outcomes recorded so far.
 
-The same numbers as ``nq_forecast_v2.py first-hour-backtest``, ``scenario-backtest``
-and ``evaluate``. Each section runs when the page opens and again on Rerun.
+The same numbers as ``nq_forecast_v2.py range-backtest``, ``first-hour-backtest``,
+``scenario-backtest`` and ``evaluate``. Each section runs when the page opens and again on Rerun.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from typing import Any, Callable, Dict, List
 from nicegui import run, ui
 
 from database import forecast_store as store
-from forecaster import analogue, first_hour, models_v2, scoring_v2
+from forecaster import analogue, first_hour, models_v2, range_nowcast, scoring_v2
 
 _MUTED = "color:#787b86"
 _VERDICT_SLOT = '''
@@ -50,6 +55,11 @@ def verdict(gain: float, se: float) -> str:
 def _row(key: str, label: str, s: Dict[str, float], fmt: str = "{:.4f}") -> Dict[str, Any]:
     return {"key": key, "test": label, "forecast": fmt.format(s["model"]), "simple": fmt.format(s["base"]),
             "gain": f"{s['gain']:+.4f} ± {s['gain_se']:.4f}", "verdict": verdict(s["gain"], s["gain_se"])}
+
+
+def range_nowcast_rows(r: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [_row(key, f"{hr['label']}: still to come, |log error|", hr["error"])
+            for key, hr in r["horizons"].items()]
 
 
 def first_hour_rows(r: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -139,6 +149,25 @@ def show_backtests_page(conn) -> None:
                  "than two standard errors - anything less is not distinguishable from luck.").classes(
             "text-sm").style(_MUTED)
 
+        def render_nowcast(r):
+            if not r["sessions"]:
+                need = range_nowcast.USUAL_SESSIONS + range_nowcast.MIN_TRAIN + range_nowcast.MIN_SCENARIOS
+                ui.label(f"No sessions to score yet: the nowcast needs {need} complete sessions of history."
+                         ).style(_MUTED)
+                return
+            ui.label(f"{r['sessions']} sessions from {r['first_day']}, every grid minute of each horizon. Simple "
+                     f"guess: the usual range still to come at the same minute (the median of the previous "
+                     f"{range_nowcast.USUAL_SESSIONS} sessions).").classes("text-xs").style(_MUTED)
+            _table(range_nowcast_rows(r))
+            for hr in r["horizons"].values():
+                cov, e = hr["coverage"], hr["error"]
+                ui.label(f"{hr['label']}: typical miss {range_nowcast.typical_miss(e['model'])} against "
+                         f"{range_nowcast.typical_miss(e['base'])}; inside the 50 % / 80 % bands (ideal 50 % / "
+                         f"80 %): still to come {cov['remaining']['50'] * 100:.0f} % / "
+                         f"{cov['remaining']['80'] * 100:.0f} %, final range {cov['final']['50'] * 100:.0f} % / "
+                         f"{cov['final']['80'] * 100:.0f} %, closing price {cov['close']['50'] * 100:.0f} % / "
+                         f"{cov['close']['80'] * 100:.0f} %").classes("text-sm")
+
         def render_first_hour(r):
             if not r["sessions"]:
                 ui.label("No sessions to score yet: backfill the NQ history first.").style(_MUTED)
@@ -168,8 +197,13 @@ def show_backtests_page(conn) -> None:
                    + _COLUMNS[1:])
 
         sections = [
-            _Section("First hour forecast · 09:30–10:30",
-                     "The card on the Session Explorer, replayed walk-forward on every stored NQ session.",
+            _Section("Range nowcast",
+                     "The Session Explorer's nowcast of the range still to come, replayed walk-forward on every "
+                     "complete NQ session.",
+                     lambda: range_nowcast.backtest(range_nowcast.load_history(conn, "NQ")), render_nowcast),
+            _Section("First hour forecast from pre-open matches · 09:30–10:30",
+                     "The forecast the range nowcast replaced, replayed walk-forward on every stored NQ session - "
+                     "kept for comparison.",
                      lambda: first_hour.backtest(conn, "NQ"), render_first_hour),
             _Section("Opening scenario generator",
                      "The analogue forecast of the first hour, replayed walk-forward.",

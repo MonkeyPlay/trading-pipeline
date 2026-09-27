@@ -29,8 +29,11 @@ with one short historical request per instrument right after it ends; that
 
 Run it before the open, next to the forecast (both in New York time):
 
-    python -m collector.live_stream                      # all collected symbols, until 09:31 ET
-    python -m collector.live_stream --symbol NQ,ES --until 16:15 --confirm-at 09:28,15:59
+    python -m collector.live_stream                      # all collected symbols, until 16:15 ET
+    python -m collector.live_stream --symbol NQ,ES --until 09:31 --confirm-at 09:28,15:59
+
+It runs through the session by default so the dashboard's range nowcast can
+follow it minute by minute; ``--until 09:31`` is enough for the v2 forecast alone.
 
 It uses its own IB client id (IB_CLIENT_ID + 1 by default) so it can run
 alongside the historical collector.
@@ -375,7 +378,7 @@ def main(argv=None):
                         help="IB client id (default IB_CLIENT_ID + 1, so the collector can run too)")
     parser.add_argument("--symbol", default=",".join(Config.collect_symbols()),
                         help="Comma-separated symbols (default: SYMBOLS plus CONTEXT_SYMBOLS)")
-    parser.add_argument("--until", default="09:31", help="ET time (HH:MM) to stop streaming")
+    parser.add_argument("--until", default="16:15", help="ET time (HH:MM) to stop streaming")
     parser.add_argument("--confirm-at", default="09:28",
                         help="Comma-separated ET bar starts (HH:MM) to re-read once finished; '' for none")
     parser.add_argument("--duration", default="3600 S",

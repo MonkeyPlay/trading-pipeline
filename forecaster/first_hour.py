@@ -340,6 +340,29 @@ def calibrated_fan(fan: Dict[int, np.ndarray], fan80: float, fan50: float) -> Di
 # Dashboard
 # --------------------------------------------------------------------------
 
+def matches_with_first_hour(ranked: List[Dict[str, Any]], day: str, hours: Dict[str, FirstHour],
+                            n: int = SHOWN_MATCHES) -> List[Dict[str, Any]]:
+    """
+    The ``n`` closest of ``ranked`` (``analogue.rank_preopen``, closest first)
+    before ``day`` with a stored first hour - the matches offered for overlay -
+    as {'match_date', 'similarity_score', 'distance', 'ranking'}.
+    """
+    kept = [r for r in ranked if r["session_date"] < str(day) and r["session_date"] in hours][:n]
+    return [{"match_date": r["session_date"], "similarity_score": r["similarity_score"],
+             "distance": r["distance"], "ranking": i + 1} for i, r in enumerate(kept)]
+
+
+def break_rates(hours: Dict[str, FirstHour], day: str) -> Dict[str, float]:
+    """
+    How the opening range broke by 10:30 over the sessions before ``day``:
+    'any', and the first break 'above' / 'below' / 'none' (add-one smoothed),
+    with 'n' sessions - the usual rates, as the side has not been predictable.
+    """
+    earlier = [h.first_break for d, h in hours.items() if d < str(day)]
+    base = _freq(earlier, alpha=1.0)
+    return {"any": 1 - base["none"], **base, "n": len(earlier)}
+
+
 def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=None,
             history: Optional[Dict[str, Any]] = None, k: int = K) -> Dict[str, Any]:
     """
@@ -362,10 +385,7 @@ def outlook(conn, symbol: str, day: str, target_v1: Dict[str, Any], v1_history=N
         prev, gap = finite(target_v1.get("previous_rth_close")), finite(target_v1.get("gap"))
         anchor = prev + gap if prev is not None and gap is not None else prev
     fc = forecast(day, [r["session_date"] for r in found["ranked"]], hours, anchor, k)
-    matches = [{"match_date": r["session_date"], "similarity_score": r["similarity_score"],
-                "distance": r["distance"], "ranking": i + 1}
-               for i, r in enumerate([r for r in found["ranked"] if r["session_date"] < day
-                                      and r["session_date"] in hours][:SHOWN_MATCHES])]
+    matches = matches_with_first_hour(found["ranked"], day, hours)
     out = {"forecast": fc, "actual": hours.get(day), "method": found["method"], "pool": found["pool"],
            "calibration": None, "range": None, "fan": None, "breaks": None, "matches": matches}
     if fc is None:

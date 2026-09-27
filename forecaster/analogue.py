@@ -8,7 +8,8 @@ Matching
     NQ: the stored point-in-time snapshots (features/catalogue.py
     FEATURE_VERSION) of every earlier NQ session, whatever contract it traded
     on, compared on MATCH_FEATURES - the pre-open volatility inputs the trained
-    model uses (models_v2.VOL_FEATURES) plus the signed gap in ATR. The target
+    model uses (models_v2.VOL_FEATURES) but for the two snapshots almost never
+    have (NEVER_AVAILABLE), plus the signed gap in ATR. The target
     session's own snapshot is read from the store, or reconstructed from the
     stored bars (and stored) when there is none.
     Other instruments (no v2 snapshots): gap and overnight range in units of one
@@ -62,8 +63,12 @@ from matching.normalizer import rank_analogues, v1_match_vector
 
 K = 10
 V2_SYMBOL = "NQ"
-MATCH_FEATURES = list(models_v2.VOL_FEATURES) + ["gap_signed_atr"]
-MIN_V2_DIMS = 6                  # of the 11 inputs, both sides must have at least this many
+# Pre-open inputs a snapshot almost never has: VXN may print in RTH only (no pre-open
+# level), and the 63-session ATR of daily_volatility_ratio needs more history than IB
+# serves. They only ever entered a distance on the few days that had them.
+NEVER_AVAILABLE = ("daily_volatility_ratio", "vxn_level")
+MATCH_FEATURES = [f for f in models_v2.VOL_FEATURES if f not in NEVER_AVAILABLE] + ["gap_signed_atr"]
+MIN_V2_DIMS = 6                  # of the 9 inputs, both sides must have at least this many
 MIN_V2_POOL = 20                 # fewer comparable stored snapshots: match on the v1 features instead
 V1_KEYS = ["gap_sigma", "overnight_range_sigma"]
 HOUR = pd.Timedelta(minutes=60)

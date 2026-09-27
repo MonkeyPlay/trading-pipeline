@@ -215,6 +215,53 @@ def opening_window_bars(conn: Database, symbol: str, minutes: int = 30, interval
     ).fetchall()
 
 
+def active_contract_bars(conn: Database, symbol: str, interval: str = "1m",
+                         price_type: str = "TRADES") -> List[Row]:
+    """
+    Every stored bar of ``symbol`` on the contract that was active each day
+    (``active_contracts``), from the Globex open (18:00 ET the evening before) to
+    16:00 ET: trading_day, contract_id, timestamp_utc, OHLC and volume, in time
+    order. One query for the whole history (the range nowcast).
+    """
+    return conn.execute(
+        "SELECT a.trading_day, a.contract_id, b.timestamp_utc, b.open, b.high, b.low, b.close, b.volume "
+        "  FROM active_contracts a "
+        "  JOIN bars b ON b.contract_id = a.contract_id AND b.trading_day = a.trading_day "
+        " WHERE a.symbol = %s AND b.interval = %s AND b.price_type = %s "
+        "   AND b.timestamp_utc < (a.trading_day + TIME '16:00') AT TIME ZONE 'America/New_York' "
+        " ORDER BY a.trading_day, b.timestamp_utc;",
+        (symbol, interval, price_type),
+    ).fetchall()
+
+
+def preopen_levels(conn: Database, contract_id: int, fresh_minutes: int = 20,
+                   trading_day: Optional[str] = None, interval: str = "1m",
+                   price_type: str = "TRADES") -> List[Row]:
+    """
+    Per trading day of one contract (a cash index such as VIX): ``pre``, the
+    close of its last bar starting in the ``fresh_minutes`` before 09:29 ET (None
+    when it did not print then), and ``last``, the day's last close.
+    ``trading_day`` limits it to one day.
+    """
+    day_filter = "AND b.trading_day = %s " if trading_day else ""
+    params = [int(fresh_minutes), int(contract_id), interval, price_type]
+    if trading_day:
+        params.append(_validate_day(trading_day))
+    return conn.execute(
+        "SELECT b.trading_day, "
+        "       (array_agg(b.close ORDER BY b.timestamp_utc DESC) FILTER ("
+        "            WHERE b.timestamp_utc < c.cutoff AND b.timestamp_utc >= c.cutoff - make_interval(mins => %s)"
+        "       ))[1] AS pre, "
+        "       (array_agg(b.close ORDER BY b.timestamp_utc DESC))[1] AS last "
+        "  FROM bars b "
+        "  CROSS JOIN LATERAL (SELECT (b.trading_day + TIME '09:29') AT TIME ZONE 'America/New_York' AS cutoff) c "
+        " WHERE b.contract_id = %s AND b.interval = %s AND b.price_type = %s "
+        f"  {day_filter}"
+        " GROUP BY b.trading_day ORDER BY b.trading_day;",
+        tuple(params),
+    ).fetchall()
+
+
 def list_session_days(conn: Database, symbols: List[str], interval: str = "1m", price_type: str = "TRADES",
                       limit: int = 1000) -> List[str]:
     """Trading days on which any contract of ``symbols`` holds bars, newest first."""
