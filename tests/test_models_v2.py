@@ -142,7 +142,7 @@ def test_distributions_are_complete_and_argmax(store, fitted_cache):
         best = max(labels, key=lambda lab: (p["probabilities"][lab], -labels.index(lab)))
         assert p["predicted_label"] == best
     assert run["calibration"]["training"]["direction_15m"]["n"] == 260
-    assert run["model_version"] == "nq_sklearn_v2" and run["calibration_version"] is None
+    assert run["model_version"] == "nq_sklearn_v3" and run["calibration_version"] is None
 
 
 def test_invalid_required_input_is_unavailable(store, fitted_cache):
@@ -222,7 +222,7 @@ def test_registry_records_are_hashable_and_distinct():
     recs = [models_v2.registry_record(m) for m in models_v2.MODELS.values()]
     assert len({r["definition_hash"] for r in recs}) == len(recs)
     assert all("kind" not in r for r in recs)
-    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v2"
+    assert models_v2.DEFAULT_MODEL == "nq_sklearn_v3"
 
 
 def test_feature_models_need_enough_history(store):
@@ -242,12 +242,14 @@ def test_feature_models_need_enough_history(store):
 
 def test_selection_margin_is_recorded(store, fitted_cache):
     fitted = _fit(store, fitted_cache)
+    sel = models_v2.SKLEARN["parameters"]["selection"]
     for t, tf in fitted["targets"].items():
         assert tf["selection_reason"]
         for name, sc in tf["cv"].items():
             if name != "prior":
                 assert {"gain_vs_prior", "gain_se", "beats_prior"} <= set(sc)
-                assert sc["beats_prior"] == (sc["gain_vs_prior"] > max(0.005, sc["gain_se"]))
+                assert sc["beats_prior"] == (
+                    sc["gain_vs_prior"] > max(sel["min_gain_nats"], sel["gain_se_multiple"] * sc["gain_se"]))
     report = models_v2.training_report(fitted)
     import json
     json.dumps(report, allow_nan=False)

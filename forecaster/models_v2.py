@@ -12,7 +12,7 @@ predicts, its targets, its *required features* (which decide the run's
 explicit feature allowlist, the preprocessing, the candidate estimators and the
 selection rule, so training and inference are identical by construction.
 
-``nq_sklearn_v2``
+``nq_sklearn_v3``
     Trained walk-forward: to forecast session D it fits only on earlier sessions
     whose realised label was knowable before D's cutoff (and, live, already
     computed). Per target, every candidate - the class prior, sparse (L1) and L2
@@ -26,8 +26,11 @@ selection rule, so training and inference are identical by construction.
     sample. So a feature model is considered only from 120 training sessions,
     with at least 3 validation folds, and it must beat the prior on the same
     validation sessions by more than ``min_gain_nats`` and more than
-    ``gain_se_multiple`` standard errors of the per-session gain; otherwise the
-    prior is kept. (nq_sklearn_v1 took any improvement from 60 sessions on.)
+    ``gain_se_multiple`` (2) standard errors of the per-session gain; otherwise
+    the prior is kept. (nq_sklearn_v1 took any improvement from 60 sessions on.
+    nq_sklearn_v2 asked for one standard error: in a 248-session NQ backfill it
+    admitted a feature model on 48 sessions, every time at 1.1-1.6 SE, a different
+    candidate at nearly every refit, and those forecasts lost to the prior.)
 
 ``nq_climatology_v3``
     Laplace-smoothed label frequencies over earlier sessions - the baseline.
@@ -109,7 +112,7 @@ CLIMATOLOGY = {
 }
 
 SKLEARN = {
-    "model_version": "nq_sklearn_v2",
+    "model_version": "nq_sklearn_v3",
     "kind": "sklearn",
     "feature_version": catv2.FEATURE_VERSION,
     "label_version": labels_v2.LABEL_VERSION,
@@ -144,7 +147,7 @@ SKLEARN = {
         "selection": {
             "metric": "log_loss", "cv": "TimeSeriesSplit", "n_splits": 5, "min_fold_train_sessions": 40,
             "min_sessions_for_features": 120, "min_cv_folds": 3,
-            "min_gain_nats": 0.005, "gain_se_multiple": 1.0,
+            "min_gain_nats": 0.005, "gain_se_multiple": 2.0,
             "rule": "the prior (the first candidate) is kept unless a feature candidate, with at least "
                     "min_sessions_for_features training sessions and min_cv_folds folds, lowers the "
                     "validation log loss relative to the prior on the same sessions by more than "

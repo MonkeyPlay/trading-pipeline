@@ -21,7 +21,9 @@ def _row(model, day, probs, actual, status="issued", mode="historical_reconstruc
 
 def test_group_scores():
     rows = [_row("m", "d1", SHARP, "up"), _row("m", "d2", SHARP, "down"),
-            _row("m", "d3", None, None, status="unavailable", eligible=False)]
+            _row("m", "d3", None, None, status="unavailable", eligible=False),
+            # an older run of d1 (a re-run backfill) is not counted a second time
+            _row("m", "d1", UNIFORM, "up", generated="0")]
     g = sc.score_groups(rows)[0]
     assert (g["n"], g["issued"], g["unavailable"], g["ineligible"]) == (3, 2, 1, 1)
     assert g["accuracy"] == 0.5

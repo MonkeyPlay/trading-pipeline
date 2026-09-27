@@ -4,7 +4,7 @@ The current feature version is `nq_features_v3`. It has the same features as
 `nq_features_v2` and changes two parameters: the daily ATRs skip sessions without
 complete RTH data instead of needing an unbroken run of them, and the spot
 volatility indices may be up to 20 minutes old. Records of both versions stay in the
-store; models are tied to one feature version (`nq_sklearn_v2` and
+store; models are tied to one feature version (`nq_sklearn_v3` and
 `nq_climatology_v3` read `nq_features_v3`).
 
 This is the NQ pre-open contract: what a snapshot contains, when its inputs were
@@ -195,6 +195,12 @@ version.
   outcome window. Outcomes are computed two hours after the scheduled close (the
   collector's revision window).
 
+`nq_forecast_v2.py label-study --start … --end …` relabels the stored sessions (one
+snapshot each) under the current thresholds, a few candidate presets
+(`forecaster/label_study.PRESETS`) and any `--set path=value,…` variants, and prints
+each target's label mix and the quantiles of the metrics the rules read. It writes
+nothing; it is where a new label version's thresholds are chosen from.
+
 ## Models
 
 Both models see a snapshot's typed feature payload and nothing else, and are trained
@@ -203,7 +209,7 @@ label was knowable before D's cutoff (`available_at <= cutoff_at`); a live run a
 uses outcome rows that already existed when it trained. One snapshot per session is
 used (the live capture if any).
 
-**`nq_sklearn_v2`** (the default) - one scikit-learn pipeline per target:
+**`nq_sklearn_v3`** (the default) - one scikit-learn pipeline per target:
 
 - *Inputs*: an explicit allowlist of catalogue features (`SKLEARN_FEATURES`), never the
   whole snapshot. Always-null sources (`us2y_change_bps`, the spot 10y-2y curve, cash
@@ -220,7 +226,7 @@ used (the live capture if any).
   fewer than 40 training sessions skipped) on log loss. Below **120 training
   sessions** (or with fewer than 3 folds) only the prior is used. Above it, a feature
   model replaces the prior only when, on the same validation sessions, it lowers the
-  log loss by more than 0.005 nats **and** more than one standard error of the
+  log loss by more than 0.005 nats **and** more than two standard errors of the
   per-session gain; among those the lowest log loss wins (ties: the simpler one). The
   reason is recorded per target (`selection_reason`). In simulation this keeps the
   prior on pure-noise inputs while still finding a one-feature signal of 0.035 nats
@@ -256,6 +262,7 @@ python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25   
 python scripts/nq_forecast_v2.py outcomes --start 2026-06-01 --end 2026-09-25   # (re)score closed sessions
 python scripts/nq_forecast_v2.py train                                           # CV report + data/models/ artifact
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1
+python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix, alternative thresholds
 python scripts/nq_forecast_v2.py live                                            # at 09:29 ET
 ```
 
