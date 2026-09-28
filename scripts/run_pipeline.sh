@@ -31,9 +31,9 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG_FILE"; }
 log "Starting opening forecast automation..."
 
 # 0. The v2 forecast freezes its snapshot at 09:29 ET from the 09:28 bars, which only the
-# real-time streamer stores in time, and the dashboard's range nowcast follows the session
-# on the bars it stores. Start it (until 16:15 ET) unless one already runs, e.g. from its
-# own cron line; it uses its own IB client id beside the collector.
+# real-time streamer stores in time - as does the dashboard's first-hour forecast. Start it
+# (until 09:31 ET) unless one already runs, e.g. from its own cron line; it uses its own IB
+# client id beside the collector.
 if ! pgrep -f "collector.live_stream" >/dev/null; then
     log "Starting the real-time bar streamer..."
     python3 -m collector.live_stream >> "$LOG_DIR/live_stream.log" 2>&1 &

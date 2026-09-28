@@ -389,13 +389,13 @@ export default {
     // an empty candlestick series still tries to draw a last-value label and
     // throws when it has no value to show.
     if (this.show_candles) {
-      // A second, desaturated candle series for an overlaid session (the matching
-      // historical day). Created first, so the main candles draw on top of it.
+      // A second candle series, in the forecast's orange, for the generated first
+      // hour. Created first, so the main candles draw on top of it.
       this.overlay = this.chart.addSeries(lwc.CandlestickSeries, {
-        upColor: "rgba(128, 170, 164, 0.45)",
-        downColor: "rgba(186, 140, 140, 0.45)",
-        wickUpColor: "rgba(128, 170, 164, 0.45)",
-        wickDownColor: "rgba(186, 140, 140, 0.45)",
+        upColor: "rgba(255, 183, 77, 0.8)",
+        downColor: "rgba(244, 81, 30, 0.8)",
+        wickUpColor: "rgba(255, 183, 77, 0.8)",
+        wickDownColor: "rgba(244, 81, 30, 0.8)",
         borderVisible: false,
         priceLineVisible: false,
         lastValueVisible: false,

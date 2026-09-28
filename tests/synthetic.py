@@ -86,3 +86,42 @@ def make_market(last_day="2026-06-10", n_sessions=90, seed=7, drop=None, contrac
     fetched = {(cid, d): pd.Timestamp(d, tz="UTC") + pd.Timedelta(days=2)
                for cid in contracts for d in days}
     return FrameMarketData(bars, active=active, contracts=contracts, fetched_at=fetched), sessions
+
+
+def full_days(start: str, end: str):
+    """The full-schedule exchange sessions from ``start`` to ``end``, as 'YYYY-MM-DD'."""
+    return [s.session_date.isoformat() for s in cal.sessions_between(start, end) if s.schedule == "full"]
+
+
+def session_bars(days, sigmas=None, seed=0, pre_minutes=90, follow=0.0, rth=True, start_price=20000.0):
+    """
+    1-minute bars of ``days`` (trading_day, contract_id, timestamp_utc, OHLCV)
+    for the pre-open and first-hour models: ``pre_minutes`` before the open and,
+    with ``rth``, the regular session. Each day's volatility comes from
+    ``sigmas`` (default: a persistent random level), U-shaped through the
+    session; the first hour drifts ``follow`` times the day's pre-open move - a
+    planted direction signal (0: none).
+    """
+    import math
+    rng = np.random.default_rng(seed)
+    rows, price, level = [], start_price, 0.0
+    for i, d in enumerate(days):
+        s = cal.session(d)
+        level = 0.9 * level + rng.normal(0, 0.35)
+        sigma = sigmas[i] if sigmas is not None else 0.0004 * math.exp(level)
+        open_at = pd.Timestamp(s.rth_open_at).tz_convert("UTC")
+        n = int((pd.Timestamp(s.scheduled_close_at) - pd.Timestamp(s.rth_open_at)).total_seconds() // 60) if rth else 0
+        pre_open = price
+        drift = 0.0
+        for m in range(-pre_minutes, n):
+            if m == 0:
+                drift = follow * math.log(price / pre_open) / 60
+            vol = sigma * (0.5 if m < 0 else 1.0 + 0.8 * math.exp(-m / 30))
+            o = price
+            price = o * math.exp(rng.normal(drift if 0 <= m < 60 else 0.0, vol))
+            wick = abs(rng.normal(0, vol / 2))
+            rows.append({"trading_day": d, "contract_id": 1,
+                         "timestamp_utc": (open_at + pd.Timedelta(minutes=m)).strftime("%Y-%m-%d %H:%M:%S"),
+                         "open": o, "high": max(o, price) * math.exp(wick), "low": min(o, price) * math.exp(-wick),
+                         "close": price, "volume": float(rng.integers(50, 500))})
+    return pd.DataFrame(rows)

@@ -1,7 +1,7 @@
 """
 Drive the dashboard in headless Chromium and screenshot what a user sees.
 
-    python drive.py explorer|direction|backtests|live [--port 8093] [--out /tmp/dashboard-shots]
+    python drive.py explorer|direction|backtests [--port 8093] [--out /tmp/dashboard-shots]
 
 Run with a Python that has Playwright (see SKILL.md); it uses the cached
 headless Chromium under ~/.cache/ms-playwright.
@@ -9,13 +9,9 @@ headless Chromium under ~/.cache/ms-playwright.
 import argparse
 import glob
 import os
-import subprocess
 
 from playwright.sync_api import sync_playwright
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
-AS_OF = "text=/\\d\\d:\\d\\d ET/"
 
 
 def chromium() -> str:
@@ -26,35 +22,22 @@ def chromium() -> str:
     return found[-1]
 
 
-def slider_to(page, minute: float) -> None:
-    """Clicks the as-of slider's track at ``minute`` of the 390-minute session."""
-    box = page.locator(".q-slider").first.bounding_box()
-    page.mouse.click(box["x"] + box["width"] * (minute + 0.5) / 390, box["y"] + box["height"] / 2)
-    page.wait_for_timeout(2500)
-
-
-def first_hour_row(page) -> str:
-    return page.locator(".q-table tr").filter(has_text="First hour").first.inner_text().replace("\t", " | ")
-
-
 def explorer(page, url, out):
     page.goto(url + "/", timeout=180000)
-    page.wait_for_selector("text=Still to come", timeout=180000)
+    page.wait_for_selector("text=Predicted move from P", timeout=180000)
     page.wait_for_timeout(2500)
     page.screenshot(path=f"{out}/explorer.png", full_page=True)
-    print("as of", page.locator(AS_OF).first.inner_text())
     print(page.locator(".q-table").first.inner_text())
-    slider_to(page, 15)
-    print("\nafter the slider: as of", page.locator(AS_OF).first.inner_text())
-    print(page.locator(".q-table").first.inner_text())
-    page.get_by_role("button", name="Session", exact=True).click()
+    for line in page.locator("text=/Likely hour high|Walk-forward over|Scheduled today|No scheduled release/").all():
+        print(line.inner_text())
+    page.get_by_role("button", name="5m", exact=True).click()           # the generated hour at 5 minutes
     page.wait_for_timeout(2000)
-    page.screenshot(path=f"{out}/explorer_0945_session_cone.png")
+    page.screenshot(path=f"{out}/explorer_5m.png")
 
 
 def direction(page, url, out):
     page.goto(url + "/", timeout=180000)
-    page.wait_for_selector("text=Still to come", timeout=180000)
+    page.wait_for_selector("text=Predicted move from P", timeout=180000)
     header = page.locator("text=Direction forecasts · trained model and scenario generator").first
     header.scroll_into_view_if_needed()
     print("collapsed:", not page.locator("text=/Overall bias/").first.is_visible())
@@ -66,41 +49,14 @@ def direction(page, url, out):
 
 def backtests(page, url, out):
     page.goto(url + "/backtests", timeout=180000)
-    page.wait_for_selector("text=/typical miss/", timeout=300000)
+    page.wait_for_selector("text=/squared error vs no move/", timeout=300000)
     page.screenshot(path=f"{out}/backtests.png", full_page=True)
-    print(page.locator(".q-card").filter(has_text="Range nowcast").first.inner_text())
-
-
-def live(page, url, out):
-    def add(minutes):
-        subprocess.run([os.path.join(PROJECT, ".venv/bin/python"), os.path.join(HERE, "live_sim.py"), "add",
-                        str(minutes)], check=True)
-
-    def state(label):
-        follow = page.get_by_role("switch").first.get_attribute("aria-checked")
-        print(f"{label}: as of {page.locator(AS_OF).first.inner_text()} · follow live {follow}\n    {first_hour_row(page)}")
-
-    page.goto(url + "/", timeout=180000)
-    page.wait_for_selector("text=Still to come", timeout=180000)
-    page.wait_for_timeout(2000)
-    state("opened")
-    add(25)
-    page.wait_for_timeout(8000)
-    state("two minutes later")
-    slider_to(page, 10)
-    state("slider moved back")
-    add(26)
-    page.wait_for_timeout(8000)
-    state("a minute later, not following")
-    page.get_by_role("switch").first.click()
-    page.wait_for_timeout(2500)
-    state("following again")
-    page.screenshot(path=f"{out}/live.png")
+    print(page.locator(".q-card").filter(has_text="First-hour model").first.inner_text())
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("step", choices=("explorer", "direction", "backtests", "live"))
+    parser.add_argument("step", choices=("explorer", "direction", "backtests"))
     parser.add_argument("--port", type=int, default=8093)
     parser.add_argument("--out", default="/tmp/dashboard-shots")
     args = parser.parse_args()

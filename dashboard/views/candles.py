@@ -9,15 +9,13 @@ with 15 minutes either side - 09:15 to 16:15 ET, or to 13:15 on an early close -
 and draws those extra minutes grey on a grey background. The pre-open panel
 shows the feature snapshot, and the forecast panel runs the opening model
 against it - or shows the forecast already stored for that day; both mostly call
-directions, which nothing has predicted, so they are folded away. A dropdown
-overlays one of the closest pre-open matches on the same chart: a day with similar
-volatility before the open, whose path is no forecast of the day's.
+directions, which nothing has predicted, so they are folded away.
 
-The range nowcast (forecaster/range_nowcast.py) says how far the price still
-travels before 09:45, 10:30 and 16:00, drawn as a cone from the current price.
-The 'as of' slider replays it minute by minute through a past session; on a live
-session (today, with the real-time streamer storing bars) the page polls for new
-bars and, while following, moves the nowcast on with every completed minute.
+The first-hour forecast (forecaster/first_hour_model.py) is generated before the
+open by a trained model: sixty 1-minute candles for 09:30-10:30, drawn in orange
+beneath the session's on the chart, with the likely hour high and low; the card
+lists its predicted moves and ranges at 09:45, 10:00 and 10:30 - against what
+happened, on a past day - and how it has scored walk-forward.
 
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing chart. The chart is created once per page
@@ -58,8 +56,8 @@ from features.calculations import (
     calculate_vwap,
     enrich_candle_timezones,
 )
-from forecaster import first_hour, range_nowcast
-from forecaster.analogue import analogue_forecast, day_snapshot, rank_preopen, store_forecast, vix_bars
+from forecaster import first_hour_model, preopen
+from forecaster.analogue import analogue_forecast, store_forecast, vix_bars
 from forecaster.client import HORIZON as FIRST_HOUR_HORIZON
 
 _RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
@@ -195,19 +193,6 @@ def stored_forecast(row) -> Dict[str, Any]:
     return forecast
 
 
-def _previous_rth_close(conn, contract_id: int, trading_day: str) -> Optional[float]:
-    """Close of the last RTH bar of the stored session before ``trading_day``."""
-    row = conn.execute(
-        "SELECT MAX(trading_day) FROM session_days WHERE contract_id = %s AND interval = '1m' "
-        "AND price_type = 'TRADES' AND bar_count > 0 AND trading_day < %s",
-        (contract_id, trading_day),
-    ).fetchone()
-    if row is None or row[0] is None:
-        return None
-    rth = get_day_bars(conn, contract_id, str(row[0]), interval="1m", session_scope="RTH")
-    return float(rth[-1]["close"]) if rth else None
-
-
 def analogue_contracts(conn, symbol: str, match_date: str) -> List[Any]:
     """
     Contracts of ``symbol`` holding bars for ``match_date``, best first
@@ -235,77 +220,6 @@ def day_contracts(conn, symbol: str, day: str) -> List[Any]:
 
 def _contract_label(contract) -> str:
     return f"{contract['symbol']} {contract['expiry']}"
-
-
-def load_analogue_session(conn, symbol: str, match_date: str, timeframe: str = "1m") -> Dict[str, Any]:
-    """
-    A matched historical day, ready to chart in the same window as the selected
-    day: its regular session with 15 minutes either side (muted).
-
-    Bars come from the best contract holding the day (``analogue_contracts``:
-    the closest one expiring on or after it), whatever contract the forecast
-    itself was made on. Returns ``{'contract', 'bars', 'levels', 'stats',
-    'snapshot'}``: the window's bars at ``timeframe`` with session VWAP, the
-    day's own pre-open levels (previous RTH close, overnight high/low), its RTH
-    open/high/low/close, and its pre-open feature snapshot ({} when it cannot
-    be computed). ``bars`` is None when no contract holds RTH bars for the day.
-    """
-    match_date = str(match_date)
-    for contract in analogue_contracts(conn, symbol, match_date):
-        rows = get_day_bars(conn, contract["contract_id"], match_date, interval="1m")
-        if not rows:
-            continue
-        full = enrich_candle_timezones(pd.DataFrame([dict(r) for r in rows]))
-        rth = full[full["session_scope"] == "RTH"]
-        if rth.empty:
-            continue
-        pre_open = full[(full["session_scope"] == "ETH") & (full["timestamp_ny"] < rth["timestamp_ny"].iloc[0])]
-        levels = {
-            "previous_rth_close": _previous_rth_close(conn, contract["contract_id"], match_date),
-            "overnight_high": float(pre_open["high"].max()) if not pre_open.empty else None,
-            "overnight_low": float(pre_open["low"].min()) if not pre_open.empty else None,
-        }
-        # VWAP is anchored at the 18:00 ET session open like the main chart, then
-        # the same window as the main chart is shown.
-        shown = window_bars(calculate_vwap(_resample(full, timeframe)), match_date, timeframe)
-        stats = {
-            "open": float(rth["open"].iloc[0]), "high": float(rth["high"].max()),
-            "low": float(rth["low"].min()), "close": float(rth["close"].iloc[-1]), "bars": int(len(rth)),
-        }
-        return {"contract": contract, "bars": shown, "levels": levels, "stats": stats,
-                "snapshot": day_snapshot(conn, contract["contract_id"], match_date),
-                "opening_range": opening_range(full, match_date),
-                "close_0929": float(pre_open["close"].iloc[-1]) if not pre_open.empty else None}
-    return {"contract": None, "bars": None, "levels": {}, "stats": None, "snapshot": {}, "opening_range": None,
-            "close_0929": None}
-
-
-def overlay_bars(session: Optional[Dict[str, Any]], match_date: str, day: str,
-                 anchor: Optional[float]) -> Optional[pd.DataFrame]:
-    """
-    A matched session's bars placed on ``day``'s chart: shifted to the same
-    minutes from the open, and scaled so its last pre-open close (09:29) sits at
-    ``anchor``, the selected day's - its moves in percent, from where the
-    selected day stood before the open.
-    """
-    if not session or session.get("bars") is None or session["bars"].empty:
-        return None
-    base = session.get("close_0929")
-    if not base or not anchor:
-        return None
-    factor = float(anchor) / float(base)
-    shift = session_window(day)["open"] - session_window(match_date)["open"]
-    out = session["bars"][["timestamp_ny", "open", "high", "low", "close"]].copy()
-    out["timestamp_ny"] = out["timestamp_ny"] + shift
-    for col in ("open", "high", "low", "close"):
-        out[col] = out[col] * factor
-    return out
-
-
-def _analogue_label(analogue: Dict[str, Any]) -> str:
-    rank = analogue.get("ranking")
-    prefix = f"#{rank} · " if rank is not None else ""
-    return f"{prefix}{analogue['match_date']} · {analogue['similarity_score'] * 100:.1f}% match"
 
 
 def _metric(label: str, value: str, *, hint: str = "", accent: str = "#d1d4dc") -> None:
@@ -337,45 +251,25 @@ def _feature_rows(snapshot: Dict[str, Any]) -> List[tuple]:
     ]
 
 
-MATCH_COLOUR = "#8fb0ab"     # the overlaid matching day: desaturated, as its candles
-
-
-def render_features(snapshot: Dict[str, Any], match: Optional[Dict[str, Any]] = None) -> None:
-    """
-    The pre-open feature figures of one snapshot, in the current container;
-    with ``match`` (the overlaid matching day's snapshot) each figure also shows
-    the match's value beneath it.
-    """
-    rows = _feature_rows(snapshot)
-    match_rows = _feature_rows(match) if match else None
-    for i, (label, value, hint, accent) in enumerate(rows):
+def render_features(snapshot: Dict[str, Any]) -> None:
+    """The pre-open feature figures of one snapshot, in the current container."""
+    for label, value, hint, accent in _feature_rows(snapshot):
         with ui.column().classes("gap-0"):
             ui.label(label).classes("text-xs uppercase tracking-wide").style("color:#787b86")
             ui.label(value).classes("text-lg font-medium").style(f"color:{accent}")
             if hint:
                 ui.label(hint).classes("text-xs").style("color:#787b86")
-            if match_rows:
-                m_value, m_hint = match_rows[i][1], match_rows[i][2]
-                ui.label(f"match {m_value}" + (f" · {m_hint}" if m_hint else "")).classes("text-xs").style(
-                    f"color:{MATCH_COLOUR}")
 
 
-# A live session's bars are polled this often; a new minute moves the nowcast on.
-LIVE_POLL_SECONDS = 15.0
-
-_NOWCAST_COLUMNS = [
-    {"name": "horizon", "label": "Horizon", "field": "horizon", "align": "left"},
-    {"name": "so_far", "label": "Range so far", "field": "so_far", "align": "right"},
-    {"name": "remaining", "label": "Still to come", "field": "remaining", "align": "right"},
-    {"name": "band50", "label": "50 % band", "field": "band50", "align": "right"},
-    {"name": "band80", "label": "80 % band", "field": "band80", "align": "right"},
-    {"name": "usual", "label": "Usual", "field": "usual", "align": "right"},
-    {"name": "final", "label": "Final range (50 %)", "field": "final", "align": "right"},
-    {"name": "high_low", "label": "Likely high · low", "field": "high_low", "align": "right"},
+_FIRST_HOUR_COLUMNS = [
+    {"name": "at", "label": "At", "field": "at", "align": "left"},
+    {"name": "move", "label": "Predicted move from P", "field": "move", "align": "right"},
+    {"name": "price", "label": "Predicted price", "field": "price", "align": "right"},
+    {"name": "range", "label": "Predicted range from 09:30", "field": "range", "align": "right"},
+    {"name": "usual", "label": "Usual range", "field": "usual", "align": "right"},
     {"name": "actual", "label": "Actual", "field": "actual", "align": "left"},
 ]
-_INPUT_ORDER = ("prev_rth_range", "rth_range_5d", "overnight_range", "last_hour_range", "vix_vs_usual",
-                "rv_since_open", "rv_last_15m", "range_since_open")
+_ANCHOR_TIMES = {15: "09:45", 30: "10:00", 60: "10:30"}
 
 
 def _pts(v: Optional[float]) -> str:
@@ -385,66 +279,71 @@ def _pts(v: Optional[float]) -> str:
     return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.1f}"
 
 
-def nowcast_rows(nc: Dict[str, Any]) -> List[Dict[str, Any]]:
+def first_hour_rows(fc: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    A range nowcast (``range_nowcast.nowcast``) as table rows, one per horizon,
-    in points: still to come (median, 50 % and 80 % bands, the usual), the
-    final range, the likely high and low, and - once the day has held the whole
-    horizon - the actual final range against its band.
+    A generated first hour (``first_hour_model.forecast``) as table rows, one per
+    anchor: the predicted move from P and price, the predicted and usual range
+    since 09:30, and - once the day's first hour is stored - what happened.
     """
     rows = []
-    for h in nc.get("horizons", []):
-        row = {"key": h["key"], "horizon": h["label"], "so_far": "", "remaining": "", "band50": "", "band80": "",
-               "usual": "", "final": "", "high_low": "", "actual": ""}
-        actual = h.get("actual_final")
-        if h.get("status") == "unavailable":
-            row["remaining"] = h.get("reason", "unavailable")
-        elif h.get("status") == "done":
-            row["remaining"] = "over"
-            row["actual"] = f"final {_pts(actual)}" if actual is not None else ""
-        else:
-            r, f = h["remaining"], h["final"]
-            row.update(so_far=_pts(h["so_far"]) if nc["t"] else "—", remaining=_pts(r[50]),
-                       band50=f"{_pts(r[25])} – {_pts(r[75])}", band80=f"{_pts(r[10])} – {_pts(r[90])}",
-                       usual=_pts(h["usual"]), final=f"{_pts(f[50])} ({_pts(f[25])} – {_pts(f[75])})",
-                       high_low=f"{h['final_high'][50]:,.2f} · {h['final_low'][50]:,.2f}")
-            if actual is not None:
-                row["actual"] = f"final {_pts(actual)}, {range_nowcast.band_position(actual, f)}"
+    for k in first_hour_model.ANCHORS:
+        move = fc["moves"][k]
+        arrow = "▲" if move > 0 else "▼" if move < 0 else ""
+        row = {"key": k, "at": _ANCHOR_TIMES.get(k, f"+{k} min"), "move": f"{move:+,.2f} pts {arrow}".strip(),
+               "price": f"{fc['anchors'][k]:,.2f}", "range": _pts(fc["ranges"][k]), "usual": _pts(fc["usual"][k]),
+               "actual": ""}
+        actual = fc.get("actual")
+        if actual:
+            right = "right" if actual["direction_right"][k] else "wrong"
+            row["actual"] = f"{actual['moves'][k]:+,.2f} pts ({right} way), range {_pts(actual['ranges'][k])}"
         rows.append(row)
     return rows
 
 
-def describe_releases(releases: Optional[List[Dict[str, Any]]], t: int) -> tuple:
+def forecast_bars(fc: Optional[Dict[str, Any]], timeframe: str = "1m") -> Optional[pd.DataFrame]:
+    """The generated 1-minute candles, aggregated to the chart's ``timeframe``; None without a forecast."""
+    if not fc or not fc.get("available"):
+        return None
+    candles = fc["candles"]
+    if timeframe == "1m":
+        return candles
+    return (candles.set_index("timestamp_ny").resample(_RESAMPLE_FREQ[timeframe])
+            .agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna().reset_index())
+
+
+def describe_scorecard(sc: Optional[Dict[str, Any]]) -> str:
+    """How the model has scored walk-forward, in one sentence for the card."""
+    if not sc or not sc.get("sessions"):
+        return ""
+    d, r, c = sc["direction"], sc["ranges"], sc["candles"]
+    hits = " / ".join(f"{d[k]['hit_rate'] * 100:.0f} %" for k in first_hour_model.ANCHORS)
+    move = d[first_hour_model.ANCHORS[-1]]["move"]
+    learned = ("better than drawing no direction at all" if move["gain"] > 2 * move["gain_se"] else
+               "no better than drawing no direction at all, so the model keeps it small")
+    miss = first_hour_model.typical_miss
+    return (f"Walk-forward over {sc['sessions']} sessions: the direction was right {hits} at 09:45 / 10:00 / 10:30 "
+            f"(the hour went up {d[first_hour_model.ANCHORS[-1]]['up_share'] * 100:.0f} % of the time) - {learned}. "
+            f"The hour's range missed by {miss(r[first_hour_model.ANCHORS[-1]]['model'])} against "
+            f"{miss(r[first_hour_model.ANCHORS[-1]]['base'])} for the usual, each minute's size by "
+            f"{miss(c['model'])} against {miss(c['base'])}.")
+
+
+def describe_releases(releases: Optional[List[Dict[str, Any]]]) -> tuple:
     """
-    (text, warn) for the day's scheduled releases (``nowcast()['releases']``;
-    None: no calendar covers the day). ``warn`` while an FOMC decision is still
-    ahead: the forecast does not use the calendar, and FOMC afternoons have
-    often run far wider than it said.
+    (text, warn) for the day's scheduled releases (``forecast()['releases']``;
+    None: no calendar covers the day). ``warn`` when a high-tier release falls
+    inside 09:30-10:30: the model does not know about it.
     """
     if releases is None:
         return "No economic calendar covers this day (python -m database.events loads one).", False
     if not releases:
         return "No scheduled release today among those the calendar covers (FOMC, CPI, jobs, PPI, JOLTS, ISM).", False
-    text = "Scheduled today: " + " · ".join(f"{r['time']} {r['name']} ({r['tier']})" for r in releases)
-    text += " - not part of the forecast, which has shown no gain from them yet."
-    fomc_ahead = any("FOMC rate decision" in r["name"] and r["minute"] >= t for r in releases)
-    if fomc_ahead:
-        text += " FOMC afternoons have often run far wider than forecast."
-    return text, fomc_ahead
-
-
-def describe_inputs(inputs: Dict[str, Optional[float]], t: int) -> str:
-    """The main inputs as multiples of their usual ('1.27×'); those since the open once it has begun."""
-    parts = []
-    for name in _INPUT_ORDER:
-        v = inputs.get(name)
-        if v is None or (name in range_nowcast.INTRADAY_INPUTS and not t):
-            continue
-        if name == "vix_vs_usual" and inputs.get("vix_level"):
-            parts.append(f"VIX {inputs['vix_level']:.1f} ({v:.2f}×)")
-        else:
-            parts.append(f"{range_nowcast.INPUT_LABELS[name]} {v:.2f}×")
-    return " · ".join(parts)
+    inside = [r for r in releases if 0 <= r["minute"] < first_hour_model.MINUTES]
+    text = ("Scheduled today: " + " · ".join(f"{r['time']} {r['name']} ({r['tier']})" for r in releases)
+            + " - not part of the forecast")
+    if inside:
+        text += "; inside the hour: " + ", ".join(r["name"] for r in inside)
+    return text + ".", any(r["tier"] == "high" for r in inside)
 
 
 class SessionExplorer:
@@ -475,18 +374,11 @@ class SessionExplorer:
         self.day_df: Optional[pd.DataFrame] = None
         self._day_rows: List[Any] = []               # the day's stored 1-minute bars, as read
         self.opening_range: Optional[Dict[str, Any]] = None
-        # Each symbol's first hours (the overlay's matches need one; the opening-range
-        # break rates come from them) and range-nowcast history, loaded once.
-        self._first_hours: Dict[str, Dict[str, Any]] = {}
-        self._nowcast_histories: Dict[str, range_nowcast.History] = {}
-        # The range nowcast: the selected day as a nowcast session, the minute it is shown
-        # as of, whether that minute follows a live session, and the horizon the cone draws.
-        self.nowcast_day: Optional[range_nowcast.Session] = None
-        self.nowcast: Optional[Dict[str, Any]] = None
-        self.as_of = 0
-        self.follow_live = True
-        self.cone_choice = "auto"
-        self._live_signature: Optional[tuple] = None
+        # The generated first hour: each symbol's walk-forward model history and its
+        # scorecard (loaded once), and the selected day's forecast.
+        self._models: Dict[str, first_hour_model.History] = {}
+        self._scorecards: Dict[str, Dict[str, Any]] = {}
+        self.first_hour_fc: Optional[Dict[str, Any]] = None
         self.recent_bars: Optional[pd.DataFrame] = None
         self.vix_bars: Optional[pd.DataFrame] = None
         # {trading_day: last RTH close} for the whole history up to the displayed
@@ -498,13 +390,6 @@ class SessionExplorer:
         self.chart: Optional[LightweightChart] = None
         self.analogues: List[Dict[str, Any]] = []
         self.close_0929: Optional[float] = None       # the selected day's last pre-open close
-
-        # The matching historical day overlaid on the chart: the closest pre-open
-        # matches (from the first-hour outlook), the chosen one and its session.
-        self.matches: Dict[str, Dict[str, Any]] = {}
-        self.match_choice: Optional[str] = None
-        self.match_session: Optional[Dict[str, Any]] = None
-        self.matches_error: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Data loading
@@ -528,7 +413,6 @@ class SessionExplorer:
     def _set_day_bars(self, rows: List[Any]) -> None:
         """The day's own bars and what is drawn from them alone: chart bars with VWAP, opening range, 09:29 close."""
         self._day_rows = list(rows)
-        self._live_signature = (len(rows), str(rows[-1]["timestamp_utc"])) if rows else None
         self.opening_range = None
         self.close_0929 = None
         if not rows:
@@ -612,7 +496,7 @@ class SessionExplorer:
         """
         Sends the current state to the chart. ``reset_view`` (a new day) shows
         the default window, 09:15 to 10:45; otherwise the window being looked at
-        is kept (a timeframe or match change).
+        is kept (a timeframe change).
         """
         if self.chart is None:
             return
@@ -621,237 +505,72 @@ class SessionExplorer:
                               "overlay_candles": []})
             return
         w = session_window(self.date)
-        overlay = overlay_bars(self.match_session, self.match_choice, self.date, self.close_0929)
+        fc = self.first_hour_fc or {}
+        forecast = ({"candles": forecast_bars(fc, self.timeframe), "high": fc["likely_high"], "low": fc["likely_low"],
+                     "label": "First-hour forecast, generated before the open (dashed: likely hour high / low)"}
+                    if fc.get("available") else None)
         spec = build_chart_spec(
             window_bars(self.day_df, self.date, self.timeframe), features=self.snapshot,
-            opening_range=self.opening_range, cone=self._cone(), overlay=overlay,
+            opening_range=self.opening_range, forecast=forecast,
             visible_range=(w["start"], w["open"] + pd.Timedelta(minutes=75)) if reset_view else None,
             keep_view=not reset_view,
         )
-        if overlay is not None:
-            spec["legend"].append({"key": "overlay", "label": f"Match {self.match_choice} (scaled to the 09:29 close)",
-                                   "color": MATCH_COLOUR})
         self.chart.apply(spec)
 
     # ------------------------------------------------------------------
-    # Range nowcast
+    # The generated first hour
     # ------------------------------------------------------------------
 
-    def _hours(self, symbol: str) -> Dict[str, Any]:
-        """Every stored first hour of ``symbol`` (forecaster/first_hour.load_first_hours), loaded once."""
-        if symbol not in self._first_hours:
-            self._first_hours[symbol] = first_hour.load_first_hours(self.conn, symbol)
-        return self._first_hours[symbol]
-
-    def _compute_matches(self) -> None:
-        """The closest pre-open matches with a first hour, offered for the overlay; the closest is chosen."""
-        symbol = self.contract["symbol"]
-        self.matches_error = None
-        try:
-            found = rank_preopen(self.conn, symbol, self.date, self.snapshot, self._v1_history)
-            matches = first_hour.matches_with_first_hour(found["ranked"], self.date, self._hours(symbol))
-        except Exception as e:  # noqa: BLE001 - the page must still load; the match row says why
-            matches, self.matches_error = [], str(e)
-        self.matches = {m["match_date"]: m for m in matches}
-        self.match_choice = matches[0]["match_date"] if matches else None
-
-    def _is_live(self) -> bool:
-        """The selected day is today (New York) and its session, with the 15 minutes after it, is not over."""
-        now = pd.Timestamp.now(tz=_NY)
-        return self.date == now.strftime("%Y-%m-%d") and now < session_window(self.date)["end"]
-
-    def _compute_nowcast(self) -> None:
-        """The selected day as a nowcast session (from the shown contract's bars), and its nowcast."""
+    def _compute_first_hour(self) -> None:
+        """The selected day's generated first hour, from its pre-open on the shown contract."""
         symbol = self.contract["symbol"]
         try:
-            if symbol not in self._nowcast_histories:
-                self._nowcast_histories[symbol] = range_nowcast.load_history(self.conn, symbol)
-            self.nowcast_day = range_nowcast.day_session(self.conn, self._day_rows, self._nowcast_histories[symbol])
-            self._update_nowcast()
+            if symbol not in self._models:
+                self._models[symbol] = first_hour_model.load_history(self.conn, symbol)
+                self._scorecards[symbol] = first_hour_model.scorecard(self._models[symbol])
+            day = preopen.day_session(self.conn, self._day_rows)
+            self.first_hour_fc = (first_hour_model.forecast(self._models[symbol], day) if day is not None
+                                  else {"available": False, "reason": "no bars stored for the day"})
         except Exception as e:  # noqa: BLE001 - the page must still load; the card says why
-            self.nowcast_day = None
-            self.nowcast = {"available": False, "reason": str(e), "horizons": []}
+            self.first_hour_fc = {"available": False, "reason": str(e)}
 
-    def _update_nowcast(self) -> None:
-        """The nowcast at ``as_of`` - on a live session followed, its latest minute."""
-        day = self.nowcast_day
-        if day is None:
-            self.nowcast = {"available": False, "reason": "no bars stored for the day yet", "horizons": []}
-            return
-        if self.follow_live and self._is_live():
-            self.as_of = day.held
-        self.as_of = max(0, min(int(self.as_of), day.held, day.minutes))
-        self.nowcast = range_nowcast.nowcast(self._nowcast_histories[self.contract["symbol"]], day, self.as_of)
-
-    def _clock(self, t: int) -> str:
-        """Minute ``t`` of the selected day's session as its New York time, 'HH:MM'."""
-        return (session_window(self.date)["open"] + pd.Timedelta(minutes=int(t))).strftime("%H:%M")
-
-    def _cone(self) -> Optional[Dict[str, Any]]:
-        """The cone to draw: the chosen horizon (by default the first hour, then the session) while it is open."""
-        nc = self.nowcast or {}
-        if not nc.get("available"):
-            return None
-        rows = {h["key"]: h for h in nc["horizons"]}
-        key = self.cone_choice if self.cone_choice != "auto" else ("first_hour" if nc["t"] < 60 else "session")
-        row = rows.get(key)
-        if row is None or row.get("status") != "open":
-            return None
-        return {"open": session_window(self.date)["open"], "t": nc["t"], "end": row["end"], "price": nc["price"],
-                "bar_minutes": _BAR_MINUTES.get(self.timeframe, 1), "prices": row["cone"],
-                "label": f"Range nowcast · {row['label'].split(' · ')[0].lower()} from {self._clock(nc['t'])} "
-                         f"(median, 25–75 %, 10–90 %)"}
-
-    def _render_nowcast(self) -> None:
-        self._sync_as_of()
-        self.nowcast_panel.clear()
-        with self.nowcast_panel:
-            nc = self.nowcast or {}
-            if not nc.get("available"):
-                ui.label(f"Not available: {nc.get('reason', 'no data')}").classes("text-sm").style("color:#ffa726")
+    def _render_first_hour_card(self) -> None:
+        self.first_hour_panel.clear()
+        with self.first_hour_panel:
+            fc = self.first_hour_fc or {}
+            if not fc.get("available"):
+                ui.label(f"Not available: {fc.get('reason', 'no data')}").classes("text-sm").style("color:#ffa726")
                 return
-            ui.table(columns=_NOWCAST_COLUMNS, rows=nowcast_rows(nc), row_key="key").classes("w-full").props(
+            ui.label(f"From P = {fc['price']:,.2f}, the 09:28 close, by the model trained on {fc['trained_sessions']} "
+                     f"sessions through {fc['trained_through']}; each new first hour joins its training."
+                     ).classes("text-sm").style(_MUTED)
+            ui.table(columns=_FIRST_HOUR_COLUMNS, rows=first_hour_rows(fc), row_key="key").classes("w-full").props(
                 "dense flat").style("background:#1c212e")
-            inputs = describe_inputs(nc.get("inputs") or {}, nc["t"])
-            if inputs:
-                ui.label(f"Against the usual: {inputs}").classes("text-xs mt-1").style(_MUTED)
-            releases, warn = describe_releases(nc.get("releases"), nc["t"])
+            ui.label(f"Likely hour high {fc['likely_high']:,.2f} · low {fc['likely_low']:,.2f}").classes("text-sm mt-1")
+            score = describe_scorecard(self._scorecards.get(self.contract["symbol"]))
+            if score:
+                ui.label(score).classes("text-xs").style(_MUTED)
+            releases, warn = describe_releases(fc.get("releases"))
             ui.label(releases).classes("text-xs").style("color:#ffa726" if warn else _MUTED)
-            brk = first_hour.break_rates(self._hours(self.contract["symbol"]), self.date)
-            if brk["n"]:
-                ui.label(f"The opening range breaks by 10:30 on {brk['any'] * 100:.0f} % of sessions (first above "
-                         f"{brk['above'] * 100:.0f} %, below {brk['below'] * 100:.0f} %) - the usual rates over "
-                         f"{brk['n']} sessions; which side has not been predictable.").classes("text-xs").style(_MUTED)
-            n = max((h.get("scenarios") or 0) for h in nc["horizons"]) if nc["horizons"] else 0
-            ui.label(f"Median and bands from {n} earlier sessions' own moves after the same minute, scaled by "
-                     f"today's forecast over theirs. Run nq_forecast_v2.py range-backtest, or see Backtests, for "
-                     f"how it has scored.").classes("text-xs").style(_MUTED)
-
-    def _build_nowcast_controls(self) -> None:
-        with ui.row().classes("w-full items-center gap-4"):
-            ui.label("As of").classes("text-sm").style(_MUTED)
-            self.as_of_slider = ui.slider(min=0, max=range_nowcast.SESSION_MINUTES, step=1, value=0).classes("w-96")
-            self.as_of_slider.on("change", lambda e: self.on_as_of(e.args))
-            self.as_of_label = ui.label().classes("text-sm font-mono w-24")
-            self.as_of_label.bind_text_from(self.as_of_slider, "value",
-                                            backward=lambda v: f"{self._clock(v or 0)} ET" if self.date else "")
-            self.live_switch = ui.switch("Follow live", value=True, on_change=self.on_follow_live)
-            ui.toggle({"auto": "Cone: auto", "first_hour": "First hour", "session": "Session"}, value="auto",
-                      on_change=self.on_cone_choice).props("dense no-caps")
-
-    def _sync_as_of(self) -> None:
-        """The slider and live switch in step with the nowcast, without firing their handlers."""
-        day = self.nowcast_day
-        self.as_of_slider.props(f"max={day.minutes if day is not None else range_nowcast.SESSION_MINUTES}")
-        self.as_of_slider.value = self.as_of
-        live = self._is_live()
-        self.live_switch.set_visibility(live)
-        self.live_switch.value = self.follow_live and live
-
-    def on_as_of(self, value) -> None:
-        if self.nowcast_day is None or value is None:
-            return
-        self.as_of = int(value)
-        self.follow_live = self._is_live() and self.as_of >= self.nowcast_day.held
-        self._update_nowcast()
-        self._render_nowcast()
-        self.push()
-
-    def on_follow_live(self, event) -> None:
-        if bool(event.value) == self.follow_live:
-            return
-        self.follow_live = bool(event.value)
-        if self.follow_live and self.nowcast_day is not None:
-            self._update_nowcast()
-            self._render_nowcast()
-            self.push()
-
-    def on_cone_choice(self, event) -> None:
-        self.cone_choice = event.value
-        self.push()
-
-    def _live_tick(self) -> None:
-        """On a live session: new bars redraw the chart and, while following, move the nowcast on."""
-        if self.contract is None or self.date is None or not self._is_live():
-            return
-        rows = get_day_bars(self.conn, self.contract["contract_id"], self.date, interval="1m")
-        if ((len(rows), str(rows[-1]["timestamp_utc"])) if rows else None) == self._live_signature:
-            return
-        self._set_day_bars(rows)
-        history = self._nowcast_histories.get(self.contract["symbol"])
-        if history is not None:
-            self.nowcast_day = range_nowcast.day_session(self.conn, rows, history)
-            self._update_nowcast()
-        self._render_status()
-        self._render_nowcast()
-        self.push()
 
     def refresh_session(self, keep_forecast: bool = False) -> None:
         """
         Reloads the day from the database and redraws everything. A new day
-        shows the forecast stored for it, if any, and its nowcast as of the open
-        (a live session: its latest minute); ``keep_forecast`` (a display change
-        only) keeps both on screen and redraws its matching day.
+        shows the forecast stored for it, if any, and its generated first hour;
+        ``keep_forecast`` (a display change only) keeps both on screen.
         """
         if self.contract is None or self.date is None:
             return
         self.load_day()
         if not keep_forecast:
-            self.matches, self.match_choice, self.matches_error = {}, None, None
-            if self.day_df is not None:
-                self._compute_matches()
-            self.as_of, self.follow_live = 0, True
-            self._compute_nowcast()
-        self._load_match()
+            self._compute_first_hour()
         self._render_status()
         self._render_features()
-        self._render_nowcast()
-        self._render_match_row()
+        self._render_first_hour_card()
         self.push(reset_view=not keep_forecast)
         if not keep_forecast:
             self.model_panel.show(self.contract["symbol"], self.date)
             self._show_stored_forecast()
-
-    # ------------------------------------------------------------------
-    # The matching historical day, overlaid on the chart
-    # ------------------------------------------------------------------
-
-    def _load_match(self) -> None:
-        self.match_session = (load_analogue_session(self.conn, self.contract["symbol"], self.match_choice,
-                                                    self.timeframe) if self.match_choice else None)
-
-    def _render_match_row(self) -> None:
-        self.match_row.clear()
-        with self.match_row:
-            if not self.matches:
-                reason = f" ({self.matches_error})" if self.matches_error else ""
-                ui.label(f"No pre-open matches to overlay for this day{reason}.").classes("text-xs").style(_MUTED)
-                return
-            ui.select(
-                {d: f"#{m['ranking']} · {d} · {m['similarity_score'] * 100:.1f}% match" for d, m in self.matches.items()},
-                value=self.match_choice, label="Similar pre-open day (overlaid)", on_change=self.on_match,
-            ).classes("w-80")
-            session = self.match_session or {}
-            contract = session.get("contract")
-            if session.get("bars") is None or not self.close_0929 or not session.get("close_0929"):
-                ui.label("The match's bars or a 09:29 close are missing; nothing to overlay.").classes(
-                    "text-xs").style("color:#ffa726")
-                return
-            h = self._hours(self.contract["symbol"]).get(self.match_choice)
-            detail = [f"{contract['symbol']} {contract['expiry']}" if contract else "",
-                      f"first hour {h.path[-1]:+.2f} %, range {h.width:.2f} %" if h is not None else "",
-                      f"scaled ×{self.close_0929 / session['close_0929']:.3f} to the selected day's 09:29 close",
-                      "similar volatility before the open - its path is no forecast of the day's"]
-            ui.label(" · ".join(x for x in detail if x)).classes("text-xs").style(f"color:{MATCH_COLOUR}")
-
-    def on_match(self, event) -> None:
-        if not event.value or event.value == self.match_choice:
-            return
-        self.match_choice = event.value
-        self._load_match()
-        self._render_features()
-        self._render_match_row()
-        self.push()
 
     # ------------------------------------------------------------------
     # Control handlers
@@ -933,7 +652,7 @@ class SessionExplorer:
     def _render_features(self) -> None:
         self.features_panel.clear()
         with self.features_panel:
-            render_features(self.snapshot, (self.match_session or {}).get("snapshot") or None)
+            render_features(self.snapshot)
 
     def build(self) -> None:
         days = list_session_days(self.conn, self.symbols)
@@ -952,9 +671,7 @@ class SessionExplorer:
 
         with ui.column().classes("w-full p-4 gap-3"):
             self._build_controls(days, symbols, contract_options)
-            self._build_nowcast_controls()
 
-            self.match_row = ui.row().classes("w-full items-center gap-4")
             with ui.row().classes("w-full no-wrap gap-4 items-start"):
                 with ui.column().classes("grow gap-1 min-w-0"):
                     self.chart = LightweightChart(height=620)
@@ -964,12 +681,12 @@ class SessionExplorer:
 
             with ui.card().classes("w-full").style("background:#1c212e"):
                 with ui.column().classes("gap-0"):
-                    ui.label("Range nowcast").classes("text-lg font-medium")
-                    ui.label("How far the price still travels before 09:45, 10:30 and 16:00, as of the minute "
-                             "chosen above - no direction, which has not been predictable. Re-estimated each minute "
-                             "from the pre-open ranges and the volatility since the open, each against its usual."
+                    ui.label("First hour forecast · 09:30–10:30").classes("text-lg font-medium")
+                    ui.label("Generated before the open by a trained model. The orange candles on the chart are its "
+                             "expected path through the predicted prices at 09:45, 10:00 and 10:30, each minute as "
+                             "large as its expected range; the dashed lines are the likely hour high and low."
                              ).classes("text-sm").style(_MUTED)
-                self.nowcast_panel = ui.column().classes("w-full gap-1")
+                self.first_hour_panel = ui.column().classes("w-full gap-1")
 
             # The trained model and the scenario generator mostly call directions, which
             # nothing has predicted walk-forward: folded away, kept for reference.
@@ -981,8 +698,6 @@ class SessionExplorer:
                 self.model_panel.build()
                 self._build_forecast_panel()
 
-        # A live session's new bars are picked up every LIVE_POLL_SECONDS (a no-op on other days).
-        ui.timer(LIVE_POLL_SECONDS, self._live_tick)
         if self.contract is None:
             self.model_panel.show(self.symbol, None)
             ui.notify("No contract holds bars for the selected day.", type="warning")

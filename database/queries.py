@@ -221,7 +221,7 @@ def active_contract_bars(conn: Database, symbol: str, interval: str = "1m",
     Every stored bar of ``symbol`` on the contract that was active each day
     (``active_contracts``), from the Globex open (18:00 ET the evening before) to
     16:00 ET: trading_day, contract_id, timestamp_utc, OHLC and volume, in time
-    order. One query for the whole history (the range nowcast).
+    order. One query for the whole history (the first-hour model).
     """
     return conn.execute(
         "SELECT a.trading_day, a.contract_id, b.timestamp_utc, b.open, b.high, b.low, b.close, b.volume "

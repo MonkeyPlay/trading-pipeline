@@ -122,57 +122,6 @@ def test_stored_forecast_reads_the_repr_without_evaluating_it(market):
     assert "analogue_rationale" not in stored_forecast({**row, "raw_response": "__import__('os').getcwd()"})
 
 
-def test_analogue_session_is_the_regular_session_with_15_minutes_either_side(market):
-    conn, md, sessions = market
-    from dashboard.views.candles import load_analogue_session
-    s, prev = sessions[-4], sessions[-5]
-    out = load_analogue_session(conn, "NQ", s.session_date.isoformat())
-    assert out["contract"]["contract_id"] == NQ_CID
-    bars = out["bars"]
-    # 09:15 .. 16:14: 15 muted minutes, the 390 regular ones, 15 muted minutes
-    assert len(bars) == 420 and bars["vwap"].notna().all()
-    first = pd.Timestamp(bars["timestamp_utc"].iloc[0], tz="UTC")
-    last = pd.Timestamp(bars["timestamp_utc"].iloc[-1], tz="UTC")
-    assert first == s.rth_open_at - pd.Timedelta(minutes=15)
-    assert last == s.scheduled_close_at + pd.Timedelta(minutes=14)
-    muted = bars["muted"].tolist()
-    assert muted[:15] == [True] * 15 and muted[15:405] == [False] * 390 and muted[405:] == [True] * 15
-    assert set(bars.loc[~bars["muted"], "session_scope"]) == {"RTH"}
-    # the matched day's own pre-open features, as the selected day's panel shows them
-    assert out["snapshot"]["trading_day"] == s.session_date.isoformat()
-    assert out["snapshot"]["previous_rth_close"] == pytest.approx(out["levels"]["previous_rth_close"])
-
-    nq = md._bars[(NQ_CID, "TRADES")]
-    prev_rth = nq[(nq["bar_start_at"] >= prev.rth_open_at) & (nq["bar_start_at"] < prev.scheduled_close_at)]
-    on = nq[(nq["bar_start_at"] >= s.overnight_start_at) & (nq["bar_start_at"] < s.rth_open_at)]
-    rth = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.scheduled_close_at)]
-    assert out["levels"]["previous_rth_close"] == pytest.approx(prev_rth["close"].iloc[-1])
-    assert out["levels"]["overnight_high"] == pytest.approx(on["high"].max())
-    assert out["levels"]["overnight_low"] == pytest.approx(on["low"].min())
-    assert out["stats"]["open"] == pytest.approx(rth["open"].iloc[0])
-    assert out["stats"]["close"] == pytest.approx(rth["close"].iloc[-1])
-    assert out["stats"]["high"] == pytest.approx(rth["high"].max())
-
-    five = load_analogue_session(conn, "NQ", s.session_date.isoformat(), timeframe="5m")
-    assert len(five["bars"]) == 84 and five["bars"]["muted"].sum() == 6
-
-
-def test_analogue_day_uses_the_closest_higher_contract(market):
-    conn, _, sessions = market
-    from dashboard.views.candles import load_analogue_session
-    # Held by September and December (warm-up): September expires first after the day.
-    recent = sessions[-1].session_date.isoformat()
-    assert load_analogue_session(conn, "NQ", recent)["contract"]["contract_id"] == NQ_CID
-    # Held by June, September: June is the closest contract expiring after it.
-    first = sessions[0].session_date.isoformat()
-    assert load_analogue_session(conn, "NQ", first)["contract"]["contract_id"] == NQ_JUN
-    # Only September holds this one.
-    mid = sessions[-5].session_date.isoformat()
-    assert load_analogue_session(conn, "NQ", mid)["contract"]["contract_id"] == NQ_CID
-    missing = load_analogue_session(conn, "NQ", (sessions[0].session_date - timedelta(days=30)).isoformat())
-    assert missing["bars"] is None and missing["stats"] is None
-
-
 def test_contract_order_for_a_day(monkeypatch):
     from dashboard.views import candles
     from database import queries
@@ -311,32 +260,22 @@ def test_first_hours_from_one_query(market):
     assert h.high == pytest.approx(hour["high"].max()) and h.low == pytest.approx(hour["low"].min())
 
 
-def test_overlay_is_placed_on_the_selected_day_from_its_09_29_close():
-    from dashboard.views.candles import overlay_bars
-    ny = "America/New_York"
-    bars = pd.DataFrame({"timestamp_ny": pd.to_datetime(["2026-01-05 09:29", "2026-01-05 09:30", "2026-01-05 10:00"])
-                         .tz_localize(ny), "open": [100.0, 100.0, 110.0], "high": [101.0, 102.0, 112.0],
-                         "low": [99.0, 98.0, 108.0], "close": [100.0, 101.0, 111.0], "muted": [True, False, False]})
-    # a winter match overlaid on a summer day: the open maps to the open, whatever the UTC offset
-    out = overlay_bars({"bars": bars, "close_0929": 100.0}, "2026-01-05", "2026-06-10", anchor=20000.0)
-    assert [t.strftime("%Y-%m-%d %H:%M") for t in out["timestamp_ny"].dt.tz_convert(ny)] == [
-        "2026-06-10 09:29", "2026-06-10 09:30", "2026-06-10 10:00"]
-    assert out["close"].tolist() == [20000.0, 20200.0, 22200.0]          # moves in percent from 09:29
-    assert out["high"].iloc[2] == 22400.0 and "muted" not in out.columns
-    assert overlay_bars({"bars": bars, "close_0929": None}, "2026-01-05", "2026-06-10", 20000.0) is None
-    assert overlay_bars(None, "2026-01-05", "2026-06-10", 20000.0) is None
-
-
-def test_default_view_and_overlay_in_the_spec():
+def test_default_view_and_generated_hour_in_the_spec():
     from dashboard.components.spec import build_chart_spec
     idx = pd.date_range("2026-06-10 09:15", "2026-06-10 16:14", freq="1min", tz="America/New_York")
     df = pd.DataFrame({"timestamp_ny": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
     epoch = lambda hhmm: int(pd.Timestamp(f"2026-06-10 {hhmm}").value // 10 ** 9)
+    hour = df[(df["timestamp_ny"] >= idx[15]) & (df["timestamp_ny"] < idx[75])][["timestamp_ny", "open", "high", "low",
+                                                                                 "close"]]
     spec = build_chart_spec(df, visible_range=(idx[0], pd.Timestamp("2026-06-10 10:45", tz="America/New_York")),
-                            overlay=df.head(3))
+                            forecast={"candles": hour, "high": 1.5, "low": 0.5, "label": "generated"})
     assert spec["visible_range"] == {"from": epoch("09:15"), "to": epoch("10:45")}
     assert spec["fit"] is False and spec["keep_view"] is False
-    assert [p["time"] for p in spec["overlay_candles"]] == [epoch("09:15"), epoch("09:16"), epoch("09:17")]
+    assert len(spec["overlay_candles"]) == 60 and spec["overlay_candles"][0]["time"] == epoch("09:30")
+    high = spec["series"]["forecast:high"]["points"]            # a level across the generated hour
+    assert [p["time"] for p in high] == [epoch("09:30"), epoch("10:29")] and high[0]["value"] == 1.5
+    assert spec["series"]["forecast:low"]["points"][0]["value"] == 0.5
+    assert {"key": "forecast:high", "label": "generated", "color": "#ffa726"} in spec["legend"]
     kept = build_chart_spec(df, keep_view=True)
     assert "visible_range" not in kept and kept["keep_view"] is True and kept["overlay_candles"] == []
 
@@ -371,16 +310,16 @@ def test_backtests_page_rows():
     assert sc[1]["forecast"] == "42.4 %" and sc[1]["gain"].startswith("+1.7 pp")
 
 
-def test_range_nowcast_reads_active_contracts_and_vix(market):
+def test_preopen_reads_active_contracts_and_vix(market):
     # Last in the module: it stores VIX, which the tests above do not expect.
     conn, md, sessions = market
     from database.queries import active_contract_bars, preopen_levels
-    from forecaster import range_nowcast as rn
+    from forecaster import preopen as po
     from tests.synthetic import VIX_CID
     days = [s.session_date.isoformat() for s in sessions]
 
     def history():
-        return rn.sessions_from_bars(pd.DataFrame([dict(r) for r in active_contract_bars(conn, "NQ")]))
+        return po.sessions_from_bars(pd.DataFrame([dict(r) for r in active_contract_bars(conn, "NQ")]))
 
     set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
     got = history()

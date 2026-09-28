@@ -30,10 +30,9 @@ OR_BOX = "rgba(150, 153, 164, 0.30)"
 OR_FILL = "rgba(38, 166, 154, 0.13)"
 OR_LINE = "#26a69a"
 
-# Range nowcast cone: 10-90 % and 25-75 % bands of where the price may be, minute by minute.
-CONE_OUTER = "rgba(255, 167, 38, 0.10)"
-CONE_INNER = "rgba(255, 167, 38, 0.20)"
-CONE_LINE = "#ffa726"
+# The generated first hour (forecaster/first_hour_model.py): its candles go in the
+# overlay series (orange, beneath the session's), its likely high / low as dashed levels.
+FORECAST_LINE = "#ffa726"
 
 # Pre-open reference levels drawn from the feature snapshot, in draw order.
 _FEATURE_LEVELS = (
@@ -181,42 +180,22 @@ def opening_range_series(df: pd.DataFrame, opening_range: Dict[str, Any]) -> Dic
     return out
 
 
-def cone_series(cone: Dict[str, Any]) -> Dict[str, Any]:
+def forecast_series(forecast: Dict[str, Any]) -> Dict[str, Any]:
     """
-    ``{'series', 'bands', 'legend'}`` drawing a range-nowcast cone: {'open': the
-    session open as a New York timestamp, 't': the minute it is as of, 'end': the
-    horizon's last minute + 1, 'price': the price at t, 'bar_minutes', 'prices':
-    {10|25|50|75|90: the close of each minute t .. end - 1}, 'label'}. It has its
-    own times - one point per bar of the timeframe, at the bar's last minute -
-    so it reaches past the last bar of a live session. It starts from the price
-    at t on the last completed bar.
+    ``{'series', 'legend'}`` of a generated first hour ({'candles': bars with
+    ``timestamp_ny`` and OHLC, 'high', 'low': its likely extremes, 'label'}):
+    dashed levels at the likely high and low across the hour.
     """
-    out: Dict[str, Any] = {"series": {}, "bands": {}, "legend": []}
-    if not cone or not cone.get("prices"):
+    out: Dict[str, Any] = {"series": {}, "legend": []}
+    candles = forecast.get("candles") if forecast else None
+    if candles is None or candles.empty:
         return out
-    n, t0, end = int(cone.get("bar_minutes", 1)), int(cone["t"]), int(cone["end"])
-    if t0 >= end:
-        return out
-    bars = range(t0 // n, (end - 1) // n + 1)
-    times = to_epoch(pd.DatetimeIndex([cone["open"] + pd.Timedelta(minutes=k * n) for k in bars]))
-    index = [min((k + 1) * n - 1, end - 1) - t0 for k in bars]
-    anchor = []
-    if t0 % n == 0:        # the price at t closes the bar before the cone's first
-        at = to_epoch(pd.DatetimeIndex([cone["open"] + pd.Timedelta(minutes=(t0 // n - 1) * n)]))[0]
-        anchor = [{"time": int(at), "value": round(float(cone["price"]), 2)}]
-
-    def points(q):
-        return anchor + [{"time": int(tm), "value": round(float(cone["prices"][q][i]), 2)}
-                         for tm, i in zip(times, index)]
-
-    for q in (10, 90, 25, 75):
-        out["series"][f"cone:p{q}"] = _hidden(points(q))
-    out["bands"]["cone:outer"] = {"upper": "cone:p90", "lower": "cone:p10", "color": CONE_OUTER}
-    out["bands"]["cone:inner"] = {"upper": "cone:p75", "lower": "cone:p25", "color": CONE_INNER}
-    out["series"]["cone:p50"] = {"points": points(50), "style": {"color": CONE_LINE, "width": 1, "dash": 2,
-                                                                "title": "", "axis_label": False}}
-    out["legend"].append({"key": "cone:p50", "label": cone.get("label") or "Range nowcast (median, 25-75 %, 10-90 %)",
-                          "color": CONE_LINE})
+    times = _times(candles)
+    for key, label in (("high", "Likely hour high"), ("low", "Likely hour low")):
+        if forecast.get(key) is not None:
+            out["series"][f"forecast:{key}"] = _level_series(times, forecast[key], label, FORECAST_LINE, 1, 2)
+    out["legend"].append({"key": "forecast:high", "label": forecast.get("label") or "First-hour forecast",
+                          "color": FORECAST_LINE})
     return out
 
 
@@ -227,16 +206,15 @@ def build_chart_spec(
     show_vwap: bool = True,
     fit: bool = False,
     opening_range: Optional[Dict[str, Any]] = None,
-    cone: Optional[Dict[str, Any]] = None,
-    overlay: Optional[pd.DataFrame] = None,
+    forecast: Optional[Dict[str, Any]] = None,
     visible_range: Optional[Sequence[Any]] = None,
     keep_view: bool = False,
 ) -> Dict[str, Any]:
     """
     Assembles the full chart spec for one session. Rows with a true ``muted``
-    column are drawn grey on a shaded background (``shades``). ``overlay`` (bars
-    with ``timestamp_ny`` and OHLC) is drawn as a second, desaturated candle
-    series beneath the session's. ``visible_range`` ((start, end) timestamps)
+    column are drawn grey on a shaded background (``shades``). ``forecast``, a
+    generated first hour (``forecast_series``), is drawn as a second candle
+    series beneath the session's, with its likely high and low. ``visible_range`` ((start, end) timestamps)
     is the window shown instead of fitting everything; ``keep_view`` keeps the
     window currently shown across the new data (a timeframe change).
     """
@@ -277,10 +255,10 @@ def build_chart_spec(
 
     for drawn in ((opening_range_series(df, opening_range) if opening_range and "timestamp_ny" in df.columns
                    else None),
-                  cone_series(cone) if cone else None):
+                  forecast_series(forecast) if forecast else None):
         if drawn:
             series.update(drawn["series"])
-            bands.update(drawn["bands"])
+            bands.update(drawn.get("bands", {}))
             legend.extend(drawn["legend"])
 
     spec = {
@@ -291,8 +269,8 @@ def build_chart_spec(
         "legend": legend,
         "shades": shade_ranges(df),
         "shade_color": MUTED_BACKGROUND,
-        "overlay_candles": candle_points(overlay.drop(columns=["muted"], errors="ignore"))
-        if overlay is not None and not overlay.empty else [],
+        "overlay_candles": candle_points(forecast["candles"])
+        if forecast and forecast.get("candles") is not None and not forecast["candles"].empty else [],
         "fit": fit,
         "keep_view": keep_view,
     }

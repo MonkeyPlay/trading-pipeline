@@ -139,26 +139,15 @@ Two pages:
     the session VWAP come from the feature snapshot. The **opening range** (the first 15
     minutes) is a grey box over its bars, then **ORH** / **ORL** lines with the channel between
     them shaded (from the 1-minute bars at any timeframe; no box at 30 minutes).
-  - **Similar pre-open day, overlaid:** the dropdown above the chart offers the 10 closest
-    pre-open matches - days with similar volatility before the open; their paths are no
-    forecast of the day's. The chosen one is drawn on the same chart as **desaturated candles**,
-    shifted to the same minutes from the open and scaled so its 09:29 close sits on the
-    selected day's - its moves in percent from where the selected day stood before the open.
-    Its bars come from the contract that was trading that day. The **Pre-open features** panel
-    shows each figure for the selected day with the match's value beneath it.
-  - **Range nowcast** ([forecaster/range_nowcast.py](forecaster/range_nowcast.py)): how far
-    the price still travels before the end of the opening range (09:45), the first hour
-    (10:30) and the session (16:00) - the range still to come with its 50 % and 80 % bands and
-    the usual for that minute, the final range, and the likely high and low. It forecasts no
-    direction: none has been predictable, before the open or from the first 15-30 minutes
-    (see [How a forecast is built](#how-a-forecast-is-built)). An orange cone on the chart
-    (median, 25–75 %, 10–90 %) runs from the current price to 10:30, then to 16:00 (**Cone**
-    picks one). The **As of** slider replays the nowcast minute by minute through a past
-    session; on today's live session the page polls for new bars every 15 s and, with
-    **Follow live** on, moves the nowcast on with every completed minute (the real-time
-    streamer must be running). Once a horizon is over the card shows the actual range against
-    the band it was given. The opening-range break rates by 10:30 are shown as the usual
-    rates.
+  - **First hour forecast · 09:30–10:30**
+    ([forecaster/first_hour_model.py](forecaster/first_hour_model.py)): generated before the
+    open by a trained model - sixty 1-minute candles drawn in orange beneath the session's, and
+    dashed lines at the likely hour high and low. The candles are the expected path from P (the
+    09:28 close) through the model's predicted prices at 09:45, 10:00 and 10:30, each minute as
+    large as its expected range. The card lists the predicted moves and ranges at those times
+    next to the usual ranges and, on a past day, what actually happened; how the model has
+    scored walk-forward; and the day's scheduled releases. The model refits with every new
+    first hour, recent sessions weighing more (see [How a forecast is built](#how-a-forecast-is-built)).
   - **Direction forecasts** (folded away: they mostly call directions, which have not beaten
     the base rates walk-forward - see **Backtests**):
     - **Model forecast:** the trained model's run for the day (`nq_sklearn_v6`, or the
@@ -177,9 +166,9 @@ Two pages:
   ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
 - **Backtests** (`/backtests`, [dashboard/views/backtests.py](dashboard/views/backtests.py)) —
   each forecast against a simple guess on the same sessions, using only what was known before
-  each session: the range nowcast, the pre-open-match first-hour forecast it replaced (kept
+  each session: the first-hour model, the pre-open-match first-hour forecast it replaced (kept
   for comparison) and the opening scenario generator replayed walk-forward (as
-  `range-backtest`, `first-hour-backtest` and `scenario-backtest`), and the trained model's
+  `first-hour-model`, `first-hour-backtest` and `scenario-backtest`), and the trained model's
   stored forecasts against the climatology baseline (as `evaluate`). Every row shows the gain
   with its standard error and a verdict - better / worse only beyond two standard errors.
   Each section runs when the page opens and again on **Rerun**.
@@ -287,8 +276,7 @@ is final, with the time it was received:
 ```
 
 The streamer ([collector/live_stream.py](collector/live_stream.py)) runs until `--until`
-(16:15 ET by default, so the dashboard's range nowcast can follow the session; `--until
-09:31` is enough for the v2 forecast alone), re-reads the 09:28 minute of every instrument right after it ends
+(09:31 ET by default), re-reads the 09:28 minute of every instrument right after it ends
 (`--confirm-at`) so P is IB's own historical bar, and uses client id `IB_CLIENT_ID + 1`
 so the historical collector can run beside it. Each bar goes to `bars` (as not yet
 completed, so the regular collector re-downloads the day later) and, append-only, to
@@ -439,36 +427,33 @@ happened once a session closes — first 15/30 minutes, the 60-minute Initial Ba
 full RTH high/low/close, and the 10:29 close that ends the analogue forecast's horizon —
 anchored to 09:30 ET regardless of which bar arrived first.
 
-**Range nowcast** ([forecaster/range_nowcast.py](forecaster/range_nowcast.py)) is the Session
-Explorer's forecast. Walk-forward checks on NQ found no direction skill anywhere: the pre-open
-matches' first-hour paths were no closer to the day's than random days' (the same 10:29 sign
-51 % of the time against 49 %), and neither matching nor momentum on the session's own first
-15 or 30 minutes predicted the rest of the hour. How far the price moves is predictable, and
-more so once the session is under way. So the nowcast forecasts the range still to come from
-minute t to the end of a horizon (09:45, 10:30, 16:00) - ln max(p, later highs) − ln min(p,
-later lows), p the price at t - against the usual (its median over the previous 40 sessions at
-the same minute), with a ridge regression per horizon on inputs that are each the log of
-today's value over its usual: the previous session's range, the mean range of the last 5 and
-22 sessions, the previous and 5-session first-hour range, overnight and last-hour range and
-volume, VIX (level, against its usual, change since the previous close), Monday and Friday, and
-since the open the realised volatility (all of it, the last 15 and the last 5 minutes) and the
-range so far. The weights change smoothly with how much of the horizon has passed, so the
-pre-open inputs fade as the intraday ones take over. Everything comes from the stored bars of
-each day's active contract and spot VIX, so no snapshot is needed and ES and RTY work too. The
-bands, final range, likely high and low, and the cone are filtered historical simulation: each
-earlier session's own move after minute t, scaled by today's forecast over its own. The model
-for a day is fitted on earlier sessions only, refitted every 5, so a past day on the dashboard
-shows exactly what `range-backtest` scored. When this was written (187 NQ sessions from
-2025-12-29), the typical miss of the range still to come was ±34 % against ±45 % for the usual
-in the first hour and ±39 % against ±51 % over the session, better at every checkpoint from
-09:30 on, and the 50 % / 80 % bands held about 50 % / 80 % of outcomes.
+**First-hour model** ([forecaster/first_hour_model.py](forecaster/first_hour_model.py),
+inputs from [forecaster/preopen.py](forecaster/preopen.py)) is the Session Explorer's forecast.
+From the pre-open only it predicts where the price is at 09:45, 10:00 and 10:30 - ln(close /
+P), in usual first-hour ranges - and the range of the first 15, 30 and 60 minutes against the
+usual (the median of the previous 40 sessions), and generates the hour's 1-minute candles from
+them. Its inputs are the previous session's range, the mean range of the last 5 and 22
+sessions, the previous and 5-session first-hour range, overnight and last-hour range and
+volume, VIX (level, against its usual, change since the previous close), Monday and Friday -
+and, for direction, the returns to P from the overnight open, 08:28 and 09:13, the previous
+session's return, and where P and the previous close sit in their ranges. Everything comes
+from the stored bars of each day's active contract and spot VIX, so no snapshot is needed and
+ES and RTY work too. One ridge regression per target is fitted on every session before the
+forecast day, a session's weight halving every 120 sessions back, with the penalty chosen by
+leave-one-out: each actual first hour joins the training for the next day, and a direction the
+outcomes do not support is shrunk toward the average rather than drawn. Walk-forward checks
+before it found no direction skill anywhere - not in the pre-open matches, whose first-hour
+paths were no closer to the day's than random days', nor in the session's own first 15 or 30
+minutes - and the model agrees: when this was written (217 NQ sessions from 2025-11-11,
+`first-hour-model`) its direction was right 46 / 49 / 50 % of the time at 09:45 / 10:00 /
+10:30, while the hour went up 53 % of the time, and its drawn path did no better than a flat
+line. The sizes are where it has skill: the 15 / 30 / 60 minute ranges missed by ±31 / 31 /
+33 % against ±38 / 39 / 41 % for the usual, each minute's candle by ±37 % against ±46 %.
 
-The economic calendar (below) was tested as a nowcast input - a high release before the open,
-a high or moderate one still ahead, and on its own an FOMC decision still ahead - and changed
-nothing measurable walk-forward. FOMC days are the nowcast's worst (the rest of the session
-often came in several times the forecast once the morning had passed), and an FOMC input
-improved 4 of the 6 in the test but made 2 worse; too few to tell. So the card lists the day's
-releases, and warns while an FOMC decision is still ahead, but the forecast does not use them.
+The economic calendar (below) was tested as an input to a range forecast of the first hour and
+the session - a high release before the open, a high or moderate one still ahead, and on its
+own an FOMC decision still ahead - and changed nothing measurable walk-forward, so the card
+lists the day's releases (marking one inside the hour) but the model does not use them.
 
 **Economic calendar** ([database/events.py](database/events.py)):
 
@@ -532,8 +517,8 @@ python scripts/nq_forecast_v2.py train                                          
 python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
 python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
 python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
-python scripts/nq_forecast_v2.py range-backtest                                 # walk-forward score of the range nowcast: range still to come vs the usual, band coverage (writes nothing; --symbol ES)
-python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the pre-open-match forecast the nowcast replaced (writes nothing)
+python scripts/nq_forecast_v2.py first-hour-model                               # train the first-hour model, score it walk-forward: moves, ranges, candle sizes (writes nothing; --symbol ES)
+python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the pre-open-match forecast the first-hour model replaced (writes nothing)
 python scripts/nq_forecast_v2.py scenario-backfill --start 2025-09-01 --end 2026-09-25 # store the opening scenario generator's forecasts, walk-forward
 python scripts/nq_forecast_v2.py scenario-backtest                              # walk-forward score of the generator on the first hour (writes nothing)
 python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
@@ -559,7 +544,7 @@ database whose name contains `test`; they reset it).
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools, economic calendar loader |
 | [features/](features/) | Session/timezone classification, pre-open feature engineering |
 | [matching/](matching/) | Volatility-normalized analogue search |
-| [forecaster/](forecaster/) | Range nowcast, v2 labels + scikit-learn model, analogue forecast, outcome evaluator |
+| [forecaster/](forecaster/) | First-hour model and its pre-open inputs, v2 labels + scikit-learn model, analogue forecast, outcome evaluator |
 | [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
 | [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
 | [tests/](tests/) | Calendar, feature-indicator, v2 snapshot and forecast-record tests |

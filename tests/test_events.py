@@ -1,7 +1,7 @@
 # tests/test_events.py
 """The economic calendar: the ISM rule, release times, coverage (no calendar is
-never "no event"), the loader against the database, and how the nowcast and its
-card show a day's releases."""
+never "no event"), the loader against the database, and how the first-hour
+forecast and its card show a day's releases."""
 
 import os
 from datetime import date, datetime, timezone
@@ -10,7 +10,7 @@ import psycopg
 import pytest
 
 from database import events as ev
-from forecaster import range_nowcast as rn
+from forecaster import preopen as po
 
 DSN = os.getenv("TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(
@@ -55,7 +55,7 @@ def test_calendar_rows_are_new_york_times(tmp_path):
 def test_releases_count_only_on_covered_days(tmp_path):
     rows = ev.calendar_rows(_csv(tmp_path, "cal.csv", CALENDAR))
     cov = ev.coverage_rows(_csv(tmp_path, "cov.csv", COVERAGE))
-    events = rn.events_from_rows(rows + ev.ism_rows(date(2026, 6, 1), date(2026, 6, 30)), cov)
+    events = po.events_from_rows(rows + ev.ism_rows(date(2026, 6, 1), date(2026, 6, 30)), cov)
     assert events.of("2026-06-17") == [(270, "high", "FOMC rate decision", "14:00")]   # minutes from 09:30
     assert events.of("2026-06-10") == [(-60, "high", "Consumer Price Index", "08:30")]
     assert [r[2] for r in events.of("2026-06-01")] == ["ISM Manufacturing PMI"]
@@ -63,20 +63,22 @@ def test_releases_count_only_on_covered_days(tmp_path):
     assert events.of("2025-06-11") is None            # no coverage that day: the calendar is missing
 
 
-def test_card_lists_the_releases_and_warns_before_an_fomc_decision():
+def test_card_lists_the_releases_and_warns_when_one_falls_inside_the_hour():
     from dashboard.views.candles import describe_releases
-    fomc = [{"time": "08:30", "name": "Consumer Price Index", "tier": "high", "minute": -60},
-            {"time": "14:00", "name": "FOMC rate decision", "tier": "high", "minute": 270}]
-    text, warn = describe_releases(fomc, 30)
-    assert text.startswith("Scheduled today: 08:30 Consumer Price Index (high) · 14:00 FOMC rate decision (high)")
-    assert warn and "FOMC afternoons" in text
-    assert describe_releases(fomc, 300)[1] is False           # the decision is out: nothing ahead to warn of
-    assert describe_releases([], 0)[0].startswith("No scheduled release today")
-    assert describe_releases(None, 0)[0].startswith("No economic calendar covers this day")
+    ism = [{"time": "08:30", "name": "Consumer Price Index", "tier": "high", "minute": -60},
+           {"time": "10:00", "name": "ISM Manufacturing PMI", "tier": "high", "minute": 30}]
+    text, warn = describe_releases(ism)
+    assert text.startswith("Scheduled today: 08:30 Consumer Price Index (high) · 10:00 ISM Manufacturing PMI (high)")
+    assert warn and text.endswith("inside the hour: ISM Manufacturing PMI.")
+    fomc = [{"time": "14:00", "name": "FOMC rate decision", "tier": "high", "minute": 270}]
+    assert describe_releases(fomc) == ("Scheduled today: 14:00 FOMC rate decision (high) - not part of the forecast.",
+                                       False)                     # after the hour: nothing to warn of
+    assert describe_releases([])[0].startswith("No scheduled release today")
+    assert describe_releases(None)[0].startswith("No economic calendar covers this day")
 
 
 @needs_db
-def test_loader_is_idempotent_and_feeds_the_snapshot_and_the_nowcast(tmp_path):
+def test_loader_is_idempotent_and_feeds_the_snapshot_and_the_model(tmp_path):
     from database.connection import get_db_connection, reset_database
     from features.market_data import DbMarketData
     reset_database(DSN)
@@ -93,7 +95,7 @@ def test_loader_is_idempotent_and_feeds_the_snapshot_and_the_nowcast(tmp_path):
         coverage, found = DbMarketData(conn).event_calendar("2026-06-18", start,
                                                             datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc), None)
         assert coverage is not None and [e["name"] for e in found] == ["FOMC rate decision"]
-        events = rn.load_events(conn)
+        events = po.load_events(conn)
         assert events.of("2026-06-17") == [] and events.of("2026-06-18")[0][2] == "FOMC rate decision"
     finally:
         conn.close()
