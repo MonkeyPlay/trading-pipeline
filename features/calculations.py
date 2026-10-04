@@ -1,12 +1,9 @@
 # features/calculations.py
 """
-Feature engineering engine for the NQ Opening Forecast System.
-Calculates previous session levels, overnight metrics, gaps, pre-open directions,
-volatility, and VWAP. Uses pandas and NumPy.
-
-All pre-open features are frozen at 09:30 ET of the target trading day. No bar
-at or after 09:30 ET of the target day is used, so the snapshot is free of
-look-ahead bias.
+What the Session Explorer's chart draws besides the bars: the session VWAP, the
+pre-open reference levels (the previous session's RTH high, low and close, and
+the overnight high and low) and the three moving averages of the TradingView
+indicator "TEMA & Session Levels". Uses pandas and NumPy.
 """
 
 import numpy as np
@@ -22,20 +19,31 @@ from features.session_windows import (
 __all__ = [
     "enrich_candle_timezones",
     "calculate_vwap",
-    "calculate_vix_context",
-    "calculate_pre_open_snapshot",
+    "calculate_moving_averages",
+    "pre_open_levels",
 ]
 
 
 _RTH_START_MIN = RTH_START.hour * 60 + RTH_START.minute
+
+# The moving averages of the TradingView indicator "TEMA & Session Levels" (Pine
+# v6), at its default inputs. The script's plot titles "EMA 50" and "EMA 9
+# Smoothed" are the 100- and 14-bar EMAs below.
+TEMA_LENGTH, TEMA_SMOOTHING = 14, 3              # TEMA(14), then SMA(3)
+TREND_EMA_LENGTH = 100                           # EMA(100)
+TRIGGER_EMA_LENGTH, TRIGGER_SMOOTHING = 14, 3    # EMA(14), then SMA(3)
+# Bars before the first one shown. TradingView runs the averages over the whole
+# chart history; after 1000 bars the EMA(100)'s starting value weighs (99/101)^1000,
+# about 2e-9, so the lines match whatever history TradingView started from.
+MA_WARMUP_BARS = 1000
 
 
 def _before_open(ny_times):
     """
     Mask of timestamps falling strictly before 09:30 ET.
 
-    Vectorised: this runs over a full multi-day history on every dashboard
-    redraw. NaT compares false, as a missing timestamp is not "before open".
+    Vectorised: this runs over the loaded bars on every dashboard redraw. NaT
+    compares false, as a missing timestamp is not "before open".
     """
     return minutes_of_day(ny_times) < _RTH_START_MIN
 
@@ -63,147 +71,68 @@ def calculate_vwap(df):
     return df
 
 
-def calculate_vix_context(vix_df, target_trading_day):
+def _ema(series, length):
+    """Pine's ta.ema: alpha = 2 / (length + 1), seeded with the first value."""
+    return series.ewm(span=length, adjust=False).mean()
+
+
+def calculate_moving_averages(df):
     """
-    The cash VIX level as of just before the 09:30 ET cutoff, and its change from
-    the previous session's close, as ``(level, change)``.
+    Adds the indicator's three lines to bars at the chart's timeframe, run over
+    every row of ``df`` in time order (gaps such as the daily break and weekends
+    are simply skipped, as on TradingView):
 
-    Returns ``(None, None)`` when there is no usable VIX data, so a missing feed
-    leaves the snapshot's VIX columns NULL rather than reporting a wrong level.
-    VIX is an index: it has no volume, so nothing here touches volume or VWAP.
-    """
-    if vix_df is None or getattr(vix_df, "empty", True):
-        return None, None
+      tema         TEMA(14) = 3 (e1 - e2) + e3, e1 = EMA(close), e2 = EMA(e1),
+                   e3 = EMA(e2), then SMA(3)          plot "TEMA Smoothed"
+      ema_trend    EMA(100) of close                  plot "EMA 50"
+      ema_trigger  EMA(14) of close, then SMA(3)      plot "EMA 9 Smoothed"
 
-    vix = enrich_candle_timezones(vix_df).sort_values("timestamp_utc")
-
-    pre_open = vix[
-        (vix["trading_day"] == target_trading_day) & _before_open(vix["timestamp_ny"])
-    ]
-    if pre_open.empty:
-        return None, None
-    level = float(pre_open.iloc[-1]["close"])
-
-    prior_days = sorted(d for d in vix["trading_day"].dropna().unique() if d < target_trading_day)
-    if not prior_days:
-        return level, None
-
-    prev_session = vix[vix["trading_day"] == prior_days[-1]]
-    if prev_session.empty:
-        return level, None
-
-    return level, level - float(prev_session.iloc[-1]["close"])
-
-
-def calculate_pre_open_snapshot(df, target_trading_day, rth_closes=None, vix_df=None):
-    """
-    Computes a feature snapshot frozen at 09:30 AM ET for a target trading day.
-    Requires at least the previous trading day's RTH bars and the current day's
-    overnight (pre-09:30 ET) bars.
-
-    Historical volatility is taken over every day before the target. By default
-    those days are the ones in ``df``; pass ``rth_closes`` — ``{trading_day: last
-    RTH close}``, e.g. from ``database.queries.get_daily_rth_closes`` — to take it
-    over a longer history than ``df`` holds.
-
-    ``vix_df`` is optional cash VIX bars; when given, the pre-open VIX level and
-    its change are added as context. The forecast instrument itself is unaffected.
+    ``df`` should start ``MA_WARMUP_BARS`` bars before the first bar shown.
     """
     if df is None or df.empty:
-        return {}
+        return df
+    df = df.sort_values("timestamp_utc").copy()
+    close = df["close"].astype(float)
+    e1 = _ema(close, TEMA_LENGTH)
+    e2 = _ema(e1, TEMA_LENGTH)
+    e3 = _ema(e2, TEMA_LENGTH)
+    df["tema"] = (3 * (e1 - e2) + e3).rolling(TEMA_SMOOTHING).mean()
+    df["ema_trend"] = _ema(close, TREND_EMA_LENGTH)
+    df["ema_trigger"] = _ema(close, TRIGGER_EMA_LENGTH).rolling(TRIGGER_SMOOTHING).mean()
+    return df
+
+
+def pre_open_levels(df, target_trading_day):
+    """
+    The reference levels the chart draws for ``target_trading_day``: the
+    previous trading day's RTH high, low and close, and the overnight high and
+    low - the target day's bars strictly before 09:30 ET (None when it has none).
+    ``df`` must hold the previous trading day and the target day. None when the
+    previous day or its RTH bars are missing.
+    """
+    if df is None or df.empty:
+        return None
     df = enrich_candle_timezones(df)
     df = df.sort_values("timestamp_utc")
 
     all_days = sorted(d for d in df["trading_day"].dropna().unique())
-    if target_trading_day not in all_days:
-        return {"error": f"Target trading day {target_trading_day} not found in dataset."}
+    if target_trading_day not in all_days or all_days.index(target_trading_day) == 0:
+        return None
+    prev_trading_day = all_days[all_days.index(target_trading_day) - 1]
 
-    target_idx = all_days.index(target_trading_day)
-    if target_idx == 0:
-        return {"error": f"Cannot calculate features for {target_trading_day}; no previous trading day available."}
-
-    prev_trading_day = all_days[target_idx - 1]
-
-    # --- Previous Day RTH ---
     prev_rth = df[(df["trading_day"] == prev_trading_day) & (df["session_scope"] == "RTH")]
     if prev_rth.empty:
-        return {"error": f"No RTH data found for previous trading day {prev_trading_day}."}
+        return None
 
-    prev_rth_high = float(prev_rth["high"].max())
-    prev_rth_low = float(prev_rth["low"].min())
-    prev_rth_close = float(prev_rth.iloc[-1]["close"])
-
-    # --- Current Day overnight, strictly BEFORE 09:30 ET (no look-ahead) ---
-    before_open = _before_open(df["timestamp_ny"])
-    current_eth = df[
+    overnight = df[
         (df["trading_day"] == target_trading_day)
         & (df["session_scope"] == "ETH")
-        & before_open
+        & _before_open(df["timestamp_ny"])
     ]
-    if current_eth.empty:
-        overnight_high = prev_rth_close
-        overnight_low = prev_rth_close
-    else:
-        overnight_high = float(current_eth["high"].max())
-        overnight_low = float(current_eth["low"].min())
-
-    overnight_range = overnight_high - overnight_low
-
-    # --- Opening bar (09:30 ET) — this is the cutoff itself, not future data ---
-    target_rth = df[(df["trading_day"] == target_trading_day) & (df["session_scope"] == "RTH")]
-    if target_rth.empty:
-        return {"error": f"No RTH opening candle found for target trading day {target_trading_day}."}
-
-    rth_open = float(target_rth.iloc[0]["open"])
-
-    # --- Gap + direction ---
-    gap = rth_open - prev_rth_close
-    threshold = abs(prev_rth_close) * 0.0005
-    if gap > threshold:
-        direction = "UP"
-    elif gap < -threshold:
-        direction = "DOWN"
-    else:
-        direction = "FLAT"
-
-    # --- Overnight VWAP as of just before the open ---
-    vwap_df = calculate_vwap(df)
-    pre_open_vwap_rows = vwap_df[
-        (vwap_df["trading_day"] == target_trading_day)
-        & _before_open(vwap_df["timestamp_ny"])
-    ]
-    vwap_val = float(pre_open_vwap_rows.iloc[-1]["vwap"]) if not pre_open_vwap_rows.empty else rth_open
-
-    # --- Historical volatility: stddev of prior daily RTH log returns ---
-    if rth_closes is not None:
-        prior_closes = [close for day, close in sorted(rth_closes.items()) if day < target_trading_day]
-    else:
-        prior_closes = []
-        for day in all_days[:target_idx]:
-            day_rth = df[(df["trading_day"] == day) & (df["session_scope"] == "RTH")]
-            if not day_rth.empty:
-                prior_closes.append(float(day_rth.iloc[-1]["close"]))
-
-    if len(prior_closes) >= 3:
-        returns = np.diff(np.log(prior_closes))
-        volatility = float(np.std(returns))
-    else:
-        volatility = 0.01
-
-    vix_level, vix_change = calculate_vix_context(vix_df, target_trading_day)
-
     return {
-        "trading_day": target_trading_day,
-        "previous_rth_high": prev_rth_high,
-        "previous_rth_low": prev_rth_low,
-        "previous_rth_close": prev_rth_close,
-        "overnight_high": overnight_high,
-        "overnight_low": overnight_low,
-        "overnight_range": overnight_range,
-        "gap": gap,
-        "pre_open_direction": direction,
-        "vwap": vwap_val,
-        "historical_volatility": volatility,
-        "vix_pre_open": vix_level,
-        "vix_change": vix_change,
+        "previous_rth_high": float(prev_rth["high"].max()),
+        "previous_rth_low": float(prev_rth["low"].min()),
+        "previous_rth_close": float(prev_rth.iloc[-1]["close"]),
+        "overnight_high": float(overnight["high"].max()) if not overnight.empty else None,
+        "overnight_low": float(overnight["low"].min()) if not overnight.empty else None,
     }

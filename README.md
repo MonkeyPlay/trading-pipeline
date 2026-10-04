@@ -1,20 +1,17 @@
-# Opening Forecast Pipeline
+# Trading Pipeline
 
-A local, end-to-end research pipeline for the **CME equity-index futures opening**:
-it collects 1-minute bars from Interactive Brokers, freezes a pre-open feature snapshot
-at 09:29 ET, forecasts the NQ opening and session with a **scikit-learn model trained
-walk-forward on earlier sessions**, scores that forecast against what actually happened,
-and serves the whole thing in a NiceGUI dashboard drawn with TradingView's Lightweight
-Charts. No language model and no external API is involved: every forecast is computed
-locally from typed feature values.
+A local research pipeline for the **CME equity-index futures**: it collects 1-minute bars
+from Interactive Brokers into a day-partitioned TimescaleDB store and serves the sessions
+in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. No language model and
+no external API is involved.
 
 Ten instruments are collected out of the box:
 
 | Symbol | Instrument | IB type | Role |
 |---|---|---|---|
-| `ES` | S&P 500 E-mini | FUT, rolls quarterly | forecast target |
-| `NQ` | Nasdaq-100 E-mini | FUT, rolls quarterly | forecast target |
-| `RTY` | Russell 2000 E-mini | FUT, rolls quarterly | forecast target |
+| `ES` | S&P 500 E-mini | FUT, rolls quarterly | target future |
+| `NQ` | Nasdaq-100 E-mini | FUT, rolls quarterly | target future |
+| `RTY` | Russell 2000 E-mini | FUT, rolls quarterly | target future |
 | `VIX` | Cboe Volatility Index (spot) | IND | intermarket context |
 | `VXN` | Cboe Nasdaq-100 Volatility Index (spot) | IND | intermarket context |
 | `TNX` | Cboe 10-Year Treasury Yield Index (yield × 10) | IND | intermarket context |
@@ -27,27 +24,19 @@ Ten instruments are collected out of the box:
 `CONTEXT_SYMBOLS`. See [Intermarket sources](#intermarket-sources) for how each logical
 asset maps onto these.
 
-The three futures share the same RTH window, the same 18:00 ET Globex roll and the same
-holiday calendar, so the session and coverage logic is identical for each. Each is
-forecast **independently** — analogues for ES are drawn only from past ES sessions, never
-across instruments. `SYMBOLS` selects which ones run.
+The three target futures share the same RTH window, the same 18:00 ET Globex roll and the
+same holiday calendar, so the session and coverage logic is identical for each. `SYMBOLS`
+selects which ones run.
 
-**Context instruments are never forecast.** VIX, for instance, is the cash index rather
+**Context instruments are only collected.** VIX, for instance, is the cash index rather
 than a future: no expiry, no volume, `sec_type = 'IND'`. It is collected like anything
-else, but instead of being forecast it contributes the pre-open VIX level and its change from the prior close to
-*every* futures snapshot (`vix_pre_open`, `vix_change`), and those reach the model in the
-prompt. `CONTEXT_SYMBOLS` controls this set. Because nothing on the Session Explorer page
-applies to a context instrument, they are left out of its contract picker.
-
-If VIX has not been collected, the columns stay NULL and the prompt simply omits the line —
-a missing feed never blocks a forecast or reports a stale level.
+else, and the Session Explorer leaves context instruments out of its instrument picker.
+`CONTEXT_SYMBOLS` controls this set.
 
 Everything runs on your machine against a local PostgreSQL + TimescaleDB database. No cloud.
 
 ```
-IB Gateway/TWS ──▶ collector ──▶ TimescaleDB ──▶ features ──▶ matching ──▶ forecaster ──▶ TimescaleDB
-                                    │                                                  │
-                                    └──────────────── NiceGUI dashboard ◀─────────────┘
+IB Gateway/TWS ──▶ collector ──▶ TimescaleDB ──▶ NiceGUI dashboard
 ```
 
 ## Quick start
@@ -118,15 +107,15 @@ side, refuses a target that already holds data):
 python -m database.migrate_from_sqlite --sqlite data/trading_pipeline.db
 ```
 
-## The three things you can run
+## The two things you can run
 
-### 1. Dashboard — look at data and forecasts
+### 1. Dashboard — look at the stored sessions
 
 ```bash
 python -m dashboard.app
 ```
 
-Two pages:
+One page:
 
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
   around the first hour. Three selectors, in order: the **session day** (searchable, newest
@@ -135,43 +124,24 @@ Two pages:
   - **Chart:** the day's regular session with **15 minutes either side** is loaded - 09:15 to
     16:15 ET, or to 13:15 on an early close - and a new day opens on **09:15-10:45**; **Fit**
     shows the whole window, and a timeframe change keeps the window being looked at. The
-    extra minutes are drawn grey (candles, volume, background). Pre-open reference levels and
-    the session VWAP come from the feature snapshot. The **opening range** (the first 15
-    minutes) is a grey box over its bars, then **ORH** / **ORL** lines with the channel between
-    them shaded (from the 1-minute bars at any timeframe; no box at 30 minutes).
-  - **First hour forecast · 09:30–10:30**
-    ([forecaster/first_hour_model.py](forecaster/first_hour_model.py)): generated before the
-    open by a trained model - sixty 1-minute candles drawn in orange beneath the session's, and
-    dashed lines at the likely hour high and low. The candles are the expected path from P (the
-    09:28 close) through the model's predicted prices at 09:45, 10:00 and 10:30, each minute as
-    large as its expected range. The card lists the predicted moves and ranges at those times
-    next to the usual ranges and, on a past day, what actually happened; how the model has
-    scored walk-forward; and the day's scheduled releases. The model refits with every new
-    first hour, recent sessions weighing more (see [How a forecast is built](#how-a-forecast-is-built)).
-  - **Direction forecasts** (folded away: they mostly call directions, which have not beaten
-    the base rates walk-forward - see **Backtests**):
-    - **Model forecast:** the trained model's run for the day (`nq_sklearn_v6`, or the
-      `nq_climatology_v6` baseline) - the targets decided between 09:30 and 10:30, each with its
-      status, predicted label, full probability distribution, the method that won the model
-      selection, and the outcome with a hit/miss mark once labelled. **Run model** computes one
-      from the stored bars if none is stored.
-    - **Opening scenario generator:** the analogue forecast of the first hour (bias, how the 10
-      matched sessions' first hour went, each match's own move); one stored for the day (by
-      `scenario-backfill`, `scripts/daily_forecast.py` or **Generate forecast**) is shown straight
-      away.
+    extra minutes are drawn grey (candles, volume, background). The previous session's RTH
+    close and the overnight high and low are drawn as reference levels, with the session
+    VWAP. The **opening range** (the first 15 minutes) is a grey box over its bars, then
+    **ORH** / **ORL** lines with the channel between them shaded (from the 1-minute bars at
+    any timeframe; no box at 30 minutes).
+  - **Moving averages:** the three lines of the TradingView indicator "TEMA & Session
+    Levels" at its default inputs, in its colours - **TEMA 14 (SMA 3)** purple, **EMA 100**
+    blue, **EMA 14 (SMA 3)** orange (the script titles the last two "EMA 50" and "EMA 9
+    Smoothed"). They run on the chart's timeframe over 1000 earlier bars of the same
+    contract, so they start the session settled, as on TradingView
+    ([features/calculations.py](features/calculations.py)).
   Beside the selectors, **Database coverage by week** is a small map of what is stored: one
   cell per instrument and week, green when every scheduled trading day is complete, then
   light green (≥ 90 %), yellow (≥ 50 %), orange (> 0 %) and red (nothing), from the
-  collector's day ledger; hover a cell for its day counts
+  collector's day ledger; hover a cell for its day counts, and the title gives the newest
+  stored day. Right of the weeks, the **last 10 trading days** are one dot each, coloured by
+  the same rule for that day alone; hover a dot for its status and bar count
   ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
-- **Backtests** (`/backtests`, [dashboard/views/backtests.py](dashboard/views/backtests.py)) —
-  each forecast against a simple guess on the same sessions, using only what was known before
-  each session: the first-hour model, the pre-open-match first-hour forecast it replaced (kept
-  for comparison) and the opening scenario generator replayed walk-forward (as
-  `first-hour-model`, `first-hour-backtest` and `scenario-backtest`), and the trained model's
-  stored forecasts against the climatology baseline (as `evaluate`). Every row shows the gain
-  with its standard error and a verdict - better / worse only beyond two standard errors.
-  Each section runs when the page opens and again on **Rerun**.
 
 ### 2. Collector — pull fresh bars from IB
 
@@ -193,18 +163,15 @@ IB once for the whole contract chain, expired contracts included, and fetches ev
 trading day from the contract that was front *on that day*. It also stores the
 `ROLL_WARMUP_SESSIONS` (7) trading days before each contract becomes active - collected
 as they happen, ahead of the roll - so the first day after a roll has a same-contract
-previous close and enough same-contract history for intraday indicators (the v2 5-minute
-EMA200 needs about four sessions). The choice is recorded per day in `active_contracts`.
+previous close and enough same-contract history for intraday indicators. The choice is
+recorded per day in `active_contracts`.
 `--expiry 202609` (or `NQ_EXPIRY=202609` for one symbol) pins a single contract instead.
 
-**Backfill before relying on standardized features.** The z-scored intermarket features
-need the prior 60 same-window returns, i.e. about three months of history for every
-context instrument, and the v2 daily ATRs need more (A: 71 RTH sessions, ATR63: 316 -
-see [docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). Once:
+**Backfilling history.** Once:
 
 ```bash
 python -m collector.ib_collector --days 100      # ~70 trading days, across the last roll
-python -m collector.ib_collector --days 460      # everything nq_features_v3 can use
+python -m collector.ib_collector --days 460      # as far back as IB serves expired contracts
 ```
 
 That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
@@ -228,30 +195,11 @@ any symbol it exits without connecting at all. See [docs/data_store.md](docs/dat
 for the full model — day statuses, the atomic per-day write path, and the
 trailing-revision window.
 
-### 3. Daily forecast — features, analogues, prediction, scoring
-
-```bash
-python scripts/daily_forecast.py --lookback-days 40        # every symbol in SYMBOLS
-python scripts/daily_forecast.py --symbol RTY              # just one
-```
-
-For each symbol in turn ([scripts/daily_forecast.py](scripts/daily_forecast.py)) it:
-
-1. loads recent 1-minute bars,
-2. backfills realized `outcomes` for every session that has already closed,
-3. computes the target session's pre-open snapshot → `feature_snapshots`,
-4. finds the top-5 analogue sessions,
-5. turns the analogues' realised outcomes into an opening bias + scenarios (offline,
-   deterministic) → `predictions`,
-6. stores which historical days it leaned on → `analogue_matches`.
-
 ### Both together
 
 [scripts/run_pipeline.sh](scripts/run_pipeline.sh) starts the real-time streamer (unless one
-is already running), runs the collector and the analogue forecast, records the v2 outcomes of
-the last ten days (so the model trains on them), then runs the live v2 model forecast, which
-trains, waits for 09:29 ET and stores its forecast before 09:30. It logs to
-`logs/pipeline_run.log`. It is meant for cron, shortly before the 09:30 ET open:
+is already running) and runs the collector. It logs to `logs/pipeline_run.log`. It is meant
+for cron, shortly before the 09:30 ET open:
 
 ```cron
 15 9 * * 1-5  /path/to/trading-pipeline/scripts/run_pipeline.sh
@@ -264,34 +212,24 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
-**The intermarket features read the bars ending at 09:29 ET** (the v2 cutoff T), which a
-09:15 run has not seen yet, and which must be stored before 09:30. Re-downloading days
-cannot do that for ten instruments, so a **real-time streamer** keeps one IB
-keep-up-to-date 1-minute stream per instrument open and stores each minute the moment it
-is final, with the time it was received:
+**A 09:15 run has not seen the last pre-open minutes**, and re-downloading days cannot land
+them by 09:30 for ten instruments, so a **real-time streamer** keeps one IB keep-up-to-date 1-minute stream per
+instrument open and stores each minute the moment it is final, with the time it was
+received:
 
 ```cron
 0  9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.live_stream >> logs/live_stream.log 2>&1
-25 9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python scripts/nq_forecast_v2.py live >> logs/pipeline_run.log 2>&1
 ```
 
 The streamer ([collector/live_stream.py](collector/live_stream.py)) runs until `--until`
 (09:31 ET by default), re-reads the 09:28 minute of every instrument right after it ends
-(`--confirm-at`) so P is IB's own historical bar, and uses client id `IB_CLIENT_ID + 1`
+(`--confirm-at`) so it is IB's own historical bar, and uses client id `IB_CLIENT_ID + 1`
 so the historical collector can run beside it. Each bar goes to `bars` (as not yet
 completed, so the regular collector re-downloads the day later) and, append-only, to
-`bar_receipts` with its `received_at` - the per-bar point-in-time proof a `verified`
-live snapshot cites. `nq_forecast_v2.py live` waits (until 09:29:45) for the confirmed
-NQ and ES 09:28 bars, then freezes and forecasts before 09:30. It starts at 09:25 so the
-model is trained (on every outcome recorded so far) before T, leaving only prediction for
-the last minute.
+`bar_receipts` with its `received_at` - a per-bar record of what was known when.
 
-Collecting after the open adds no look-ahead: features select bars by timestamp
-(`get_last_bar_at_or_before`), never by what happens to be stored.
-
-It covers every symbol in `SYMBOLS`, and hands the whole list to each step in one process
-so the collector's rate-limit pacing stays accurate and one instrument's missing data does
-not suppress the others' forecasts.
+It collects every symbol in `SYMBOLS`, and hands the whole list to the collector in one
+process so its rate-limit pacing stays accurate.
 
 ## Configuration
 
@@ -302,9 +240,9 @@ Settings come from environment variables or a local `.env`, read by
 |---|---|---|
 | `DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline` | Production store — collector and pipeline write here |
 | `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
-| `SYMBOLS` | `ES,NQ,RTY` | Instruments that are forecast, in order |
-| `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,2YY` | Collected as intermarket context only; never forecast |
-| `EXPIRY` | `202612` | Contract month the forecast and dashboard read; the collector follows each roll rule regardless |
+| `SYMBOLS` | `ES,NQ,RTY` | Target futures, collected and shown in the Session Explorer, in order |
+| `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,2YY` | Collected as intermarket context only |
+| `EXPIRY` | `202612` | Fallback contract month where no roll assignment applies (streamer, mock data); the collector follows each roll rule regardless |
 | `<SYMBOL>_EXPIRY` | — | Pins one future everywhere, collector included, e.g. `RTY_EXPIRY=202612` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
@@ -329,9 +267,7 @@ size and multiplier back from IB. A non-CME or non-equity-index future would als
 session windows and holiday calendar checked, since those assume the 18:00 ET roll and the
 CME equity calendar.
 
-**No API keys are needed.** Forecasts are computed locally: the v2 model with
-scikit-learn ([forecaster/models_v2.py](forecaster/models_v2.py)), the v1 dashboard
-forecast with a deterministic analogue engine ([forecaster/client.py](forecaster/client.py)).
+**No API keys are needed.** Everything is computed locally.
 
 Check what config resolves to:
 
@@ -341,11 +277,11 @@ python config.py
 
 ## Intermarket sources
 
-The pre-open intermarket features are defined over **logical assets** (`nq`, `es`, `vix`,
-`us10y`, ...). `ASSET_SOURCES` in [config.py](config.py) maps each one to the instrument
-actually recorded, with its freshness rule, and the collector registers that map in the
+The intermarket context is defined over **logical assets** (`nq`, `es`, `vix`, `us10y`,
+...). `ASSET_SOURCES` in [config.py](config.py) maps each one to the instrument actually
+recorded, with its freshness rule, and the collector registers that map in the
 `asset_sources` table on every run (a changed definition becomes a new row, so every
-version a feature could have used stays on record). `python config.py` prints it.
+version stays on record). `python config.py` prints it.
 
 | Asset | Recorded as | Unit | Freshness | Notes |
 |---|---|---|---|---|
@@ -354,19 +290,19 @@ version a feature could have used stays on record). `python config.py` prints it
 | `vxn` | VXN spot index | index points | 20 min | may print in RTH only — then pre-open is null, not carried |
 | `us10y` | TNX | percent × 10 (1 unit = 10 bps) | 30 min | |
 | `us2y` | — | | | **unmapped**: IB has no spot 2-year yield history, so this stays null |
-| `dxy` | — | | | **unmapped**: ICE does not license the cash DXY index to IB, so `dxy_preopen_return` stays null |
-| `dx_fut` | DX front future | price | 30 min | **proxy** for DXY, under its own feature names (`dx_fut_*`) |
+| `dxy` | — | | | **unmapped**: ICE does not license the cash DXY index to IB |
+| `dx_fut` | DX front future | price | 30 min | **proxy** for DXY, under its own asset name |
 | `smh` | SMH | price | 30 min | premarket trades included (`useRTH=0`) |
 | `us10y_yield_fut`, `us2y_yield_fut` | 10Y / 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset names |
 | `gc`, `cl` | GC / CL front future | price | 10 min | optional, not collected by default |
 
-What the store guarantees for these features:
+What the store guarantees for these series:
 
 - **Only genuine prints.** Bars are stored exactly as IB sends them; a minute without a
   print is absent, never forward-filled. `bars.timestamp_utc` is the bar's *start* time
-  (`bar_start_at`). The v2 contract names a bar by its start: "the 09:28 close" is the bar
-  stamped 09:28, which ends at 09:29 = T. A value's age is the
-  distance from its bar's close to the instant it stands for.
+  (`bar_start_at`), and a bar is named by its start: "the 09:28 close" is the bar stamped
+  09:28, which ends at 09:29. A value's age is the distance from its bar's close to the
+  instant it stands for.
 - **One contract per future per day.** `active_contracts` says which contract stood for a
   symbol on each trading day, and the days before each activation are stored too, so a
   pre-open value and its previous-RTH-close reference always come from the same contract.
@@ -383,77 +319,15 @@ close time) and `get_asset_sources(conn)`.
 Breadth (historical-constituent advance/decline) is not collected: it needs historical
 index membership and per-constituent data, which nothing here records.
 
-## How a forecast is built
+## Sessions and reference levels
 
-**Features** ([features/calculations.py](features/calculations.py)) are frozen at 09:30 ET
-of the target day — no bar at or after the open is used, so the snapshot carries no
-look-ahead bias. It captures previous-RTH high/low/close, overnight high/low/range, the
-opening gap, pre-open direction, historical volatility and VWAP, plus the cash VIX level
-as of the same cutoff and its change from the prior close.
+**Reference levels** ([features/calculations.py](features/calculations.py)): the previous
+trading day's RTH high, low and close, and the overnight high and low - the day's bars
+before 09:30 ET only. The chart draws the previous close and the overnight extremes.
 
 The trading day starts at **18:00 ET the prior evening** (the Globex open), not midnight.
 [features/session_windows.py](features/session_windows.py) owns that rule and classifies
 each bar `RTH` (09:30–16:00 ET) or `ETH`.
-
-**Matching** ([forecaster/analogue.py](forecaster/analogue.py),
-[matching/normalizer.py](matching/normalizer.py)) finds the 10 closest earlier sessions. For
-NQ it compares the stored point-in-time snapshots (`nq_features_v3`) of every earlier NQ
-session, whatever contract it traded on, on eight pre-open volatility inputs the trained
-model uses (ATR fraction, relative 1-minute ATR, overnight, last-hour and prior-session
-ranges, overnight and last-hour relative volume, VIX) plus the signed gap in ATR; the day's
-own snapshot is reconstructed from the bars when none is stored. The model's other two,
-the ATR ratio and VXN, are left out: snapshots almost never have them (the 63-session ATR
-needs more history than IB serves, and VXN prints no pre-open level). Other
-instruments, or NQ with fewer than 20 comparable stored snapshots, are matched on gap and
-overnight range in units of `previous_close × historical_volatility`. Each input is
-standardised over the candidates and the distance is the root mean square of the
-differences, over the inputs both days have. (v1 matched on `[gap, overnight_range,
-direction]` unscaled, where the ±1 direction flag outweighed everything else.) The pre-open
-state carries information about how far a session moves, not which way (`metric-study`), so
-a match shares the day's volatility setting, not its direction.
-
-**Forecasting** ([forecaster/client.py](forecaster/client.py), `analogue_baseline_v2`)
-measures each analogue's first hour - 09:30 open to 10:29 close, in units of that day's
-ATR (or daily σ) - as up, down or flat (within ±0.10), and reports those frequencies as the
-`probabilities`; the `opening_bias` is the most frequent outcome (a tie is NEUTRAL), with
-two `scenarios` with triggers and invalidations. The flat band in points is stored with the
-forecast, and `scenario-backtest` (and the Backtests page) scores it over that same first hour. v1 took the bias from
-the gap's sign and the frequencies from the RTH close against the previous close, and could
-show a bearish bias above a mostly bullish distribution. It is deterministic and offline.
-The trained model is the v2 pipeline below.
-
-**Evaluation** ([forecaster/evaluator.py](forecaster/evaluator.py)) computes what actually
-happened once a session closes — first 15/30 minutes, the 60-minute Initial Balance, and
-full RTH high/low/close, and the 10:29 close that ends the analogue forecast's horizon —
-anchored to 09:30 ET regardless of which bar arrived first.
-
-**First-hour model** ([forecaster/first_hour_model.py](forecaster/first_hour_model.py),
-inputs from [forecaster/preopen.py](forecaster/preopen.py)) is the Session Explorer's forecast.
-From the pre-open only it predicts where the price is at 09:45, 10:00 and 10:30 - ln(close /
-P), in usual first-hour ranges - and the range of the first 15, 30 and 60 minutes against the
-usual (the median of the previous 40 sessions), and generates the hour's 1-minute candles from
-them. Its inputs are the previous session's range, the mean range of the last 5 and 22
-sessions, the previous and 5-session first-hour range, overnight and last-hour range and
-volume, VIX (level, against its usual, change since the previous close), Monday and Friday -
-and, for direction, the returns to P from the overnight open, 08:28 and 09:13, the previous
-session's return, and where P and the previous close sit in their ranges. Everything comes
-from the stored bars of each day's active contract and spot VIX, so no snapshot is needed and
-ES and RTY work too. One ridge regression per target is fitted on every session before the
-forecast day, a session's weight halving every 120 sessions back, with the penalty chosen by
-leave-one-out: each actual first hour joins the training for the next day, and a direction the
-outcomes do not support is shrunk toward the average rather than drawn. Walk-forward checks
-before it found no direction skill anywhere - not in the pre-open matches, whose first-hour
-paths were no closer to the day's than random days', nor in the session's own first 15 or 30
-minutes - and the model agrees: when this was written (217 NQ sessions from 2025-11-11,
-`first-hour-model`) its direction was right 46 / 49 / 50 % of the time at 09:45 / 10:00 /
-10:30, while the hour went up 53 % of the time, and its drawn path did no better than a flat
-line. The sizes are where it has skill: the 15 / 30 / 60 minute ranges missed by ±31 / 31 /
-33 % against ±38 / 39 / 41 % for the usual, each minute's candle by ±37 % against ±46 %.
-
-The economic calendar (below) was tested as an input to a range forecast of the first hour and
-the session - a high release before the open, a high or moderate one still ahead, and on its
-own an FOMC decision still ahead - and changed nothing measurable walk-forward, so the card
-lists the day's releases (marking one inside the hour) but the model does not use them.
 
 **Economic calendar** ([database/events.py](database/events.py)):
 
@@ -469,72 +343,12 @@ reliably. `data/economic_calendar_coverage.csv` says which days each source cove
 a day without a release had none, outside it the calendar is missing - never "no event". The
 CSVs are the source of truth: when the agencies publish the next year's schedules (BLS in the
 autumn), add the rows, extend the coverage, and load again; a release whose date changed
-replaces its row. The v2 snapshot's event features read the same tables.
+replaces its row. Nothing reads the tables at the moment.
 
-## v2: versioned NQ forecast records
+## Tests
 
-A second, stricter pipeline runs beside the one above
-([docs/forecast_contract_v2.md](docs/forecast_contract_v2.md)). It freezes an
-`nq_features_v3` snapshot at **T = 09:29 ET** from bars ending by T only - NQ
-price/volume structure in ATR units, intermarket returns and yield/volatility changes
-with per-source freshness, calendar and event context - with a status for every feature
-and source, a content-addressed source revision, and a live/historical and
-point-in-time flag. Forecast runs, per-target probability distributions (with
-abstention), realised labels and continuous outcome metrics are separate, append-only
-records; corrections become new versions or revisions, never overwrites.
-
-It labels the five targets of the NASDAQ-100 prediction schema - `first_move_5m`,
-`opening_type_15m`, `direction_15m`, `direction_rth` and `session_type_rth` - three range
-regimes, `range_15m_regime`, `range_1h_regime` and `range_rth_regime` (`wide` / `narrow`:
-above or below the median range of the previous 40 sessions), and two more first-hour
-targets, `direction_1h` (09:30 open to 10:29 close) and `first_break_1h` (which side of the
-15-minute opening range breaks first between 09:45 and 10:30), each labelled afterwards by
-deterministic rules from the realised minute bars (`nq_labels_v5_candidate`). The model
-forecasts only those decided between **09:30 and 10:30** - first move, opening type,
-15-minute direction and range, and the three first-hour targets; the full-session ones are
-labelled for the studies but not forecast. The
-schema's starting thresholds labelled about two thirds of openings and sessions 'mixed';
-they are retuned on the realised label mix (`label-study`), which brings 'mixed' to about
-a third. The range regimes were added because the pre-open features predict how far NQ
-moves, not which way (`metric-study`).
-
-**The model** (`nq_sklearn_v6`, [forecaster/models_v2.py](forecaster/models_v2.py)) is a
-scikit-learn classifier per target over an explicit allowlist of snapshot features
-(median imputation + missing indicators, scaling, one-hot categoricals). To forecast a
-session it trains only on earlier sessions whose outcome was knowable before that
-session's 09:29 cutoff. For each target it scores the class prior, sparse (L1) and L2
-logistic regressions (one on the pre-open volatility inputs only) and a gradient-boosted
-tree ensemble by chronological
-cross-validation (`TimeSeriesSplit`, log loss) and refits the winner. A feature model
-replaces the prior only from 120 training sessions on, and only when it beats the prior
-on the same validation sessions by a clear margin (more than two standard errors of the
-per-session gain); otherwise the forecast is the class frequencies. `nq_climatology_v6`
-(label frequencies) is kept as the baseline to compare against.
-
-```bash
-python scripts/nq_forecast_v2.py backfill --start 2026-06-01 --end 2026-09-25  # reconstruct + walk-forward backtest (both models)
-python scripts/nq_forecast_v2.py train                                          # fit for today: CV report + data/models/ artifact
-python scripts/nq_forecast_v2.py evaluate --outcome-revision 1                  # scores per model/target + paired skill vs the baseline
-python scripts/nq_forecast_v2.py label-study --start 2025-09-01 --end 2026-09-25  # label mix under alternative thresholds (writes nothing)
-python scripts/nq_forecast_v2.py metric-study --start 2025-09-01 --end 2026-09-25 # which features predict direction vs magnitude (writes nothing)
-python scripts/nq_forecast_v2.py first-hour-model                               # train the first-hour model, score it walk-forward: moves, ranges, candle sizes (writes nothing; --symbol ES)
-python scripts/nq_forecast_v2.py first-hour-backtest                            # walk-forward score of the pre-open-match forecast the first-hour model replaced (writes nothing)
-python scripts/nq_forecast_v2.py scenario-backfill --start 2025-09-01 --end 2026-09-25 # store the opening scenario generator's forecasts, walk-forward
-python scripts/nq_forecast_v2.py scenario-backtest                              # walk-forward score of the generator on the first hour (writes nothing)
-python scripts/nq_forecast_v2.py live        # 09:29 ET: trains first, then freezes + forecasts before 09:30
-```
-
-The model needs at least 60 labelled sessions per target to issue a forecast (earlier ones
-are recorded as `unavailable`), and 120 before its features can outweigh the plain class
-frequencies, so backfill history first. The same holds after pulling a new feature, label
-or model version: the new version starts with no records, and the daily runner only labels
-the last few sessions, so run `backfill` once over the stored history (it labels every
-session under the new version and forecasts with every model; older versions' records
-stay). The current versions and what changed are listed at the top of
-[docs/forecast_contract_v2.md](docs/forecast_contract_v2.md).
-
-Tests: `pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable
-database whose name contains `test`; they reset it).
+`pytest` (the database tests run when `TEST_DATABASE_URL` names a disposable database whose
+name contains `test`; they reset it).
 
 ## Layout
 
@@ -542,13 +356,11 @@ database whose name contains `test`; they reset it).
 |---|---|
 | [collector/](collector/) | IB API client, coverage planner, request pacing, real-time bar streamer |
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools, economic calendar loader |
-| [features/](features/) | Session/timezone classification, pre-open feature engineering |
-| [matching/](matching/) | Volatility-normalized analogue search |
-| [forecaster/](forecaster/) | First-hour model and its pre-open inputs, v2 labels + scikit-learn model, analogue forecast, outcome evaluator |
-| [dashboard/](dashboard/) | NiceGUI app, pages, and the Lightweight Charts component |
-| [scripts/](scripts/) | Daily runner, v1 and v2 forecast entrypoints, DB backup |
-| [tests/](tests/) | Calendar, feature-indicator, v2 snapshot and forecast-record tests |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [v2 forecast contract](docs/forecast_contract_v2.md) |
+| [features/](features/) | Trading calendar, session/timezone classification, VWAP and the chart's reference levels |
+| [dashboard/](dashboard/) | NiceGUI app, the Session Explorer, and the Lightweight Charts component |
+| [scripts/](scripts/) | Daily runner, DB backup |
+| [tests/](tests/) | Calendar, collector, data-store, event-calendar and dashboard tests |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md) |
 
 ## Database
 
@@ -562,13 +374,13 @@ Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `asset_sources` (the logical-asset source map, versioned), `bar_receipts` (every
 real-time bar as received, with `received_at`; append-only), `economic_events` /
 `economic_event_coverage` (an optional event calendar), and the v1 forecast tables
-`feature_snapshots`, `predictions`, `analogue_matches`, `outcomes`.
+`feature_snapshots`, `predictions`, `analogue_matches`, `outcomes` (kept, no longer
+written).
 
-The v2 records (`0004`) live in their own schema, `forecast`: `feature_snapshots`,
-`forecast_runs`, `predictions`, `realised_outcomes`, `outcome_metrics`, their version
-registries and `source_revisions`. They are append-only - the database rejects UPDATE,
-DELETE and TRUNCATE - and are described in
-[docs/forecast_contract_v2.md](docs/forecast_contract_v2.md).
+The `forecast` schema (`0004`) holds the records of the removed v2 forecast pipeline:
+`feature_snapshots`, `forecast_runs`, `predictions`, `realised_outcomes`,
+`outcome_metrics`, their version registries and `source_revisions`. Nothing writes them
+now; they are append-only - the database rejects UPDATE, DELETE and TRUNCATE.
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
 ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll
@@ -596,8 +408,7 @@ The dashboard is [NiceGUI](https://nicegui.io) serving TradingView's
 **vendored** at `dashboard/components/lib/lightweight-charts.standalone.js`, so the
 dashboard loads no CDN and works with no network access.
 
-Every chart in the app — candles and the evaluation trajectory alike — goes through one
-component, [dashboard/components/lightweight_chart.js](dashboard/components/lightweight_chart.js).
+Every chart in the app goes through one component, [dashboard/components/lightweight_chart.js](dashboard/components/lightweight_chart.js).
 
 **The chart is built once and then mutated in place.** Python never issues drawing
 commands; it builds a *declarative spec* of what the chart should show

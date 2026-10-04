@@ -15,7 +15,3 @@ nicegui>=3.17
 
 # Market data collection (Interactive Brokers official API)
 ibapi>=9.81
-
-# Forecast model (scikit-learn; joblib ships with it and stores fitted artifacts).
-# No language model or external API is used anywhere in the pipeline.
-scikit-learn>=1.3

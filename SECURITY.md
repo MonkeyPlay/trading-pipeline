@@ -75,9 +75,9 @@ Findings that break the trusted-local model, or that harm a user who followed th
 If you ever commit a key by accident, treat it as compromised: revoke and reissue it at the
 provider, then rewrite history. Rotating alone is not enough once it has been pushed.
 
-**Third-party data flow.** None. Forecasts are computed locally (scikit-learn and a
-deterministic analogue engine); the pipeline calls no language model or other external
-API. Its only outbound connection is to your own IB Gateway/TWS.
+**Third-party data flow.** None. Everything is computed locally; the pipeline calls no
+language model or other external API. Its only outbound connection is to your own IB
+Gateway/TWS.
 
 ## Hardening if you run it beyond your laptop
 

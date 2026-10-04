@@ -1,6 +1,6 @@
 ---
 name: run-dashboard
-description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the Session Explorer (the generated first hour on the chart and its card), the folded direction panels and the Backtests page. Use to see a dashboard change working, not just its tests.
+description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the Session Explorer (the session chart and its reference levels) and the Review page (label review of a review set). Use to see a dashboard change working, not just its tests.
 ---
 
 # Run and drive the dashboard
@@ -32,16 +32,14 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 ## 3. Drive
 
 ```bash
-/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py explorer    # first-hour card and chart, then at 5 minutes
-/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py direction   # the folded direction panels open
-/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py backtests   # waits for the First-hour model section
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py explorer    # the chart and status badge, then at 5 minutes
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py review      # the Review page (never presses Save: it writes verdicts)
 ```
 
-`--port` (default 8093) and `--out` (default `/tmp/dashboard-shots`) are optional. Each step prints what the page shows and ends with `PROBLEMS: none` or the browser errors. **Look at the screenshots** it writes; then check the server log for tracebacks.
+`--port` (default 8093) and `--out` (default `/tmp/dashboard-shots`) are optional. The step prints what the page shows and ends with `PROBLEMS: none` or the browser errors. **Look at the screenshots** it writes; then check the server log for tracebacks.
 
 ## Gotchas
 
 - NiceGUI talks over a websocket: wait for the text you need (`wait_for_selector`), never for network idle.
-- The first page load per instrument trains the first-hour model walk-forward (~5 s) before the card appears.
 - `tp_test` is the disposable database for anything that writes (the test suite resets it).
 - The session day select takes typed input: fill it, then click the matching `.q-item`.

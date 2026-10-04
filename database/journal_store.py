@@ -1,0 +1,209 @@
+# database/journal_store.py
+"""
+Read/write access to the journal records (schema ``journal``, migration 0009):
+definition versions, evidence snapshots and realised outcomes. Everything here
+appends; the database rejects UPDATE, DELETE and TRUNCATE.
+
+  register_version   a definition under its version name; re-registering the
+                     same name with a different definition raises VersionConflict
+  save_snapshot      idempotent on (contract, session, snapshot version,
+                     convention version, source payload hash)
+  save_outcome       the next outcome_revision when the recomputed labels,
+                     measurements or source differ from the latest, else the latest
+"""
+
+import hashlib
+import json
+import logging
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+from contracts.nq_prompt_v2 import canonical_json
+from database.connection import Database
+
+logger = logging.getLogger(__name__)
+
+
+class VersionConflict(RuntimeError):
+    """A version name is already registered with a different definition."""
+
+
+def _lock(conn: Database, *parts) -> None:
+    key = int(hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:15], 16)
+    conn.execute("SELECT pg_advisory_xact_lock(%s);", (key,))
+
+
+def _load(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def register_version(conn: Database, rec: Dict[str, Any]) -> bool:
+    """Registers ``rec`` ({'version', 'kind', 'definition', 'definition_hash'}); True when new."""
+    with conn:
+        _lock(conn, "journal.definition_versions", rec["version"])
+        row = conn.execute("SELECT kind, definition_hash FROM journal.definition_versions WHERE version = %s;",
+                           (rec["version"],)).fetchone()
+        if row is not None:
+            if (row["kind"], row["definition_hash"]) != (rec["kind"], rec["definition_hash"]):
+                raise VersionConflict(
+                    f"{rec['version']} is already registered with a different definition. Versions are "
+                    f"immutable: give the changed definition a new version name.")
+            return False
+        conn.execute(
+            "INSERT INTO journal.definition_versions (version, kind, definition_hash, definition) "
+            "VALUES (%s, %s, %s, %s);",
+            (rec["version"], rec["kind"], rec["definition_hash"], canonical_json(rec["definition"])),
+        )
+    logger.info(f"Registered {rec['kind']} version {rec['version']}.")
+    return True
+
+
+# --------------------------------------------------------------------------
+# Snapshots
+# --------------------------------------------------------------------------
+
+def save_snapshot(conn: Database, snap) -> Tuple[str, bool]:
+    """
+    Stores a ``features.nq_evidence.Snapshot``. Returns ``(snapshot_id, created)``;
+    a snapshot with the same source payload already stored is returned instead.
+    """
+    with conn:
+        row = conn.execute(
+            "INSERT INTO journal.snapshots (snapshot_id, symbol, contract_id, session_date, snapshot_version, "
+            "convention_version, cutoff_at, rth_open_at, data_mode, pit_availability_status, source_payload_hash, "
+            "payload) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (contract_id, session_date, snapshot_version, convention_version, source_payload_hash) "
+            "DO NOTHING RETURNING snapshot_id;",
+            (str(uuid.uuid4()), snap.symbol, snap.contract_id, snap.session_date, snap.snapshot_version,
+             snap.convention_version, snap.cutoff_at, snap.rth_open_at, snap.data_mode,
+             snap.pit_availability_status, snap.source_payload_hash, canonical_json(snap.payload)),
+        ).fetchone()
+        if row is not None:
+            return str(row[0]), True
+        existing = conn.execute(
+            "SELECT snapshot_id FROM journal.snapshots WHERE contract_id = %s AND session_date = %s "
+            "AND snapshot_version = %s AND convention_version = %s AND source_payload_hash = %s;",
+            (snap.contract_id, snap.session_date, snap.snapshot_version, snap.convention_version,
+             snap.source_payload_hash),
+        ).fetchone()
+        return str(existing[0]), False
+
+
+def _snapshot_dict(row) -> Dict[str, Any]:
+    d = dict(zip(row.keys(), row))
+    d["payload"] = _load(d["payload"])
+    d["snapshot_id"] = str(d["snapshot_id"])
+    return d
+
+
+def get_snapshot(conn: Database, snapshot_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT * FROM journal.snapshots WHERE snapshot_id = %s;", (snapshot_id,)).fetchone()
+    return _snapshot_dict(row) if row else None
+
+
+def list_snapshots(conn: Database, start: str, end: str, snapshot_version: str,
+                   symbol: str = "NQ") -> List[Dict[str, Any]]:
+    """The newest snapshot of every session in [start, end], oldest session first."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (session_date) * FROM journal.snapshots "
+        "WHERE session_date BETWEEN %s AND %s AND snapshot_version = %s AND symbol = %s "
+        "ORDER BY session_date, built_at DESC;",
+        (start, end, snapshot_version, symbol),
+    ).fetchall()
+    return [_snapshot_dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# Outcomes (revisioned)
+# --------------------------------------------------------------------------
+
+def latest_outcome(conn: Database, snapshot_id: str, label_version: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM journal.outcomes WHERE snapshot_id = %s AND label_version = %s "
+        "ORDER BY outcome_revision DESC LIMIT 1;",
+        (snapshot_id, label_version),
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(zip(row.keys(), row))
+    d["labels"], d["measurements"] = _load(d["labels"]), _load(d["measurements"])
+    return d
+
+
+def save_outcome(conn: Database, snapshot_id: str, label_version: str, outcome: Dict[str, Any]) -> Tuple[int, bool]:
+    """
+    Stores ``outcome`` ({'labels', 'measurements', 'digest'}) for a snapshot.
+    Returns ``(outcome_revision, created)``: a new revision only when something changed.
+    """
+    labels, measurements = json.loads(canonical_json(outcome["labels"])), json.loads(
+        canonical_json(outcome["measurements"]))
+    with conn:
+        _lock(conn, "journal.outcomes", snapshot_id, label_version)
+        last = latest_outcome(conn, snapshot_id, label_version)
+        if (last is not None and last["labels"] == labels and last["measurements"] == measurements
+                and last["source_digest"] == outcome["digest"]):
+            return int(last["outcome_revision"]), False
+        revision = 1 if last is None else int(last["outcome_revision"]) + 1
+        conn.execute(
+            "INSERT INTO journal.outcomes (snapshot_id, label_version, outcome_revision, labels, measurements, "
+            "source_digest) VALUES (%s, %s, %s, %s, %s, %s);",
+            (snapshot_id, label_version, revision, canonical_json(labels), canonical_json(measurements),
+             outcome["digest"]),
+        )
+        return revision, True
+
+
+# --------------------------------------------------------------------------
+# Review sets (migration 0010)
+# --------------------------------------------------------------------------
+
+def create_review_set(conn: Database, name: str, label_version: str, snapshot_version: str,
+                      selection: Dict[str, Any], members: List[Dict[str, Any]]) -> bool:
+    """
+    Stores a review set and its members ({'snapshot_id', 'reasons'}, in order).
+    True when new; an existing set of that name is left as it is.
+    """
+    with conn:
+        _lock(conn, "journal.review_sets", name)
+        if conn.execute("SELECT 1 FROM journal.review_sets WHERE review_set = %s;", (name,)).fetchone():
+            return False
+        conn.execute("INSERT INTO journal.review_sets (review_set, label_version, snapshot_version, selection) "
+                     "VALUES (%s, %s, %s, %s);", (name, label_version, snapshot_version, canonical_json(selection)))
+        conn.executemany(
+            "INSERT INTO journal.review_members (review_set, snapshot_id, position, reasons) VALUES (%s, %s, %s, %s);",
+            [(name, m["snapshot_id"], i, canonical_json(m["reasons"])) for i, m in enumerate(members, 1)])
+    return True
+
+
+def review_sets(conn: Database) -> List[Dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM journal.review_sets ORDER BY created_at DESC;").fetchall()
+    return [dict(zip(r.keys(), r), selection=_load(r["selection"])) for r in rows]
+
+
+def review_members(conn: Database, name: str) -> List[Dict[str, Any]]:
+    """The set's sessions in order: {'snapshot_id', 'session_date', 'position', 'reasons'}."""
+    rows = conn.execute(
+        "SELECT m.snapshot_id, s.session_date, m.position, m.reasons FROM journal.review_members m "
+        "JOIN journal.snapshots s ON s.snapshot_id = m.snapshot_id WHERE m.review_set = %s ORDER BY m.position;",
+        (name,)).fetchall()
+    return [{"snapshot_id": str(r["snapshot_id"]), "session_date": str(r["session_date"]),
+             "position": int(r["position"]), "reasons": _load(r["reasons"])} for r in rows]
+
+
+def save_verdicts(conn: Database, name: str, snapshot_id: str, outcome_revision: int,
+                  verdicts: List[Dict[str, Any]], reviewer: Optional[str] = None) -> int:
+    """Appends one verdict per field ({'field', 'shown_value', 'verdict', 'note'}); returns how many."""
+    with conn:
+        conn.executemany(
+            "INSERT INTO journal.review_verdicts (review_set, snapshot_id, outcome_revision, field, shown_value, "
+            "verdict, note, reviewer) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
+            [(name, snapshot_id, outcome_revision, v["field"], v["shown_value"], v["verdict"], v.get("note") or None,
+              reviewer) for v in verdicts])
+    return len(verdicts)
+
+
+def latest_verdicts(conn: Database, name: str) -> List[Dict[str, Any]]:
+    """The verdict that counts per session and field (journal.review_latest)."""
+    rows = conn.execute("SELECT * FROM journal.review_latest WHERE review_set = %s ORDER BY session_date, field;",
+                        (name,)).fetchall()
+    return [dict(zip(r.keys(), r), snapshot_id=str(r["snapshot_id"])) for r in rows]

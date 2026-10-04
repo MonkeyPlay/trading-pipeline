@@ -1,31 +1,22 @@
 # tests/test_dashboard_data.py
 """
-Data behind the Session Explorer: which contract it opens on, the forecast it
-finds for a day, and the matching historical day's regular session.
+Data behind the Session Explorer: which contract it opens on, the contracts it
+offers for a day, the coverage map, and what the chart draws.
 
 Needs a disposable PostgreSQL + TimescaleDB database whose name contains
-"test", which it RESETS (see tests/test_forecast_store.py).
+"test", which it RESETS:
+
+    TEST_DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_pipeline_test pytest
 """
 
 import os
-from datetime import timedelta
 
 import pandas as pd
 import psycopg
 import pytest
 
 from database.connection import get_db_connection, reset_database
-from database.queries import (
-    get_day_prediction,
-    get_latest_contract,
-    save_analogue_matches,
-    save_bars_by_day,
-    save_feature_snapshot,
-    save_prediction,
-    set_active_contracts,
-    upsert_contract,
-)
-from features import calendar as cal
+from database.queries import get_latest_contract, save_bars_by_day, set_active_contracts, upsert_contract
 from features.session_windows import enrich_candle_timezones
 from tests.synthetic import ES_CID, NQ_CID, make_market
 
@@ -51,22 +42,22 @@ def _store(conn, df, cid):
 def market():
     reset_database(DSN)
     conn = get_db_connection(DSN)
-    md, sessions = make_market(last_day=LAST_DAY, n_sessions=8)
+    bars, sessions = make_market(last_day=LAST_DAY, n_sessions=8)
     upsert_contract(conn, NQ_CID, "NQ", "20260918", "CME")
     upsert_contract(conn, NQ_DEC, "NQ", "20261218", "CME")
     upsert_contract(conn, NQ_JUN, "NQ", "20260619", "CME")
     upsert_contract(conn, ES_CID, "ES", "20260918", "CME")
-    nq = md._bars[(NQ_CID, "TRADES")]
+    nq = bars[NQ_CID]
     _store(conn, nq, NQ_CID)
     warmup = [s for s in sessions[-3:]]
     start = warmup[0].overnight_start_at
     _store(conn, nq[nq["bar_start_at"] >= start].assign(close=lambda d: d["close"] + 50.0), NQ_DEC)
     _store(conn, nq[nq["bar_start_at"] < sessions[2].overnight_start_at].assign(open=lambda d: d["open"] - 30.0),
            NQ_JUN)
-    _store(conn, md._bars[(ES_CID, "TRADES")], ES_CID)
+    _store(conn, bars[ES_CID], ES_CID)
     days = [s.session_date.isoformat() for s in sessions]
     set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
-    yield conn, md, sessions
+    yield conn, bars, sessions
     conn.close()
 
 
@@ -82,53 +73,12 @@ def test_latest_contract_is_the_active_one_not_the_latest_expiry(market):
     assert get_latest_contract(conn, "RTY") is None
 
 
-def _prediction(conn, cid, day, raw="{}"):
-    cutoff = cal.session(day).rth_open_at.isoformat()
-    sid = save_feature_snapshot(conn, cid, cutoff, None, None, None, None, None, None, 0.0, "FLAT", None, None,
-                                {}, "v1.0")
-    return save_prediction(conn, cid, cutoff, sid, "analogue_baseline_v1", "none", "BULLISH",
-                           {"primary_scenario": {"name": "Gap and go"}}, {"bullish_continuation_pct": 60.0},
-                           raw, pd.Timestamp.now(tz="UTC").isoformat())
-
-
-def test_day_prediction_prefers_the_selected_contract(market):
-    conn, _, sessions = market
-    day = sessions[-2].session_date.isoformat()
-    assert get_day_prediction(conn, "NQ", day) is None
-    sep = _prediction(conn, NQ_CID, day)
-    assert get_day_prediction(conn, "NQ", day, NQ_DEC)["prediction_id"] == sep     # same symbol, other contract
-    dec = _prediction(conn, NQ_DEC, day)
-    assert get_day_prediction(conn, "NQ", day, NQ_CID)["prediction_id"] == sep
-    assert get_day_prediction(conn, "NQ", day, NQ_DEC)["prediction_id"] == dec
-    row = get_day_prediction(conn, "NQ", day, NQ_DEC)
-    assert row["symbol"] == "NQ" and row["expiry"] == "20261218"
-    assert get_day_prediction(conn, "NQ", sessions[-3].session_date.isoformat()) is None
-    assert get_day_prediction(conn, "ES", day) is None
-
-
-def test_stored_forecast_reads_the_repr_without_evaluating_it(market):
-    conn, _, sessions = market
-    from dashboard.views.candles import stored_forecast
-    day = sessions[-1].session_date.isoformat()
-    pid = _prediction(conn, NQ_CID, day, raw=str({"forecast_horizon": "First 60 minutes",
-                                                   "analogue_rationale": "Closest days rallied."}))
-    save_analogue_matches(conn, pid, [{"match_date": sessions[-3].session_date.isoformat(),
-                                       "similarity_score": 0.9, "ranking": 1}])
-    f = stored_forecast(get_day_prediction(conn, "NQ", day, NQ_CID))
-    assert f["opening_bias"] == "BULLISH" and f["probabilities"]["bullish_continuation_pct"] == 60.0
-    assert f["scenarios"]["primary_scenario"]["name"] == "Gap and go"
-    assert f["analogue_rationale"] == "Closest days rallied."
-    row = dict(get_day_prediction(conn, "NQ", day, NQ_CID))
-    assert "analogue_rationale" not in stored_forecast({**row, "raw_response": "__import__('os').getcwd()"})
-
-
 def test_contract_order_for_a_day(monkeypatch):
-    from dashboard.views import candles
     from database import queries
     held = [{"contract_id": i, "expiry": e} for i, e in
             ((1, "20260320"), (2, "202606"), (3, "20260918"), (4, "20261218"))]   # nearest expiry first
     monkeypatch.setattr(queries, "contracts_with_day", lambda conn, symbol, day: held)
-    order = lambda day: [c["contract_id"] for c in candles.analogue_contracts(None, "NQ", day)]
+    order = lambda day: [c["contract_id"] for c in queries.contracts_for_day(None, "NQ", day)]
     assert order("2026-08-07") == [3, 4, 2, 1]      # Sep, then Dec; expired ones last, closest first
     assert order("2026-06-15") == [2, 3, 4, 1]      # a contract month counts through its month
     assert order("2026-09-18") == [3, 4, 2, 1]      # expiry day itself
@@ -164,7 +114,22 @@ def test_coverage_map_scores_weeks(market):
 
     assert [band(s, False) for s in (None, 0.0, 0.2, 0.5, 0.95)] == [0, 1, 2, 3, 4] and band(1.0, True) == 5
     opts = chart_options(data)
-    assert len(opts["series"][0]["data"]) == 3 * 3 and opts["yAxis"]["data"] == ["NQ", "ES", "RTY"]
+    assert len(opts["series"][0]["data"]) == 3 * 3 and opts["yAxis"][0]["data"] == ["NQ", "ES", "RTY"]
+    assert data["newest"] == date(2026, 6, 12)
+    assert opts["xAxis"][0]["axisLabel"][":interval"] == "(i) => (2 - i) % 1 === 0"  # the newest week is labelled
+
+    # The last ten trading days that have ended, one dot each, on the same rows.
+    assert data["days"][0] == date(2026, 6, 1) and data["days"][-1] == date(2026, 6, 12) and len(data["days"]) == 10
+    day_cells = data["day_cells"]
+    assert day_cells[("NQ", date(2026, 6, 12))]["category"] == 5
+    assert day_cells[("NQ", date(2026, 6, 1))]["category"] == 1                  # before the stored sessions
+    assert "not collected" in day_cells[("NQ", date(2026, 6, 1))]["tip"]
+    partial_day = coverage_weeks(conn, ["NQ"], today=date(2026, 6, 15))["day_cells"][("NQ", date(2026, 6, 9))]
+    assert partial_day["category"] == 3 and "partial (50 %)" in partial_day["tip"]     # 690 of 1380 bars
+    dots = opts["series"][1]
+    assert dots["type"] == "scatter" and len(dots["data"]) == 3 * 10 and dots["yAxisIndex"] == 1
+    assert opts["xAxis"][1]["axisLabel"][":interval"] == "(i) => [4, 9].includes(i)"   # under each Friday
+    assert opts["visualMap"]["seriesIndex"] == 0
 
 
 def test_session_window_and_early_close():
@@ -189,33 +154,14 @@ def test_session_window_and_early_close():
 
 def test_day_contracts_put_the_active_contract_first(market):
     conn, _, sessions = market
-    from dashboard.views.candles import analogue_contracts, day_contracts
-    from database.queries import set_active_contracts
+    from dashboard.views.candles import day_contracts
+    from database.queries import contracts_for_day, set_active_contracts
     recent = sessions[-1].session_date.isoformat()
-    held = analogue_contracts(conn, "NQ", recent)
+    held = contracts_for_day(conn, "NQ", recent)
     assert len(held) >= 2
     later = held[1]["contract_id"]
     set_active_contracts(conn, "NQ", {recent: later}, "test")
     assert [c["contract_id"] for c in day_contracts(conn, "NQ", recent)][0] == later
-
-
-def test_first_hour_move_from_the_stored_bars(market):
-    conn, md, sessions = market
-    from forecaster.analogue import first_hour_move
-    from forecaster.evaluator import evaluate_session_outcomes
-    s = sessions[-4]
-    got = first_hour_move(conn, "NQ", s.session_date.isoformat())
-    nq = md._bars[(NQ_CID, "TRADES")]
-    hour = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.rth_open_at + timedelta(hours=1))]
-    assert got["contract_id"] == NQ_CID
-    assert got["open"] == pytest.approx(hour["open"].iloc[0]) and got["close"] == pytest.approx(hour["close"].iloc[-1])
-    assert got["move"] == pytest.approx(got["close"] - got["open"])
-    assert first_hour_move(conn, "NQ", "2026-01-05") is None                  # nothing stored that day
-
-    # the post-close outcome keeps the same 10:29 close
-    df = nq.assign(timestamp_utc=nq["bar_start_at"].dt.strftime("%Y-%m-%d %H:%M:%S"))
-    out = evaluate_session_outcomes(df, s.session_date.isoformat())
-    assert out["raw_outcomes"]["first_60_minute_close"] == pytest.approx(got["close"])
 
 
 def test_opening_range_box_and_channel():
@@ -245,105 +191,60 @@ def test_opening_range_box_and_channel():
     assert opening_range(df[df["timestamp_ny"].dt.hour < 9], "2026-06-10") is None
 
 
-def test_first_hours_from_one_query(market):
-    conn, md, sessions = market
-    from forecaster.first_hour import load_first_hours
-    hours = load_first_hours(conn, "NQ")
-    s = sessions[-1]
-    day = s.session_date.isoformat()
-    assert day in hours
-    h = hours[day]
-    assert h.contract_id == NQ_CID                    # September, not December's warm-up copy of the day
-    nq = md._bars[(NQ_CID, "TRADES")]
-    hour = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.rth_open_at + timedelta(hours=1))]
-    assert h.open == pytest.approx(hour["open"].iloc[0]) and h.close == pytest.approx(hour["close"].iloc[-1])
-    assert h.high == pytest.approx(hour["high"].max()) and h.low == pytest.approx(hour["low"].min())
+def test_moving_averages_follow_the_pine_script():
+    from dashboard.components.spec import build_chart_spec
+    from features.calculations import calculate_moving_averages
+    idx = pd.date_range("2026-06-10 09:00", periods=300, freq="1min", tz="America/New_York")
+    close = [100 + 5 * (i % 23) / 23 + i / 50 for i in range(300)]
+    df = pd.DataFrame({"timestamp_utc": idx.tz_convert("UTC"), "timestamp_ny": idx, "open": close, "high": close,
+                       "low": close, "close": close, "volume": 1})
+
+    def ema(xs, n):                       # Pine's ta.ema, written out
+        alpha, out = 2 / (n + 1), []
+        for x in xs:
+            out.append(x if not out else alpha * x + (1 - alpha) * out[-1])
+        return out
+
+    e1 = ema(close, 14)
+    e2 = ema(e1, 14)
+    e3 = ema(e2, 14)
+    tema = [3 * (a - b) + c for a, b, c in zip(e1, e2, e3)]
+    sma3 = lambda xs, i: sum(xs[i - 2:i + 1]) / 3
+    out = calculate_moving_averages(df.iloc[::-1])          # any row order: time order is used
+    i = 250
+    assert out["tema"].iloc[i] == pytest.approx(sma3(tema, i))
+    assert out["ema_trend"].iloc[i] == pytest.approx(ema(close, 100)[i])
+    assert out["ema_trigger"].iloc[i] == pytest.approx(sma3(e1, i))
+    assert out["tema"].iloc[:2].isna().all() and out["ema_trigger"].iloc[2:].notna().all()
+
+    spec = build_chart_spec(out)
+    assert [item["label"] for item in spec["legend"] if item["key"].startswith("ma:")] == [
+        "TEMA 14 (SMA 3)", "EMA 100", "EMA 14 (SMA 3)"]
+    assert "value" not in spec["series"]["ma:tema"]["points"][0]     # SMA(3) not yet defined: a gap
 
 
-def test_default_view_and_generated_hour_in_the_spec():
+def test_session_explorer_warms_the_moving_averages_up_on_earlier_days(market):
+    conn, _, sessions = market
+    from dashboard.views.candles import SessionExplorer, day_contracts
+    view = SessionExplorer(conn)
+    view.date, view.symbol, view.timeframe = LAST_DAY, "NQ", "5m"
+    view.contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
+    assert view._warmup_days() == 5                          # 1000 5-minute bars, plus a spare day
+    assert str(view._history_start()) == sessions[-2].session_date.isoformat()
+    assert str(view._history_start(100)) == sessions[0].session_date.isoformat()   # as many as there are
+    view.load_day()
+    first = view.day_df.iloc[0]
+    assert view.day_df[["tema", "ema_trend", "ema_trigger"]].notna().all().all()
+    assert first["ema_trend"] != first["close"]              # earlier bars behind it, not seeded on the day
+
+
+def test_default_view_in_the_spec():
     from dashboard.components.spec import build_chart_spec
     idx = pd.date_range("2026-06-10 09:15", "2026-06-10 16:14", freq="1min", tz="America/New_York")
     df = pd.DataFrame({"timestamp_ny": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
     epoch = lambda hhmm: int(pd.Timestamp(f"2026-06-10 {hhmm}").value // 10 ** 9)
-    hour = df[(df["timestamp_ny"] >= idx[15]) & (df["timestamp_ny"] < idx[75])][["timestamp_ny", "open", "high", "low",
-                                                                                 "close"]]
-    spec = build_chart_spec(df, visible_range=(idx[0], pd.Timestamp("2026-06-10 10:45", tz="America/New_York")),
-                            forecast={"candles": hour, "high": 1.5, "low": 0.5, "label": "generated"})
+    spec = build_chart_spec(df, visible_range=(idx[0], pd.Timestamp("2026-06-10 10:45", tz="America/New_York")))
     assert spec["visible_range"] == {"from": epoch("09:15"), "to": epoch("10:45")}
     assert spec["fit"] is False and spec["keep_view"] is False
-    assert len(spec["overlay_candles"]) == 60 and spec["overlay_candles"][0]["time"] == epoch("09:30")
-    high = spec["series"]["forecast:high"]["points"]            # a level across the generated hour
-    assert [p["time"] for p in high] == [epoch("09:30"), epoch("10:29")] and high[0]["value"] == 1.5
-    assert spec["series"]["forecast:low"]["points"][0]["value"] == 0.5
-    assert {"key": "forecast:high", "label": "generated", "color": "#ffa726"} in spec["legend"]
     kept = build_chart_spec(df, keep_view=True)
-    assert "visible_range" not in kept and kept["keep_view"] is True and kept["overlay_candles"] == []
-
-
-def test_scenario_backfill_stores_walk_forward(market):
-    conn, _, sessions = market
-    from database.queries import get_analogue_matches
-    from forecaster import analogue
-    from forecaster.client import MODEL_VERSION
-    days = [s.session_date.isoformat() for s in sessions]
-    log = []
-    counts = analogue.backfill(conn, days[0], days[-1], log=log.append)
-    assert counts["stored"] >= 3 and counts["stored"] + counts["unavailable"] + counts["skipped"] == len(days)
-    last = get_day_prediction(conn, "NQ", days[-1], NQ_CID)
-    assert last["model_version"] == MODEL_VERSION
-    matches = [str(m["match_date"]) for m in get_analogue_matches(conn, last["prediction_id"])]
-    assert matches and all(d < days[-1] for d in matches)            # earlier sessions only
-    again = analogue.backfill(conn, days[0], days[-1], log=log.append)
-    assert again["stored"] == 0 and again["skipped"] == counts["stored"]
-
-
-def test_backtests_page_rows():
-    from dashboard.views.backtests import first_hour_rows, scenario_rows, verdict
-    s = lambda g, se: {"model": 0.3, "base": 0.3 + g, "gain": g, "gain_se": se}
-    assert verdict(0.03, 0.01) == "better" and verdict(-0.03, 0.01) == "worse" and verdict(0.01, 0.01) == "no difference"
-    assert verdict(float("nan"), float("nan")) == "too few sessions"
-    rows = first_hour_rows({"range_matches": s(0.024, 0.0135), "range_regression": s(0.05, 0.01),
-                            "first_break": s(-0.009, 0.011), "breakout": s(-0.005, 0.007)})
-    assert [r["verdict"] for r in rows] == ["no difference", "better", "no difference", "no difference"]
-    sc = scenario_rows({"probabilities": s(0.0, 0.01), "hits": s(0.02, 0.05), "hit_rate": 0.424,
-                        "base_hit_rate": 0.407})
-    assert sc[1]["forecast"] == "42.4 %" and sc[1]["gain"].startswith("+1.7 pp")
-
-
-def test_preopen_reads_active_contracts_and_vix(market):
-    # Last in the module: it stores VIX, which the tests above do not expect.
-    conn, md, sessions = market
-    from database.queries import active_contract_bars, preopen_levels
-    from forecaster import preopen as po
-    from tests.synthetic import VIX_CID
-    days = [s.session_date.isoformat() for s in sessions]
-
-    def history():
-        return po.sessions_from_bars(pd.DataFrame([dict(r) for r in active_contract_bars(conn, "NQ")]))
-
-    set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
-    got = history()
-    assert [g.day for g in got] == days
-    assert {g.contract_id for g in got} == {NQ_CID}               # never the June or December copies of a day
-    set_active_contracts(conn, "NQ", {days[-1]: NQ_DEC}, "test")  # the roll: the day now comes from December
-    rolled = history()[-1]
-    assert rolled.contract_id == NQ_DEC and rolled.close[-1] == pytest.approx(got[-1].close[-1] + 50.0)
-    set_active_contracts(conn, "NQ", {days[-1]: NQ_CID}, "test")
-    s, last = sessions[-1], got[-1]
-    nq = md._bars[(NQ_CID, "TRADES")]
-    rth = nq[(nq["bar_start_at"] >= s.rth_open_at) & (nq["bar_start_at"] < s.scheduled_close_at)]
-    pre = nq[(nq["bar_start_at"] >= s.overnight_start_at) & (nq["bar_start_at"] < s.cutoff_at)]
-    assert last.held == 390 and last.open == pytest.approx(rth["open"].iloc[0])
-    assert last.close[-1] == pytest.approx(rth["close"].iloc[-1])      # nothing from 16:00 on is read
-    assert last.pre_price == pytest.approx(pre["close"].iloc[-1])      # the 09:28 bar
-    upsert_contract(conn, VIX_CID, "VIX", None, "CBOE", sec_type="IND")
-    _store(conn, md._bars[(VIX_CID, "TRADES")], VIX_CID)
-    vix = md._bars[(VIX_CID, "TRADES")]
-    day_vix = vix[(vix["bar_start_at"] >= s.rth_open_at - timedelta(hours=7)) & (vix["bar_start_at"] < s.cutoff_at)]
-    levels = {str(r["trading_day"]): r for r in preopen_levels(conn, VIX_CID)}
-    level = levels[s.session_date.isoformat()]
-    assert level["pre"] == pytest.approx(day_vix["close"].iloc[-1])
-    assert level["last"] == pytest.approx(vix[vix["bar_start_at"] < s.scheduled_close_at + timedelta(minutes=15)]
-                                          ["close"].iloc[-1])
-    one = preopen_levels(conn, VIX_CID, trading_day=s.session_date.isoformat())
-    assert [str(r["trading_day"]) for r in one] == [s.session_date.isoformat()]
+    assert "visible_range" not in kept and kept["keep_view"] is True

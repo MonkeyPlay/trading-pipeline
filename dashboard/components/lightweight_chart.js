@@ -389,19 +389,6 @@ export default {
     // an empty candlestick series still tries to draw a last-value label and
     // throws when it has no value to show.
     if (this.show_candles) {
-      // A second candle series, in the forecast's orange, for the generated first
-      // hour. Created first, so the main candles draw on top of it.
-      this.overlay = this.chart.addSeries(lwc.CandlestickSeries, {
-        upColor: "rgba(255, 183, 77, 0.8)",
-        downColor: "rgba(244, 81, 30, 0.8)",
-        wickUpColor: "rgba(255, 183, 77, 0.8)",
-        wickDownColor: "rgba(244, 81, 30, 0.8)",
-        borderVisible: false,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        priceFormat: { type: "price", precision: 2, minMove: 0.25 },
-      });
-      this.overlayPoints = null;
       this.candles = this.chart.addSeries(lwc.CandlestickSeries, {
         upColor: "#26a69a",
         downColor: "#ef5350",
@@ -495,13 +482,6 @@ export default {
       if (spec.volume && this.volume) {
         applyData(this.volume, this.volumePoints, spec.volume);
         this.volumePoints = spec.volume;
-      }
-      if (this.overlay) {
-        const overlay = spec.overlay_candles || [];
-        if (JSON.stringify(overlay) !== JSON.stringify(this.overlayPoints || [])) {
-          this.overlay.setData(overlay);
-        }
-        this.overlayPoints = overlay;
       }
 
       this.reconcileSeries(spec.series || {});

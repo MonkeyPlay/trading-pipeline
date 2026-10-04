@@ -16,6 +16,14 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from features.calculations import (
+    TEMA_LENGTH,
+    TEMA_SMOOTHING,
+    TREND_EMA_LENGTH,
+    TRIGGER_EMA_LENGTH,
+    TRIGGER_SMOOTHING,
+)
+
 _UP = "rgba(38, 166, 154, 0.5)"
 _DOWN = "rgba(239, 83, 80, 0.5)"
 
@@ -30,15 +38,22 @@ OR_BOX = "rgba(150, 153, 164, 0.30)"
 OR_FILL = "rgba(38, 166, 154, 0.13)"
 OR_LINE = "#26a69a"
 
-# The generated first hour (forecaster/first_hour_model.py): its candles go in the
-# overlay series (orange, beneath the session's), its likely high / low as dashed levels.
-FORECAST_LINE = "#ffa726"
-
-# Pre-open reference levels drawn from the feature snapshot, in draw order.
-_FEATURE_LEVELS = (
+# Pre-open reference levels (features.calculations.pre_open_levels), in draw order.
+_REFERENCE_LEVELS = (
     ("previous_rth_close", "Prev RTH Close", "#29b6f6", 2, 2),
     ("overnight_high", "Overnight High", "#ffa726", 1, 1),
     ("overnight_low", "Overnight Low", "#ffa726", 1, 1),
+)
+
+# The session VWAP line (and the Review page's cutoff VWAP level).
+VWAP_COLOR = "#fdd835"
+
+# Moving averages (features.calculations.calculate_moving_averages): (column, label,
+# colour, width), with the TradingView script's plot colours and widths.
+_MOVING_AVERAGES = (
+    ("tema", f"TEMA {TEMA_LENGTH} (SMA {TEMA_SMOOTHING})", "#9c27b0", 2),
+    ("ema_trend", f"EMA {TREND_EMA_LENGTH}", "#2962ff", 2),
+    ("ema_trigger", f"EMA {TRIGGER_EMA_LENGTH} (SMA {TRIGGER_SMOOTHING})", "#ff9800", 1),
 )
 
 
@@ -141,6 +156,17 @@ def _level_series(times: np.ndarray, value: float, label: str, color: str,
     }
 
 
+def _curve_series(times: np.ndarray, values: pd.Series, label: str, color: str, width: int) -> Dict[str, Any]:
+    """A line through one value per bar; a missing value leaves a gap."""
+    return {
+        "points": [
+            {"time": int(t)} if pd.isna(v) else {"time": int(t), "value": round(float(v), 2)}
+            for t, v in zip(times, values)
+        ],
+        "style": {"color": color, "width": width, "dash": 0, "title": label, "axis_label": True},
+    }
+
+
 def _hidden(points: List[Dict[str, Any]]) -> Dict[str, Any]:
     """An invisible line - one edge of a filled box."""
     return {"points": points, "style": {"color": OR_LINE, "width": 1, "dash": 0, "title": "",
@@ -180,43 +206,26 @@ def opening_range_series(df: pd.DataFrame, opening_range: Dict[str, Any]) -> Dic
     return out
 
 
-def forecast_series(forecast: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ``{'series', 'legend'}`` of a generated first hour ({'candles': bars with
-    ``timestamp_ny`` and OHLC, 'high', 'low': its likely extremes, 'label'}):
-    dashed levels at the likely high and low across the hour.
-    """
-    out: Dict[str, Any] = {"series": {}, "legend": []}
-    candles = forecast.get("candles") if forecast else None
-    if candles is None or candles.empty:
-        return out
-    times = _times(candles)
-    for key, label in (("high", "Likely hour high"), ("low", "Likely hour low")):
-        if forecast.get(key) is not None:
-            out["series"][f"forecast:{key}"] = _level_series(times, forecast[key], label, FORECAST_LINE, 1, 2)
-    out["legend"].append({"key": "forecast:high", "label": forecast.get("label") or "First-hour forecast",
-                          "color": FORECAST_LINE})
-    return out
-
-
 def build_chart_spec(
     df: pd.DataFrame,
     *,
-    features: Optional[Dict[str, Any]] = None,
+    levels: Optional[Dict[str, Any]] = None,
+    extra_levels: Optional[Sequence[Dict[str, Any]]] = None,
     show_vwap: bool = True,
     fit: bool = False,
     opening_range: Optional[Dict[str, Any]] = None,
-    forecast: Optional[Dict[str, Any]] = None,
     visible_range: Optional[Sequence[Any]] = None,
     keep_view: bool = False,
 ) -> Dict[str, Any]:
     """
     Assembles the full chart spec for one session. Rows with a true ``muted``
-    column are drawn grey on a shaded background (``shades``). ``forecast``, a
-    generated first hour (``forecast_series``), is drawn as a second candle
-    series beneath the session's, with its likely high and low. ``visible_range`` ((start, end) timestamps)
-    is the window shown instead of fitting everything; ``keep_view`` keeps the
-    window currently shown across the new data (a timeframe change).
+    column are drawn grey on a shaded background (``shades``). ``levels`` are the
+    pre-open reference levels (``pre_open_levels``; a None value is not drawn);
+    ``extra_levels`` more horizontal lines, each ``{'key', 'label', 'value', 'color',
+    'dash'}`` (None values skipped).
+    ``visible_range`` ((start, end) timestamps) is the window shown instead of
+    fitting everything; ``keep_view`` keeps the window currently shown across the
+    new data (a timeframe change).
     """
     if df is None or df.empty:
         return {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": [], "shades": []}
@@ -228,38 +237,37 @@ def build_chart_spec(
     bands: Dict[str, Any] = {}
     legend: List[Dict[str, Any]] = []
 
-    if features:
-        for key, label, color, width, dash in _FEATURE_LEVELS:
-            value = features.get(key)
+    if levels:
+        for key, label, color, width, dash in _REFERENCE_LEVELS:
+            value = levels.get(key)
             if value is None:
                 continue
             series_key = f"features:{key}"
             series[series_key] = _level_series(times, value, label, color, width, dash)
             legend.append({"key": series_key, "label": label, "color": color})
 
-    if show_vwap and "vwap" in df.columns and df["vwap"].notna().any():
-        series["features:vwap"] = {
-            "points": [
-                {"time": int(t)} if pd.isna(v) else {"time": int(t), "value": round(float(v), 2)}
-                for t, v in zip(times, df["vwap"])
-            ],
-            "style": {
-                "color": "#ab47bc",
-                "width": 2,
-                "dash": 0,
-                "title": "Session VWAP",
-                "axis_label": True,
-            },
-        }
-        legend.append({"key": "features:vwap", "label": "Session VWAP", "color": "#ab47bc"})
+    for extra in extra_levels or ():
+        if extra.get("value") is None:
+            continue
+        series_key = f"extra:{extra['key']}"
+        series[series_key] = _level_series(times, float(extra["value"]), extra["label"], extra["color"], 1,
+                                           extra.get("dash", 2))
+        legend.append({"key": series_key, "label": extra["label"], "color": extra["color"]})
 
-    for drawn in ((opening_range_series(df, opening_range) if opening_range and "timestamp_ny" in df.columns
-                   else None),
-                  forecast_series(forecast) if forecast else None):
-        if drawn:
-            series.update(drawn["series"])
-            bands.update(drawn.get("bands", {}))
-            legend.extend(drawn["legend"])
+    if show_vwap and "vwap" in df.columns and df["vwap"].notna().any():
+        series["features:vwap"] = _curve_series(times, df["vwap"], "Session VWAP", VWAP_COLOR, 2)
+        legend.append({"key": "features:vwap", "label": "Session VWAP", "color": VWAP_COLOR})
+
+    for column, label, color, width in _MOVING_AVERAGES:
+        if column in df.columns and df[column].notna().any():
+            series[f"ma:{column}"] = _curve_series(times, df[column], label, color, width)
+            legend.append({"key": f"ma:{column}", "label": label, "color": color})
+
+    if opening_range and "timestamp_ny" in df.columns:
+        drawn = opening_range_series(df, opening_range)
+        series.update(drawn["series"])
+        bands.update(drawn["bands"])
+        legend.extend(drawn["legend"])
 
     spec = {
         "candles": candle_points(df),
@@ -269,8 +277,6 @@ def build_chart_spec(
         "legend": legend,
         "shades": shade_ranges(df),
         "shade_color": MUTED_BACKGROUND,
-        "overlay_candles": candle_points(forecast["candles"])
-        if forecast and forecast.get("candles") is not None and not forecast["candles"].empty else [],
         "fit": fit,
         "keep_view": keep_view,
     }

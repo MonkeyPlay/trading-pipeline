@@ -13,7 +13,7 @@ number to a callable run immediately before / after that version's SQL file. A
 failing pre-hook aborts the migration; a failing post-hook leaves the schema
 migrated but the derived data stale, and logs how to recompute it.
 
-Concurrent processes (the dashboard, the collector, the forecast) all migrate on
+Concurrent processes (the dashboard, the collector) all migrate on
 start; a transaction-scoped advisory lock makes sure only one of them applies a
 given file.
 

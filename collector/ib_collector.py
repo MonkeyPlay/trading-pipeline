@@ -32,8 +32,6 @@ Run from the project root:
     python -m collector.ib_collector --start 2026-06-01 --end 2026-09-25
     python -m collector.ib_collector --days 30 --plan-only
     python -m collector.ib_collector --expiry 202609 --days 5 --symbol NQ   # pin one contract
-
-Real-time bars (with a receive time per bar) come from collector/live_stream.py.
 """
 
 import os
@@ -183,8 +181,7 @@ def _parse_ib_timestamp(raw) -> str:
 def bar_to_dict(bar) -> Optional[dict]:
     """
     An IB BarData as a bar dict (UTC start timestamp, OHLCV, session scope and
-    NY trading day), or None if its date cannot be parsed. Shared by the
-    historical download and the real-time stream.
+    NY trading day), or None if its date cannot be parsed.
     """
     try:
         timestamp_utc = _parse_ib_timestamp(bar.date)

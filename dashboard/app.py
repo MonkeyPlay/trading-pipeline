@@ -1,6 +1,6 @@
 # dashboard/app.py
 """
-NiceGUI web application entrypoint for the NQ Opening Forecast System.
+NiceGUI web application entrypoint for the trading pipeline.
 Opens the database connection, applies the shared chrome, and routes the views.
 
 Run from the project root:  python -m dashboard.app
@@ -20,10 +20,9 @@ from nicegui import app, ui
 
 from config import Config
 from dashboard.views.candles import show_candles_page
-from dashboard.views.backtests import show_backtests_page
+from dashboard.views.review import show_review_page
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
-from forecaster.client import MODEL_VERSION as FORECAST_MODEL
 
 _PAGE_BACKGROUND = "#131722"
 
@@ -66,13 +65,12 @@ def chrome(active: str, conn) -> None:
     """Header and navigation shared by every page."""
     ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
     with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
-        ui.label("NQ Opening Forecast").classes("text-lg font-medium")
-        for label, target in (("Session Explorer", "/"), ("Backtests", "/backtests")):
+        ui.label("Trading Pipeline").classes("text-lg font-medium")
+        for label, target in (("Session Explorer", "/"), ("Review", "/review")):
             button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
         ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
-        ui.label(f"model {FORECAST_MODEL}").classes("text-xs").style("color:#787b86")
 
 
 @ui.page("/")
@@ -82,16 +80,16 @@ def index() -> None:
     show_candles_page(conn)
 
 
-@ui.page("/backtests")
-def backtests() -> None:
+@ui.page("/review")
+def review() -> None:
     conn = connection()
-    chrome("Backtests", conn)
-    show_backtests_page(conn)
+    chrome("Review", conn)
+    show_review_page(conn)
 
 
 def main() -> None:
     ui.run(
-        title="NQ Opening Forecast",
+        title="Trading Pipeline",
         favicon="📈",
         dark=True,
         host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),

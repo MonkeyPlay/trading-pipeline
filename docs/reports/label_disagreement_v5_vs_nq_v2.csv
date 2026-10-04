@@ -1,0 +1,1615 @@
+session_date,v5_target,nq_v2_target,v5_label,v5_replay,nq_v2_label,agreement,cause,detail
+2025-09-02,first_move_5m,first_move_5m,(invalid_reference),(unavailable),down_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-02,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-02,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),sweep_low_rebound,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-02,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-02,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-02,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-03,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-03,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-03,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-03,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-03,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-03,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-04,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-04,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-04,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-04,direction_1h,ib_direction,(invalid_reference),(unavailable),neutral_band,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-04,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-04,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-05,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-05,direction_15m,direction_15m,(invalid_reference),(unavailable),neutral_band,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-05,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-05,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-05,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-05,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-08,first_move_5m,first_move_5m,(invalid_reference),(unavailable),up_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-08,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-08,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-08,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-08,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-08,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-09,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-09,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-09,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-09,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-09,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-09,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-10,first_move_5m,first_move_5m,(invalid_reference),(unavailable),down_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-10,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-10,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),opening_drive_down,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-10,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-10,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-10,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-11,first_move_5m,first_move_5m,(invalid_reference),(unavailable),up_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-11,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-11,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-11,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-11,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-11,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-12,first_move_5m,first_move_5m,(invalid_reference),(unavailable),up_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-12,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-12,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),sweep_high_reverse,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-12,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-12,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-12,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-15,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-15,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-15,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-15,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-15,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-15,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-16,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-16,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-16,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-16,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-16,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-16,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-17,first_move_5m,first_move_5m,(invalid_reference),(unavailable),up_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-17,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-17,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-17,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-17,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-17,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-18,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-18,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-18,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-18,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-18,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-18,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-19,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-19,direction_15m,direction_15m,(invalid_reference),(unavailable),neutral_band,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-19,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-19,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-19,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-19,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-22,first_move_5m,first_move_5m,(invalid_reference),(unavailable),up_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-22,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-22,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),opening_drive_up,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-22,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-22,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-22,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-23,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-23,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-23,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-23,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-23,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-23,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-24,first_move_5m,first_move_5m,(invalid_reference),(unavailable),(ambiguous_intrabar),both unavailable,,v5: invalid_reference; NQ-v2: ambiguous_intrabar
+2025-09-24,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-24,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-24,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-24,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-24,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-25,first_move_5m,first_move_5m,(invalid_reference),(unavailable),down_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-25,direction_15m,direction_15m,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-25,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),opening_drive_down,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-25,direction_1h,ib_direction,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-25,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-25,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-26,first_move_5m,first_move_5m,(invalid_reference),(unavailable),down_first,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-26,direction_15m,direction_15m,(invalid_reference),(unavailable),bullish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-26,opening_type_15m,opening_type_15m,(invalid_reference),(unavailable),two_sided_whipsaw,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-26,direction_1h,ib_direction,(invalid_reference),(unavailable),bearish,v5 unavailable,v5 unavailable: invalid_reference,
+2025-09-26,direction_rth,close_direction_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-26,session_type_rth,session_type_rth,(invalid_reference),(unavailable),(missing_threshold),both unavailable,,v5: invalid_reference; NQ-v2: missing_threshold
+2025-09-29,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-09-29,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-09-29,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2025-09-29,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-09-29,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -13.50 pts; NQ-v2 band B = 13 pts, v5 band 1/5A = 49.32 pts"
+2025-09-29,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.069231, CL = 0.291026, R/A = 0.79"
+2025-09-30,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 24.69 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-09-30,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -22.25 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 24.69 pts"
+2025-09-30,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-09-30,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-09-30,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-09-30,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.404700, CL = 0.917755, R/A = 0.78"
+2025-10-01,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 24.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-01,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-01,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-01,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-01,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-01,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-10-02,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-02,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-02,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-10-02,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-02,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-02,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-03,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 24.22 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-03,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-10-03,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 32.0, O - L15 = 20.0, T = 4"
+2025-10-03,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-03,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-03,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.559755, CL = 0.299285, R/A = 1.01"
+2025-10-06,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 24.24 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-06,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-06,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 7.50 > T; T = 5
+2025-10-06,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-06,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -30.00 pts; NQ-v2 band B = 13 pts, v5 band 1/5A = 48.48 pts"
+2025-10-06,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-07,first_move_5m,first_move_5m,neither,neither,down_first,disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 24.34 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-07,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 8.75 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 24.34 pts"
+2025-10-07,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 26.25, O - L15 = 20.0, T = 5"
+2025-10-07,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -23.75 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 24.34 pts"
+2025-10-07,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-07,session_type_rth,session_type_rth,bear_trend,bear_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bear_trend),"close bearish, E = 0.684821, CL = 0.216071, R/A = 1.15"
+2025-10-08,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 24.60 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-08,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-08,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 5.75 > T; T = 5
+2025-10-08,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-08,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-08,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-10-09,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-09,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-09,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 5.75 > T; T = 4
+2025-10-09,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-09,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -34.5 pts; NQ-v2 band B = 13 pts, v5 band 1/5A = 49.96 pts"
+2025-10-09,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-10,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 24.43 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-10,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-10,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-10,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 21.75 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 24.43 pts"
+2025-10-10,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-10,session_type_rth,session_type_rth,bear_trend,bear_trend,reversal_day,disagree,NQ-v2 rule order,"bear_trend_day also holds under P2, which checks reversal_day first; close bearish, E = 0.907098, CL = 0.018431, R/A = 4.11"
+2025-10-13,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 29.86 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-13,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -13.25 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 29.86 pts"
+2025-10-13,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-13,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2025-10-13,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-13,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.398129, CL = 0.814969, R/A = 0.81"
+2025-10-14,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-14,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-14,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-10-14,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-14,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-14,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bullish, E = 0.225071, CL = 0.638651, R/A = 1.66"
+2025-10-15,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-15,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-15,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2025-10-15,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-15,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-15,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2025-10-16,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-10-16,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-16,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-16,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-16,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-16,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 two_sided_volatile),"close bearish, E = 0.400653, CL = 0.348881, R/A = 1.57"
+2025-10-17,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 35.47 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-17,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-17,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2025-10-17,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-17,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-17,session_type_rth,session_type_rth,mixed,mixed,bull_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bull_trend_day; close bullish, E = 0.659491, CL = 0.825832, R/A = 1.08"
+2025-10-20,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-10-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-20,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2025-10-20,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-20,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-20,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.758081, CL = 0.773723, R/A = 0.67"
+2025-10-21,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-21,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-21,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2025-10-21,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-21,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2025-10-21,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-22,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 34.22 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-22,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -6.0 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 34.22 pts"
+2025-10-22,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-22,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-22,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-22,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.464396, CL = 0.486584, R/A = 1.42"
+2025-10-23,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 35.26 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-23,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-23,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 17.25 > T; T = 7
+2025-10-23,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-23,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-23,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-10-24,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-24,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-10-24,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-10-24,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 33.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 34.80 pts"
+2025-10-24,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 42.5 pts; NQ-v2 band B = 18 pts, v5 band 1/5A = 69.61 pts"
+2025-10-24,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-27,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-10-27,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 22.50 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 34.59 pts"
+2025-10-27,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 43.75, O - L15 = 19.25, T = 4"
+2025-10-27,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-10-27,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-27,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-10-28,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-10-28,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 26.0 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 35.51 pts"
+2025-10-28,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 43.25, O - L15 = 10.0, T = 5"
+2025-10-28,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -5.75 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 35.51 pts"
+2025-10-28,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-10-28,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.481153, CL = 0.682927, R/A = 0.64"
+2025-10-29,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 34.91 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-10-29,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 10.0 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 34.91 pts"
+2025-10-29,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 26.75, O - L15 = 11.25, T = 4"
+2025-10-29,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 32.0 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 34.91 pts"
+2025-10-29,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2025-10-29,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-10-30,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-30,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-30,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-10-30,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-30,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-30,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-10-31,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-10-31,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-10-31,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-10-31,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-10-31,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-10-31,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.664521, CL = 0.334674, R/A = 0.89"
+2025-11-03,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 34.77 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-03,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-03,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-11-03,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-03,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-03,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.500998, CL = 0.378244, R/A = 0.72"
+2025-11-04,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-11-04,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 33.0 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 34.25 pts"
+2025-11-04,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-11-04,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-04,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-04,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2025-11-05,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 35.87 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-05,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -16.00 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 35.87 pts"
+2025-11-05,opening_type_15m,opening_type_15m,range,range,sweep_high_reverse,disagree,"sweep definition: NQ-v2 adds the previous-RTH levels, breach >= T","v5 range; T = 8; v5 sweeps used the ON level only, breach 0.02 A"
+2025-11-05,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-05,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-05,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.507015, CL = 0.645408, R/A = 1.09"
+2025-11-06,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 36.12 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-06,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-06,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-11-06,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-06,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-06,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-11-07,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-11-07,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-07,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2025-11-07,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-07,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 53.75 pts; NQ-v2 band B = 19 pts, v5 band 1/5A = 74.84 pts"
+2025-11-07,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.115903, CL = 0.981132, R/A = 1.24"
+2025-11-10,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 38.65 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-10,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-11-10,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 13.50 > T; T = 6
+2025-11-10,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-10,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-10,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.564830, CL = 0.846029, R/A = 0.80"
+2025-11-11,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 40.12 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-11,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-11-11,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 41.0, O - L15 = 16.5, T = 6"
+2025-11-11,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-11,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 41.5 pts; NQ-v2 band B = 21 pts, v5 band 1/5A = 80.24 pts"
+2025-11-11,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-11-12,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-11-12,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-12,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-11-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-12,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-12,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.523973, CL = 0.468322, R/A = 0.75"
+2025-11-13,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 38.22 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-13,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-13,opening_type_15m,opening_type_15m,drive_down,drive_down,sweep_high_reverse,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 24.75 > T; T = 10
+2025-11-13,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-13,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-13,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-11-14,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 39.93 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-14,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-11-14,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2025-11-14,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-14,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-14,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.573623, CL = 0.719745, R/A = 1.67"
+2025-11-17,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-11-17,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-11-17,opening_type_15m,opening_type_15m,sweep_low_rebound,sweep_low_rebound,sweep_low_rebound,agree,,
+2025-11-17,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-17,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-17,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2025-11-18,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 42.58 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-18,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-18,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_high_reverse,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_high_reverse first"
+2025-11-18,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-18,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-18,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bearish, E = 0.292924, CL = 0.457488, R/A = 1.07"
+2025-11-19,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 43.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-19,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-11-19,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-11-19,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-19,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-19,session_type_rth,session_type_rth,mixed,mixed,two_sided_volatile_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: two_sided_volatile_day; close bullish, E = 0.234407, CL = 0.451663, R/A = 1.11"
+2025-11-20,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 43.54 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-20,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-11-20,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 37.5, O - L15 = 65.5, T = 10"
+2025-11-20,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-20,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-11-20,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-11-21,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 13 pts, v5 barrier 0.10A = 49.10 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-21,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -22.5 pts; NQ-v2 band T = 13 pts, v5 band 1/10A = 49.10 pts"
+2025-11-21,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-11-21,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-21,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-21,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2025-11-24,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-11-24,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-11-24,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2025-11-24,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-11-24,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-24,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-11-25,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 51.65 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-25,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-11-25,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 22.75 > T; T = 8
+2025-11-25,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-11-25,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-11-25,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,E = 0.42 >= 0.35; NQ-v2 gives reversal_day
+2025-11-26,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 51.79 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-26,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 10.50 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 51.79 pts"
+2025-11-26,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 48.25, O - L15 = 33.25, T = 8"
+2025-11-26,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -31.25 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 51.79 pts"
+2025-11-26,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 74.00 pts; NQ-v2 band B = 26 pts, v5 band 1/5A = 103.58 pts"
+2025-11-26,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-11-28,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 50.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-11-28,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-11-28,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 64.0, O - L15 = 27.0, T = 5"
+2025-11-28,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 11.5 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 50.20 pts"
+2025-11-28,direction_rth,close_direction_rth,(shortened_session),(unavailable),(shortened_session),both unavailable,,v5: shortened_session; NQ-v2: shortened_session
+2025-11-28,session_type_rth,session_type_rth,(shortened_session),(unavailable),(shortened_session),both unavailable,,v5: shortened_session; NQ-v2: shortened_session
+2025-12-01,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 47.98 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-01,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -8.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 47.98 pts"
+2025-12-01,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 67.0, O - L15 = 45.75, T = 7"
+2025-12-01,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-01,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-01,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.513962, CL = 0.673647, R/A = 0.60"
+2025-12-02,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 46.60 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-02,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-12-02,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 21.50 > T; T = 5
+2025-12-02,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-02,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.421722, CL = 0.727984, R/A = 0.55"
+2025-12-03,first_move_5m,first_move_5m,neither,neither,down_first,disagree,threshold: T vs 0.10 A,"T = 14 pts, v5 barrier 0.10A = 45.17 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-03,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -19.5 pts; NQ-v2 band T = 14 pts, v5 band 1/10A = 45.17 pts"
+2025-12-03,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 43.0, O - L15 = 42.0, T = 14"
+2025-12-03,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 33.5 pts; NQ-v2 band T = 14 pts, v5 band 1/10A = 45.17 pts"
+2025-12-03,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-03,session_type_rth,session_type_rth,mixed,mixed,bull_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bull_trend_day; close bullish, E = 0.636631, CL = 0.891283, R/A = 0.57"
+2025-12-04,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-12-04,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-04,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2025-12-04,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-04,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -84.25 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 87.54 pts"
+2025-12-04,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.375697, CL = 0.619844, R/A = 0.51"
+2025-12-05,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-12-05,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 28.5 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 42.26 pts"
+2025-12-05,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 97.25, O - L15 = 6.5, T = 6"
+2025-12-05,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-05,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 46.0 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 84.51 pts"
+2025-12-05,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-12-08,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 40.96 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-08,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 14.25 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 40.96 pts"
+2025-12-08,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 69.75, O - L15 = 19.5, T = 5"
+2025-12-08,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-08,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-08,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.413007, CL = 0.351351, R/A = 0.72"
+2025-12-09,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 40.15 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-09,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -6.25 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 40.15 pts"
+2025-12-09,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 35.0, O - L15 = 58.5, T = 6"
+2025-12-09,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 38.25 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 40.15 pts"
+2025-12-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-09,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.480797, CL = 0.813656, R/A = 0.44"
+2025-12-10,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 38.53 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-10,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-12-10,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-12-10,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -11.50 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 38.53 pts"
+2025-12-10,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-10,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.445906, CL = 0.792398, R/A = 0.89"
+2025-12-11,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-12-11,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-11,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2025-12-11,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-11,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 73.75 pts; NQ-v2 band B = 20 pts, v5 band 1/5A = 76.39 pts"
+2025-12-11,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.220478, CL = 0.985052, R/A = 0.88"
+2025-12-12,first_move_5m,first_move_5m,neither,neither,down_first,disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 38.40 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-12,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-12-12,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 61.0, O - L15 = 30.25, T = 6"
+2025-12-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-12,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-12,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-12-15,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-12-15,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-15,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2025-12-15,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-15,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-15,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-12-16,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 39.82 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-16,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 34.25 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 39.82 pts"
+2025-12-16,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2025-12-16,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2025-12-16,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-16,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.515152, CL = 0.736455, R/A = 0.68"
+2025-12-17,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 38.92 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-17,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-17,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 25.25 > T; T = 8
+2025-12-17,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-17,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-17,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2025-12-18,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 40.15 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-18,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-18,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_high_reverse,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_high_reverse first"
+2025-12-18,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-18,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -27.00 pts; NQ-v2 band B = 21 pts, v5 band 1/5A = 80.29 pts"
+2025-12-18,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-12-19,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-12-19,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-12-19,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2025-12-19,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-19,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-19,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-12-22,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 40.56 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-22,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-22,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,sweep_high_reverse,agree,,
+2025-12-22,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-22,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-22,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.556222, CL = 0.359820, R/A = 0.41"
+2025-12-23,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 39.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-23,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-12-23,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 6.25 > T; T = 6
+2025-12-23,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 29.00 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 39.20 pts"
+2025-12-23,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2025-12-23,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2025-12-24,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 3 pts, v5 barrier 0.10A = 37.78 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-24,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-12-24,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 32.5, O - L15 = 11.0, T = 3"
+2025-12-24,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 20.5 pts; NQ-v2 band T = 3 pts, v5 band 1/10A = 37.78 pts"
+2025-12-24,direction_rth,close_direction_rth,(shortened_session),(unavailable),(shortened_session),both unavailable,,v5: shortened_session; NQ-v2: shortened_session
+2025-12-24,session_type_rth,session_type_rth,(shortened_session),(unavailable),(shortened_session),both unavailable,,v5: shortened_session; NQ-v2: shortened_session
+2025-12-26,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 4 pts, v5 barrier 0.10A = 35.87 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-26,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 30.75 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 35.87 pts"
+2025-12-26,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2025-12-26,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -15.5 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 35.87 pts"
+2025-12-26,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -32.25 pts; NQ-v2 band B = 18 pts, v5 band 1/5A = 71.74 pts"
+2025-12-26,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-12-29,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2025-12-29,direction_15m,direction_15m,up,up,bullish,agree,,
+2025-12-29,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2025-12-29,direction_1h,ib_direction,up,up,bullish,agree,,
+2025-12-29,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 34.50 pts; NQ-v2 band B = 18 pts, v5 band 1/5A = 68.04 pts"
+2025-12-29,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-12-30,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2025-12-30,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2025-12-30,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 40.75, O - L15 = 11.00, T = 4"
+2025-12-30,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 4.75 pts; NQ-v2 band T = 4 pts, v5 band 1/10A = 33.14 pts"
+2025-12-30,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2025-12-30,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2025-12-31,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 31.68 pts; with v5's barrier NQ-v2 gives v5's label"
+2025-12-31,direction_15m,direction_15m,down,down,bearish,agree,,
+2025-12-31,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 13.25 > T; T = 5
+2025-12-31,direction_1h,ib_direction,down,down,bearish,agree,,
+2025-12-31,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2025-12-31,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-01-02,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 31.19 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-02,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-01-02,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-01-02,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-02,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-02,session_type_rth,session_type_rth,bear_trend,bear_trend,reversal_day,disagree,bear_trend_day fails under P2,"E = 0.56 < 0.60, CL = 0.22 > 0.20; NQ-v2 gives reversal_day"
+2026-01-05,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 32.81 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-05,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-05,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,two_sided_whipsaw,disagree,sweep_high_reverse fails under NQ-v2,"no frozen reference (ON and previous-RTH high / low) breached by >= T, reclaimed and not gap-crossed; v5 used the ON level only, with a 0.02 A breach"
+2026-01-05,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 30.5 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 32.81 pts"
+2026-01-05,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -55.75 pts; NQ-v2 band B = 17 pts, v5 band 1/5A = 65.63 pts"
+2026-01-05,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-01-06,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-01-06,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 28.5 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 32.78 pts"
+2026-01-06,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-06,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-06,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-01-07,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 32.23 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-07,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-07,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-07,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-07,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 44.00 pts; NQ-v2 band B = 17 pts, v5 band 1/5A = 64.47 pts"
+2026-01-07,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-01-08,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 31.56 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-08,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-08,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 16.5 > T; T = 5
+2026-01-08,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-08,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-08,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.444444, CL = 0.485043, R/A = 0.74"
+2026-01-09,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-01-09,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-09,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-01-09,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-09,session_type_rth,session_type_rth,bull_trend,bull_trend,reversal_day,disagree,bull_trend_day fails under P2,E = 0.59 < 0.60; NQ-v2 gives reversal_day
+2026-01-12,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-01-12,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-12,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-01-12,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-12,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-12,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.743682, CL = 0.753610, R/A = 0.88"
+2026-01-13,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 31.38 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-13,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-13,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-13,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-13,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -46.50 pts; NQ-v2 band B = 16 pts, v5 band 1/5A = 62.75 pts"
+2026-01-13,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.194154, CL = 0.419624, R/A = 0.76"
+2026-01-14,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 30.87 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-14,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-14,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-01-14,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-14,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-14,session_type_rth,session_type_rth,mixed,mixed,two_sided_volatile_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: two_sided_volatile_day; close bearish, E = 0.278755, CL = 0.584574, R/A = 1.20"
+2026-01-15,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 32.13 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-15,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-01-15,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-15,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-15,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-15,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-01-16,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 32.11 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-16,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-16,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,sweep_high_reverse,agree,,
+2026-01-16,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-16,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-16,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.611853, CL = 0.311352, R/A = 0.93"
+2026-01-20,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-01-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-20,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-20,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-20,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-20,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-01-21,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 17 pts, v5 barrier 0.10A = 33.90 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-21,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-01-21,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-21,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-21,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-21,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.521388, CL = 0.653517, R/A = 1.55"
+2026-01-22,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-01-22,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-22,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2026-01-22,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-22,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -67.0 pts; NQ-v2 band B = 18 pts, v5 band 1/5A = 70.52 pts"
+2026-01-22,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-01-23,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 34.54 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-23,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-01-23,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-01-23,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-23,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-23,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.449250, CL = 0.609885, R/A = 0.82"
+2026-01-26,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 34.08 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-26,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-26,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-01-26,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-26,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-26,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.413348, CL = 0.606028, R/A = 0.68"
+2026-01-27,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 33.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-27,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -23.50 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 33.28 pts"
+2026-01-27,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-27,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-01-27,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-01-27,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.473350, CL = 0.805838, R/A = 0.59"
+2026-01-28,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 32.82 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-28,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 32.5 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 32.82 pts"
+2026-01-28,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-28,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -31.75 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 32.82 pts"
+2026-01-28,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-28,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.515605, CL = 0.242197, R/A = 0.61"
+2026-01-29,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 32.06 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-29,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-01-29,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-01-29,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-29,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-29,session_type_rth,session_type_rth,mixed,mixed,two_sided_volatile_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: two_sided_volatile_day; close bearish, E = 0.222222, CL = 0.712833, R/A = 1.99"
+2026-01-30,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 34.33 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-01-30,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-01-30,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-01-30,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-01-30,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-01-30,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,E = 0.43 >= 0.35; NQ-v2 gives reversal_day
+2026-02-02,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-02-02,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-02,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-02-02,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-02,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.766321, CL = 0.773032, R/A = 1.17"
+2026-02-03,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 35.36 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-03,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-02-03,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 17.50 > T; T = 6
+2026-02-03,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-03,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-03,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.667235, CL = 0.308899, R/A = 2.07"
+2026-02-04,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-02-04,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-02-04,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-02-04,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-04,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-04,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.644270, CL = 0.348310, R/A = 1.59"
+2026-02-05,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-02-05,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-05,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-02-05,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-05,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-05,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bearish, E = 0.316168, CL = 0.227545, R/A = 1.04"
+2026-02-06,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-02-06,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-06,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-02-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-06,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-06,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-02-09,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 41.73 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-09,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-09,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-02-09,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-09,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.591653, CL = 0.807713, R/A = 1.13"
+2026-02-10,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 42.15 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-10,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-02-10,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-02-10,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 25.0 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 42.15 pts"
+2026-02-10,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-10,session_type_rth,session_type_rth,mixed,mixed,bear_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bear_trend_day; close bearish, E = 0.630522, CL = 0.085341, R/A = 0.59"
+2026-02-11,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 40.94 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-11,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -28.0 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 40.94 pts"
+2026-02-11,opening_type_15m,opening_type_15m,mixed,mixed,sweep_high_reverse,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_high_reverse
+2026-02-11,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-11,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-11,session_type_rth,session_type_rth,mixed,mixed,range_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: range_day; close bearish, E = 0.344595, CL = 0.540541, R/A = 0.99"
+2026-02-12,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 40.92 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-12,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -38.00 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 40.92 pts"
+2026-02-12,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-02-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-12,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-12,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-02-13,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 14 pts, v5 barrier 0.10A = 42.81 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-13,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -27.0 pts; NQ-v2 band T = 14 pts, v5 band 1/10A = 42.81 pts"
+2026-02-13,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-02-13,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-13,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 59.25 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 85.62 pts"
+2026-02-13,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,R/A = 0.97 < 1; NQ-v2 gives reversal_day
+2026-02-17,first_move_5m,first_move_5m,(ambiguous_intrabar),(unavailable),(ambiguous_intrabar),both unavailable,,v5: ambiguous_intrabar; NQ-v2: ambiguous_intrabar
+2026-02-17,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 41.50 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 42.76 pts"
+2026-02-17,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-02-17,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-17,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-17,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-02-18,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 42.85 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-18,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 41.0 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 42.85 pts"
+2026-02-18,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-02-18,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-18,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-18,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.393355, CL = 0.546179, R/A = 0.88"
+2026-02-19,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 42.50 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-19,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 12.25 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 42.50 pts"
+2026-02-19,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2026-02-19,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 24.75 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 42.50 pts"
+2026-02-19,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 29.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 84.99 pts"
+2026-02-19,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-02-20,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 40.97 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-20,opening_type_15m,opening_type_15m,sweep_low_rebound,sweep_low_rebound,sweep_low_rebound,agree,,
+2026-02-20,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-20,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-20,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-02-23,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 41.34 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-23,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-02-23,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-02-23,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-23,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-23,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.571909, CL = 0.269489, R/A = 0.90"
+2026-02-24,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 41.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-02-24,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-24,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-02-24,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-24,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-24,session_type_rth,session_type_rth,bull_trend,bull_trend,reversal_day,disagree,bull_trend_day fails under P2,E = 0.59 < 0.60; NQ-v2 gives reversal_day
+2026-02-25,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-02-25,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-02-25,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-02-25,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-25,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-25,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-02-26,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-02-26,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-02-26,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2026-02-26,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-02-26,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-02-26,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.538782, CL = 0.461218, R/A = 1.18"
+2026-02-27,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-02-27,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 29.00 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 41.62 pts"
+2026-02-27,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2026-02-27,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-02-27,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-02-27,session_type_rth,session_type_rth,mixed,mixed,bull_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bull_trend_day; close bullish, E = 0.720314, CL = 0.850834, R/A = 0.61"
+2026-03-02,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 40.78 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-02,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-03-02,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-02,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-02,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-03-03,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 13 pts, v5 barrier 0.10A = 41.40 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-03,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-03,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-03,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-03,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-03,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-03-04,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 43.23 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-04,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-04,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-04,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-04,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-04,session_type_rth,session_type_rth,bull_trend,bull_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bull_trend),"close bullish, E = 0.680281, CL = 0.750479, R/A = 0.91"
+2026-03-05,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-05,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-03-05,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-03-05,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 23.50 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 43.42 pts"
+2026-03-05,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 60.00 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 86.85 pts"
+2026-03-05,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,two_sided_volatile_day,agree,,
+2026-03-06,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 15 pts, v5 barrier 0.10A = 43.36 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-06,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-06,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-06,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-03-06,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-09,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-09,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-03-09,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_high_reverse,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_high_reverse first"
+2026-03-09,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -30.75 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 43.41 pts"
+2026-03-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-09,session_type_rth,session_type_rth,bull_trend,bull_trend,reversal_day,disagree,NQ-v2 rule order,"bull_trend_day also holds under P2, which checks reversal_day first; close bullish, E = 0.751342, CL = 0.911409, R/A = 1.72"
+2026-03-10,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-10,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 38.50 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 45.60 pts"
+2026-03-10,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-10,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 12.75 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 45.60 pts"
+2026-03-10,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-03-10,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-11,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-11,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 34.00 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 44.64 pts"
+2026-03-11,opening_type_15m,opening_type_15m,range,range,range,agree,,
+2026-03-11,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-03-11,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -50.75 pts; NQ-v2 band B = 23 pts, v5 band 1/5A = 89.28 pts"
+2026-03-11,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.165579, CL = 0.360522, R/A = 0.69"
+2026-03-12,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-12,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -8.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 43.64 pts"
+2026-03-12,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 60.5, O - L15 = 27.75, T = 7"
+2026-03-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-12,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-12,session_type_rth,session_type_rth,mixed,mixed,bear_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bear_trend_day; close bearish, E = 0.744898, CL = 0.049320, R/A = 0.67"
+2026-03-13,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-13,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-03-13,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 30.25 > T; T = 8
+2026-03-13,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 30.25 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 43.72 pts"
+2026-03-13,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-13,session_type_rth,session_type_rth,bear_trend,bear_trend,reversal_day,disagree,bear_trend_day fails under P2,E = 0.54 < 0.60; NQ-v2 gives reversal_day
+2026-03-16,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 43.86 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-16,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 16.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 43.86 pts"
+2026-03-16,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 62.50, O - L15 = 32.75, T = 7"
+2026-03-16,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-16,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-03-16,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-17,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 43.78 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-17,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-03-17,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-17,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-17,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-03-17,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-18,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 42.32 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-18,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 24.50 pts; NQ-v2 band T = 12 pts, v5 band 1/10A = 42.32 pts"
+2026-03-18,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 61.50, O - L15 = 24.00, T = 12"
+2026-03-18,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-18,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-18,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-03-19,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-03-19,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-19,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-03-19,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-03-19,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-19,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.401645, CL = 0.679918, R/A = 0.87"
+2026-03-20,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-03-20,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -32.75 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 41.57 pts"
+2026-03-20,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-03-20,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-20,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-20,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.717788, CL = 0.274519, R/A = 1.25"
+2026-03-23,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 18 pts, v5 barrier 0.10A = 42.91 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-23,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-23,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-03-23,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-23,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-23,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-03-24,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 43.98 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-03-24,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-03-24,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-03-24,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-24,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -35.25 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 87.95 pts"
+2026-03-24,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-25,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-25,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 22.00 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 42.72 pts"
+2026-03-25,opening_type_15m,opening_type_15m,range,range,range,agree,,
+2026-03-25,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-25,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -58.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 85.45 pts"
+2026-03-25,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-03-26,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-03-26,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-03-26,opening_type_15m,opening_type_15m,range,range,range,agree,,
+2026-03-26,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 14.50 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 41.85 pts"
+2026-03-26,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-26,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-03-27,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-03-27,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-03-27,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-03-27,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-27,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-27,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-03-30,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-03-30,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-03-30,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 29.50 > T; T = 8
+2026-03-30,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-03-30,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-03-30,session_type_rth,session_type_rth,bear_trend,bear_trend,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 bear_trend),"close bearish, E = 0.726034, CL = 0.216545, R/A = 1.18"
+2026-03-31,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-03-31,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 35.00 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 44.25 pts"
+2026-03-31,opening_type_15m,opening_type_15m,range,range,range,agree,,
+2026-03-31,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-03-31,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-03-31,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-01,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 13 pts, v5 barrier 0.10A = 47.06 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-01,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-04-01,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-01,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-01,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-01,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.369672, CL = 0.515574, R/A = 0.65"
+2026-04-02,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-04-02,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-04-02,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-02,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-02,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-06,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-04-06,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-04-06,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-06,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-06,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.394790, CL = 0.645291, R/A = 0.52"
+2026-04-07,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-04-07,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-04-07,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-07,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-07,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-07,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-04-08,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 45.89 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-08,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-04-08,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-08,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-08,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-04-08,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.370456, CL = 0.474091, R/A = 0.70"
+2026-04-09,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 48.92 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-09,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 19.0 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 48.92 pts"
+2026-04-09,opening_type_15m,opening_type_15m,range,range,sweep_low_rebound,disagree,"sweep definition: NQ-v2 adds the previous-RTH levels, breach >= T","v5 range; T = 7; v5 sweeps used the ON level only, breach 0.02 A"
+2026-04-09,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-09,session_type_rth,session_type_rth,reversal,reversal,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 reversal),"close bullish, E = 0.542441, CL = 0.932094, R/A = 0.63"
+2026-04-10,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-04-10,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 9.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 47.66 pts"
+2026-04-10,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 54.00, O - L15 = 24.75, T = 7"
+2026-04-10,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 25.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 47.66 pts"
+2026-04-10,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -31.00 pts; NQ-v2 band B = 24 pts, v5 band 1/5A = 95.31 pts"
+2026-04-10,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-04-13,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 45.48 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-13,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -33.75 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 45.48 pts"
+2026-04-13,opening_type_15m,opening_type_15m,range,range,sweep_high_reverse,disagree,"sweep definition: NQ-v2 adds the previous-RTH levels, breach >= T","v5 range; T = 6; v5 sweeps used the ON level only, breach 0.02 A"
+2026-04-13,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-13,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-13,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-14,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-04-14,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-04-14,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-04-14,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-14,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-14,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-15,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 45.16 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-15,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -34.5 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 45.16 pts"
+2026-04-15,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 36.25, O - L15 = 41.25, T = 6"
+2026-04-15,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-15,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-15,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-16,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 44.73 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-16,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -43.0 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 44.73 pts"
+2026-04-16,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-16,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-16,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 45.5 pts; NQ-v2 band B = 23 pts, v5 band 1/5A = 89.47 pts"
+2026-04-16,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.157712, CL = 0.724437, R/A = 0.64"
+2026-04-17,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 14 pts, v5 barrier 0.10A = 43.60 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-17,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-04-17,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 27.75, O - L15 = 63.0, T = 14"
+2026-04-17,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-17,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-17,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.527914, CL = 0.774731, R/A = 0.59"
+2026-04-20,first_move_5m,first_move_5m,down_first,down_first,up_first,disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 43.35 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-20,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-04-20,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,sweep_high_reverse,agree,,
+2026-04-20,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-20,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -50.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 86.71 pts"
+2026-04-20,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-04-21,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 42.12 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-21,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -39.5 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 42.12 pts"
+2026-04-21,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-21,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 34.0 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 42.12 pts"
+2026-04-21,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-04-21,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.499250, CL = 0.269115, R/A = 0.79"
+2026-04-22,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 41.50 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-22,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -28.0 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 41.50 pts"
+2026-04-22,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 11.75, O - L15 = 67.5, T = 10"
+2026-04-22,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-22,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-22,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-23,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-04-23,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-04-23,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-04-23,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-04-23,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-04-23,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,two_sided_volatile_day,agree,,
+2026-04-24,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 42.17 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-24,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-04-24,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 50.0, O - L15 = 33.75, T = 8"
+2026-04-24,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -8.75 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 42.17 pts"
+2026-04-24,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-24,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-04-27,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 43.00 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-27,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -23.00 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 43.00 pts"
+2026-04-27,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 24.25, O - L15 = 57.25, T = 8"
+2026-04-27,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-27,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 33.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 86.01 pts"
+2026-04-27,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.216000, CL = 0.934400, R/A = 0.36"
+2026-04-28,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-04-28,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-04-28,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-04-28,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-04-28,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-04-28,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-04-29,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 41.23 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-04-29,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -26.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 41.23 pts"
+2026-04-29,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 11.25, O - L15 = 82.50, T = 7"
+2026-04-29,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-04-29,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-29,session_type_rth,session_type_rth,mixed,mixed,bull_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bull_trend_day; close bullish, E = 0.603009, CL = 0.984954, R/A = 0.52"
+2026-04-30,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-04-30,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-04-30,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2026-04-30,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-04-30,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-04-30,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-05-01,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 40.25 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-01,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-01,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 14.75 > T; T = 7
+2026-05-01,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-01,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-01,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.683375, CL = 0.732665, R/A = 0.74"
+2026-05-04,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 39.79 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-04,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-05-04,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 33.5, O - L15 = 46.25, T = 9"
+2026-05-04,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 16.75 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 39.79 pts"
+2026-05-04,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -74.5 pts; NQ-v2 band B = 20 pts, v5 band 1/5A = 79.59 pts"
+2026-05-04,session_type_rth,session_type_rth,mixed,mixed,range_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: range_day; close bearish, E = 0.227134, CL = 0.509146, R/A = 0.82"
+2026-05-05,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-05-05,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-05,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 17.5 > T; T = 5
+2026-05-05,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-05,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-05,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.676640, CL = 0.757192, R/A = 0.55"
+2026-05-06,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-05-06,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-06,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-05-06,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 28.75 pts; NQ-v2 band T = 12 pts, v5 band 1/10A = 39.44 pts"
+2026-05-06,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-06,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-05-07,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 40.86 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-07,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -8.0 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 40.86 pts"
+2026-05-07,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 32.5, O - L15 = 29.25, T = 6"
+2026-05-07,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-07,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -66.25 pts; NQ-v2 band B = 21 pts, v5 band 1/5A = 81.73 pts"
+2026-05-07,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,R/A = 0.96 < 1; NQ-v2 gives reversal_day
+2026-05-08,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 40.77 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-08,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-08,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 19.0 > T; T = 9
+2026-05-08,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-08,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-08,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-05-11,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 42.58 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-11,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-11,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-05-11,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -20.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 42.58 pts"
+2026-05-11,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-11,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.531618, CL = 0.782422, R/A = 0.55"
+2026-05-12,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 41.19 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-12,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-12,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-05-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-05-12,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -38.5 pts; NQ-v2 band B = 21 pts, v5 band 1/5A = 82.38 pts"
+2026-05-12,session_type_rth,session_type_rth,mixed,mixed,two_sided_volatile_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: two_sided_volatile_day; close bearish, E = 0.069495, CL = 0.780686, R/A = 1.34"
+2026-05-13,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-05-13,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-05-13,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2026-05-13,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-05-13,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-13,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,E = 0.39 >= 0.35; NQ-v2 gives reversal_day
+2026-05-14,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 43.59 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-14,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-14,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 17.75 > T; T = 9
+2026-05-14,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-14,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-14,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.650696, CL = 0.705564, R/A = 0.74"
+2026-05-15,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 42.76 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-15,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-05-15,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-05-15,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 13.5 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 42.76 pts"
+2026-05-15,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -46.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 85.51 pts"
+2026-05-15,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,range_day,disagree,two_sided_volatile_day fails under P2,R/A = 0.93 < 1; NQ-v2 gives range_day
+2026-05-18,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 13 pts, v5 barrier 0.10A = 43.94 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-18,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-05-18,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 17.75 > T; T = 13
+2026-05-18,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-05-18,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-05-18,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.442752, CL = 0.524469, R/A = 1.23"
+2026-05-19,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-05-19,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-19,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-05-19,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-05-19,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 74.00 pts; NQ-v2 band B = 23 pts, v5 band 1/5A = 89.34 pts"
+2026-05-19,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bullish, E = 0.159655, CL = 0.563646, R/A = 1.04"
+2026-05-20,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-05-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-20,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-05-20,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-20,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-20,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-05-21,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 44.94 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-21,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-05-21,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 51.25, O - L15 = 43.25, T = 11"
+2026-05-21,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -27.25 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 44.94 pts"
+2026-05-21,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-21,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.536300, CL = 0.747658, R/A = 0.95"
+2026-05-22,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 44.80 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-22,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-22,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-05-22,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -15.75 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 44.80 pts"
+2026-05-22,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -27.5 pts; NQ-v2 band B = 23 pts, v5 band 1/5A = 89.60 pts"
+2026-05-22,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.106280, CL = 0.240580, R/A = 0.58"
+2026-05-26,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 5 pts, v5 barrier 0.10A = 43.76 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-26,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 32.0 pts; NQ-v2 band T = 5 pts, v5 band 1/10A = 43.76 pts"
+2026-05-26,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-05-26,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-26,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-26,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-05-27,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-05-27,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-05-27,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2026-05-27,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-05-27,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-05-27,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.445151, CL = 0.540541, R/A = 0.70"
+2026-05-28,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-05-28,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-05-28,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-05-28,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-05-28,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-05-28,session_type_rth,session_type_rth,bull_trend,bull_trend,reversal_day,disagree,bull_trend_day fails under P2,E = 0.60 < 0.60; NQ-v2 gives reversal_day
+2026-05-29,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 43.62 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-05-29,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-05-29,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2026-05-29,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 22.5 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 43.62 pts"
+2026-05-29,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-05-29,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-06-01,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 14 pts, v5 barrier 0.10A = 42.41 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-01,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-06-01,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-06-01,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 38.75 pts; NQ-v2 band T = 14 pts, v5 band 1/10A = 42.41 pts"
+2026-06-01,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-01,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.569825, CL = 0.697007, R/A = 0.95"
+2026-06-02,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 42.27 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-02,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-02,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-06-02,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-06-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-02,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.505042, CL = 0.952941, R/A = 0.70"
+2026-06-03,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-06-03,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-03,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_high_reverse,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_high_reverse first"
+2026-06-03,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -31.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 41.38 pts"
+2026-06-03,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-03,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.381716, CL = 0.448276, R/A = 0.75"
+2026-06-04,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-04,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-04,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-06-04,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-04,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-04,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,two_sided_volatile_day fails under P2,E = 0.48 >= 0.35; NQ-v2 gives reversal_day
+2026-06-05,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 41.22 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-05,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-05,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-06-05,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-05,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-05,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-06-08,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 49.08 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-08,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-06-08,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-06-08,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-06-08,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -73.0 pts; NQ-v2 band B = 25 pts, v5 band 1/5A = 98.16 pts"
+2026-06-08,session_type_rth,session_type_rth,mixed,mixed,range_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: range_day; close bearish, E = 0.177400, CL = 0.295261, R/A = 0.84"
+2026-06-09,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 50.76 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-09,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 30.0 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 50.76 pts"
+2026-06-09,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-06-09,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-09,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-09,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.383678, CL = 0.547670, R/A = 3.19"
+2026-06-10,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-06-10,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-06-10,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-06-10,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-10,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-10,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-06-11,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 59.95 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-11,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -17.00 pts; NQ-v2 band T = 12 pts, v5 band 1/10A = 59.95 pts"
+2026-06-11,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 27.00, O - L15 = 104.75, T = 12"
+2026-06-11,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-11,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-11,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-06-12,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-12,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-12,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_down,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_down
+2026-06-12,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 16.75 pts; NQ-v2 band T = 15 pts, v5 band 1/10A = 62.93 pts"
+2026-06-12,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-12,session_type_rth,session_type_rth,mixed,mixed,reversal_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: reversal_day; close bullish, E = 0.286912, CL = 0.795529, R/A = 0.85"
+2026-06-15,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 62.27 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-15,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-06-15,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-06-15,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-15,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-15,session_type_rth,session_type_rth,mixed,mixed,bull_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bull_trend_day; close bullish, E = 0.771958, CL = 0.863820, R/A = 0.50"
+2026-06-16,first_move_5m,first_move_5m,neither,neither,down_first,disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 64.76 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-16,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-06-16,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 48.0, O - L15 = 61.75, T = 9"
+2026-06-16,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-16,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-16,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-06-17,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-17,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-06-17,opening_type_15m,opening_type_15m,range,range,range,agree,,
+2026-06-17,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -16.5 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 64.33 pts"
+2026-06-17,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-17,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-06-18,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 64.14 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-18,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-18,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 21.25 > T; T = 12
+2026-06-18,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-18,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 98.50 pts; NQ-v2 band B = 33 pts, v5 band 1/5A = 128.29 pts"
+2026-06-18,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.251115, CL = 0.769280, R/A = 0.61"
+2026-06-22,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 65.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-22,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -32.75 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 65.20 pts"
+2026-06-22,opening_type_15m,opening_type_15m,mixed,mixed,sweep_high_reverse,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_high_reverse
+2026-06-22,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-22,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-22,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.362366, CL = 0.325269, R/A = 0.71"
+2026-06-23,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-23,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 31.00 pts; NQ-v2 band T = 15 pts, v5 band 1/10A = 63.88 pts"
+2026-06-23,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-06-23,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-23,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -68.00 pts; NQ-v2 band B = 32 pts, v5 band 1/5A = 127.76 pts"
+2026-06-23,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.144758, CL = 0.155402, R/A = 0.74"
+2026-06-24,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-24,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -47.50 pts; NQ-v2 band T = 12 pts, v5 band 1/10A = 67.01 pts"
+2026-06-24,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-06-24,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-06-24,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-24,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,range_day,disagree,two_sided_volatile_day fails under P2,R/A = 0.96 < 1; NQ-v2 gives range_day
+2026-06-25,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 66.82 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-25,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-06-25,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 39.75 > T; T = 11
+2026-06-25,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-25,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-06-25,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.449986, CL = 0.505712, R/A = 1.34"
+2026-06-26,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-06-26,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -20.25 pts; NQ-v2 band T = 15 pts, v5 band 1/10A = 68.46 pts"
+2026-06-26,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-06-26,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-26,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -46.5 pts; NQ-v2 band B = 35 pts, v5 band 1/5A = 136.92 pts"
+2026-06-26,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.086997, CL = 0.251637, R/A = 0.78"
+2026-06-29,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 67.65 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-29,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-06-29,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-06-29,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-06-29,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-29,session_type_rth,session_type_rth,bull_trend,bull_trend,reversal_day,disagree,bull_trend_day fails under P2,E = 0.51 < 0.60; NQ-v2 gives reversal_day
+2026-06-30,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 68.52 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-06-30,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-06-30,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 14.5 > T; T = 10
+2026-06-30,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-06-30,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-06-30,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-07-01,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 16 pts, v5 barrier 0.10A = 67.69 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-01,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-01,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-01,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 49.00 pts; NQ-v2 band T = 16 pts, v5 band 1/10A = 67.69 pts"
+2026-07-01,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-01,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.513223, CL = 0.087603, R/A = 0.45"
+2026-07-02,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 16 pts, v5 barrier 0.10A = 66.13 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-02,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 48.00 pts; NQ-v2 band T = 16 pts, v5 band 1/10A = 66.13 pts"
+2026-07-02,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2026-07-02,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-02,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-02,session_type_rth,session_type_rth,bear_trend,bear_trend,reversal_day,disagree,bear_trend_day fails under P2,"E = 0.56 < 0.60, CL = 0.22 > 0.20; NQ-v2 gives reversal_day"
+2026-07-06,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 68.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-06,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-06,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-06,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 116.00 pts; NQ-v2 band B = 35 pts, v5 band 1/5A = 136.57 pts"
+2026-07-06,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.365067, CL = 0.552321, R/A = 0.47"
+2026-07-07,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 67.40 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-07,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-07-07,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-07-07,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-07,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-07,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.417236, CL = 0.387809, R/A = 0.71"
+2026-07-08,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-07-08,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-08,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-07-08,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-08,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-07-08,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.545064, CL = 0.907189, R/A = 0.69"
+2026-07-09,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-07-09,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-09,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-09,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 17.00 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 66.37 pts"
+2026-07-09,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-07-09,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.532982, CL = 0.881926, R/A = 0.57"
+2026-07-10,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 65.45 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-10,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 21.25 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 65.45 pts"
+2026-07-10,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 102.00, O - L15 = 36.75, T = 10"
+2026-07-10,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-10,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-07-10,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.503414, CL = 0.900062, R/A = 0.62"
+2026-07-13,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 63.65 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-13,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-13,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-13,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-07-13,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-13,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.677801, CL = 0.203897, R/A = 0.56"
+2026-07-14,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-07-14,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -56.75 pts; NQ-v2 band T = 14 pts, v5 band 1/10A = 63.66 pts"
+2026-07-14,opening_type_15m,opening_type_15m,mixed,mixed,range,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: range
+2026-07-14,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-14,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-07-14,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-07-15,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 62.17 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-15,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-15,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 22.25 > T; T = 8
+2026-07-15,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-15,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-15,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.438415, CL = 0.523256, R/A = 0.93"
+2026-07-16,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-07-16,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-16,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-16,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 16.5 pts; NQ-v2 band T = 11 pts, v5 band 1/10A = 61.86 pts"
+2026-07-16,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-16,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.549063, CL = 0.305402, R/A = 0.73"
+2026-07-17,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-07-17,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-17,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-07-17,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-17,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-07-17,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bullish, E = 0.243769, CL = 0.554517, R/A = 1.04"
+2026-07-20,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 63.25 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-20,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 19.25 > T; T = 8
+2026-07-20,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -14.25 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 63.25 pts"
+2026-07-20,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-20,session_type_rth,session_type_rth,mixed,mixed,bear_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bear_trend_day; close bearish, E = 0.610359, CL = 0.042378, R/A = 0.67"
+2026-07-21,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 61.74 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-21,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-21,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,two_sided_whipsaw,disagree,sweep_high_reverse fails under NQ-v2,"no frozen reference (ON and previous-RTH high / low) breached by >= T, reclaimed and not gap-crossed; v5 used the ON level only, with a 0.02 A breach"
+2026-07-21,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -15.25 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 61.74 pts"
+2026-07-21,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 89.25 pts; NQ-v2 band B = 31 pts, v5 band 1/5A = 123.48 pts"
+2026-07-21,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.297005, CL = 0.823627, R/A = 0.49"
+2026-07-22,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-07-22,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-22,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_up,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_up
+2026-07-22,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-22,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 70.0 pts; NQ-v2 band B = 31 pts, v5 band 1/5A = 122.94 pts"
+2026-07-22,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-07-23,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-07-23,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-23,opening_type_15m,opening_type_15m,sweep_low_rebound,sweep_low_rebound,sweep_low_rebound,agree,,
+2026-07-23,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 13.25 pts; NQ-v2 band T = 12 pts, v5 band 1/10A = 58.90 pts"
+2026-07-23,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -103.50 pts; NQ-v2 band B = 30 pts, v5 band 1/5A = 117.81 pts"
+2026-07-23,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.229745, CL = 0.404550, R/A = 0.76"
+2026-07-24,first_move_5m,first_move_5m,up_first,up_first,down_first,disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 59.89 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-24,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -55.0 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 59.89 pts"
+2026-07-24,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-07-24,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-24,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-24,session_type_rth,session_type_rth,mixed,mixed,bear_trend_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: bear_trend_day; close bearish, E = 0.615063, CL = 0.167962, R/A = 0.70"
+2026-07-27,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 58.59 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-27,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-27,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-27,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-27,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-27,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.588105, CL = 0.374584, R/A = 1.16"
+2026-07-28,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 59.24 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-28,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-28,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 42.0 > T; T = 12
+2026-07-28,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-28,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -31.75 pts; NQ-v2 band B = 30 pts, v5 band 1/5A = 118.48 pts"
+2026-07-28,session_type_rth,session_type_rth,mixed,mixed,range_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: range_day; close bearish, E = 0.066632, CL = 0.660546, R/A = 0.80"
+2026-07-29,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 59.22 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-29,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-07-29,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-07-29,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-29,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-29,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-07-30,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 60.58 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-30,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-07-30,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-07-30,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-07-30,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-07-30,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-07-31,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 63.14 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-07-31,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-07-31,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_high_reverse,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_high_reverse first"
+2026-07-31,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-07-31,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-07-31,session_type_rth,session_type_rth,mixed,mixed,two_sided_volatile_day,disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: two_sided_volatile_day; close bearish, E = 0.269350, CL = 0.500000, R/A = 1.02"
+2026-08-03,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 11 pts, v5 barrier 0.10A = 63.25 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-03,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-03,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-08-03,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-08-03,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-03,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-08-04,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 63.38 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-04,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-04,opening_type_15m,opening_type_15m,drive_up,drive_up,two_sided_whipsaw,disagree,opening_drive_up fails under NQ-v2,counter-excursion O - L15 = 26.50 > T; T = 9
+2026-08-04,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-08-04,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-04,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-08-05,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 66.38 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-05,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-05,opening_type_15m,opening_type_15m,mixed,mixed,sweep_low_rebound,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: sweep_low_rebound
+2026-08-05,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -60.25 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 66.38 pts"
+2026-08-05,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-05,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-08-06,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 65.06 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-06,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-06,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-08-06,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-08-06,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-06,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.364607, CL = 0.575281, R/A = 0.68"
+2026-08-07,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 13 pts, v5 barrier 0.10A = 63.62 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-07,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-07,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-07,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 47.25 pts; NQ-v2 band T = 13 pts, v5 band 1/10A = 63.62 pts"
+2026-08-07,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 120.0 pts; NQ-v2 band B = 32 pts, v5 band 1/5A = 127.25 pts"
+2026-08-07,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.405748, CL = 0.911243, R/A = 0.46"
+2026-08-10,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 61.67 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-10,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -29.5 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 61.67 pts"
+2026-08-10,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 36.25, O - L15 = 86.75, T = 8"
+2026-08-10,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 52.25 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 61.67 pts"
+2026-08-10,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -61.25 pts; NQ-v2 band B = 31 pts, v5 band 1/5A = 123.35 pts"
+2026-08-10,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-08-11,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-08-11,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-08-11,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2026-08-11,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-11,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-11,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.659385, CL = 0.330097, R/A = 0.53"
+2026-08-12,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 56.61 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-12,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-08-12,opening_type_15m,opening_type_15m,sweep_high_reverse,sweep_high_reverse,two_sided_whipsaw,disagree,sweep_high_reverse fails under NQ-v2,"no frozen reference (ON and previous-RTH high / low) breached by >= T, reclaimed and not gap-crossed; v5 used the ON level only, with a 0.02 A breach"
+2026-08-12,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-12,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-12,session_type_rth,session_type_rth,range,range,bear_trend_day,disagree,range_day fails under P2,E = 0.76 >= 0.35; NQ-v2 gives bear_trend_day
+2026-08-13,first_move_5m,first_move_5m,neither,neither,down_first,disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 55.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-13,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-13,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-13,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-08-13,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-13,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-08-14,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 54.27 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-14,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 19.25 pts; NQ-v2 band T = 6 pts, v5 band 1/10A = 54.27 pts"
+2026-08-14,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 27.75, O - L15 = 72.00, T = 6"
+2026-08-14,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-14,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -97.75 pts; NQ-v2 band B = 28 pts, v5 band 1/5A = 108.54 pts"
+2026-08-14,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.387897, CL = 0.458333, R/A = 0.46"
+2026-08-17,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 52.20 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-17,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -22.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 52.20 pts"
+2026-08-17,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 46.75, O - L15 = 53.75, T = 7"
+2026-08-17,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -21.50 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 52.20 pts"
+2026-08-17,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-17,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.579186, CL = 0.111991, R/A = 0.42"
+2026-08-18,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 50.04 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-18,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-08-18,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-18,direction_1h,ib_direction,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -21.00 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 50.04 pts"
+2026-08-18,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-18,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bearish, E = 0.408602, CL = 0.280547, R/A = 0.51"
+2026-08-19,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 12 pts, v5 barrier 0.10A = 50.60 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-19,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-08-19,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-19,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-19,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-19,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.474114, CL = 0.398501, R/A = 0.73"
+2026-08-20,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 49.58 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-20,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-20,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-20,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-08-20,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -44.5 pts; NQ-v2 band B = 25 pts, v5 band 1/5A = 99.16 pts"
+2026-08-20,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-08-21,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-08-21,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-08-21,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2026-08-21,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-21,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -74.00 pts; NQ-v2 band B = 25 pts, v5 band 1/5A = 96.69 pts"
+2026-08-21,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-08-24,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-08-24,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-08-24,opening_type_15m,opening_type_15m,drive_down,drive_down,opening_drive_down,agree,,
+2026-08-24,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-24,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-24,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.459072, CL = 0.515612, R/A = 0.63"
+2026-08-25,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 46.64 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-25,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-25,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-25,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-25,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -26.75 pts; NQ-v2 band B = 24 pts, v5 band 1/5A = 93.27 pts"
+2026-08-25,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bearish, E = 0.096658, CL = 0.477868, R/A = 0.59"
+2026-08-26,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-08-26,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-26,opening_type_15m,opening_type_15m,mixed,mixed,opening_drive_up,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: opening_drive_up
+2026-08-26,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-08-26,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-26,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.581560, CL = 0.665485, R/A = 0.46"
+2026-08-27,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 43.80 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-27,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-27,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-08-27,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-08-27,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-08-27,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.596616, CL = 0.954586, R/A = 0.64"
+2026-08-28,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 43.57 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-28,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-08-28,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-08-28,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 25.5 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 43.57 pts"
+2026-08-28,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-08-28,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.350433, CL = 0.160560, R/A = 0.86"
+2026-08-31,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 43.15 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-08-31,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -30.00 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 43.15 pts"
+2026-08-31,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-08-31,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-08-31,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 68.75 pts; NQ-v2 band B = 22 pts, v5 band 1/5A = 86.29 pts"
+2026-08-31,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.375171, CL = 0.826739, R/A = 0.42"
+2026-09-01,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 41.39 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-01,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -28.00 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 41.39 pts"
+2026-09-01,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 28.75, O - L15 = 71.50, T = 7"
+2026-09-01,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-01,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-09-01,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-09-02,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-09-02,direction_15m,direction_15m,flat,flat,bearish,disagree,threshold: T vs 1/10 A,"close - O = -7.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 42.05 pts"
+2026-09-02,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 20.25, O - L15 = 62.25, T = 7"
+2026-09-02,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-02,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-02,session_type_rth,session_type_rth,range,range,(uncovered),disagree,no P2 rule fits (NQ-v2 uncovered; v5 range),"close bullish, E = 0.467433, CL = 0.883780, R/A = 0.47"
+2026-09-03,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 40.49 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-03,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-03,opening_type_15m,opening_type_15m,two_sided,two_sided,sweep_low_rebound,disagree,NQ-v2 rule order,"two_sided_whipsaw also holds under NQ-v2, which checks sweep_low_rebound first"
+2026-09-03,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-03,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-03,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-09-04,first_move_5m,first_move_5m,up_first,up_first,down_first,disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 40.42 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-04,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 27.75 pts; NQ-v2 band T = 10 pts, v5 band 1/10A = 40.42 pts"
+2026-09-04,opening_type_15m,opening_type_15m,range,range,sweep_low_rebound,disagree,"sweep definition: NQ-v2 adds the previous-RTH levels, breach >= T","v5 range; T = 10; v5 sweeps used the ON level only, breach 0.02 A"
+2026-09-04,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-09-04,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-09-04,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-09-08,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-09-08,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-09-08,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-09-08,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-09-08,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-09-08,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.389685, CL = 0.450812, R/A = 0.67"
+2026-09-09,first_move_5m,first_move_5m,up_first,up_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 38.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-09,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 23.75 pts; NQ-v2 band T = 7 pts, v5 band 1/10A = 38.28 pts"
+2026-09-09,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 48.75, O - L15 = 36.75, T = 7"
+2026-09-09,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-09,direction_rth,close_direction_rth,flat,flat,neutral_band,agree,,
+2026-09-09,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-09-10,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 10 pts, v5 barrier 0.10A = 37.28 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-10,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-10,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-09-10,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-10,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 47.75 pts; NQ-v2 band B = 19 pts, v5 band 1/5A = 74.55 pts"
+2026-09-10,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-09-11,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-09-11,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 13.75 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 37.48 pts"
+2026-09-11,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 19.0, O - L15 = 72.0, T = 9"
+2026-09-11,direction_1h,ib_direction,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 32.25 pts; NQ-v2 band T = 9 pts, v5 band 1/10A = 37.48 pts"
+2026-09-11,direction_rth,close_direction_rth,flat,flat,bearish,disagree,threshold: B vs 1/5 A,"close - O = -29.0 pts; NQ-v2 band B = 19 pts, v5 band 1/5A = 74.96 pts"
+2026-09-11,session_type_rth,session_type_rth,range,range,range_day,agree,,
+2026-09-14,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 9 pts, v5 barrier 0.10A = 37.47 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-14,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-14,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-09-14,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-14,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-14,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.583286, CL = 0.645106, R/A = 1.17"
+2026-09-15,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-09-15,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 15.00 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 38.53 pts"
+2026-09-15,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 20.50, O - L15 = 48.25, T = 8"
+2026-09-15,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-09-15,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-09-15,session_type_rth,session_type_rth,bear_trend,bear_trend,bear_trend_day,agree,,
+2026-09-16,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 37.58 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-16,direction_15m,direction_15m,flat,flat,bullish,disagree,threshold: T vs 1/10 A,"close - O = 17.75 pts; NQ-v2 band T = 8 pts, v5 band 1/10A = 37.58 pts"
+2026-09-16,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 35.00, O - L15 = 13.50, T = 8"
+2026-09-16,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-16,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-09-16,session_type_rth,session_type_rth,two_sided_volatile,two_sided_volatile,reversal_day,disagree,NQ-v2 rule order,"two_sided_volatile_day also holds under P2, which checks reversal_day first; close bearish, E = 0.267237, CL = 0.404630, R/A = 1.32"
+2026-09-17,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 38.37 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-17,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-09-17,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-09-17,direction_1h,ib_direction,flat,flat,neutral_band,agree,,
+2026-09-17,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 26.25 pts; NQ-v2 band B = 20 pts, v5 band 1/5A = 76.74 pts"
+2026-09-17,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.140000, CL = 0.740000, R/A = 0.49"
+2026-09-18,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 7 pts, v5 barrier 0.10A = 39.49 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-18,direction_15m,direction_15m,flat,flat,neutral_band,agree,,
+2026-09-18,opening_type_15m,opening_type_15m,range,range,two_sided_whipsaw,disagree,threshold: both O + T and O - T reached (v5 two-sided needs 0.12 A each way),"H15 - O = 30.75, O - L15 = 16.0, T = 7"
+2026-09-18,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-09-18,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-18,session_type_rth,session_type_rth,reversal,reversal,reversal_day,agree,,
+2026-09-21,first_move_5m,first_move_5m,neither,neither,up_first,disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 38.57 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-21,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-21,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-09-21,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-21,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-21,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-09-22,first_move_5m,first_move_5m,up_first,up_first,up_first,agree,,
+2026-09-22,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-22,opening_type_15m,opening_type_15m,drive_up,drive_up,opening_drive_up,agree,,
+2026-09-22,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-22,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-22,session_type_rth,session_type_rth,bull_trend,bull_trend,bull_trend_day,agree,,
+2026-09-23,first_move_5m,first_move_5m,down_first,down_first,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 6 pts, v5 barrier 0.10A = 41.65 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-23,direction_15m,direction_15m,down,down,bearish,agree,,
+2026-09-23,opening_type_15m,opening_type_15m,drive_down,drive_down,two_sided_whipsaw,disagree,opening_drive_down fails under NQ-v2,counter-excursion H15 - O = 7.0 > T; T = 6
+2026-09-23,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-09-23,direction_rth,close_direction_rth,down,down,bearish,agree,,
+2026-09-23,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bearish, E = 0.637407, CL = 0.343687, R/A = 0.89"
+2026-09-24,first_move_5m,first_move_5m,neither,neither,(ambiguous_intrabar),disagree,threshold: T vs 0.10 A,"T = 8 pts, v5 barrier 0.10A = 41.46 pts; with v5's barrier NQ-v2 gives v5's label"
+2026-09-24,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-24,opening_type_15m,opening_type_15m,mixed,mixed,two_sided_whipsaw,disagree,v5 'mixed' has no NQ-v2 class,NQ-v2: two_sided_whipsaw
+2026-09-24,direction_1h,ib_direction,up,up,bullish,agree,,
+2026-09-24,direction_rth,close_direction_rth,up,up,bullish,agree,,
+2026-09-24,session_type_rth,session_type_rth,mixed,mixed,(uncovered),disagree,v5 'mixed' has no NQ-v2 class,"NQ-v2: uncovered; close bullish, E = 0.710546, CL = 0.787584, R/A = 0.81"
+2026-09-25,first_move_5m,first_move_5m,down_first,down_first,down_first,agree,,
+2026-09-25,direction_15m,direction_15m,up,up,bullish,agree,,
+2026-09-25,opening_type_15m,opening_type_15m,two_sided,two_sided,two_sided_whipsaw,agree,,
+2026-09-25,direction_1h,ib_direction,down,down,bearish,agree,,
+2026-09-25,direction_rth,close_direction_rth,flat,flat,bullish,disagree,threshold: B vs 1/5 A,"close - O = 72.5 pts; NQ-v2 band B = 21 pts, v5 band 1/5A = 81.71 pts"
+2026-09-25,session_type_rth,session_type_rth,range,range,reversal_day,disagree,NQ-v2 rule order,"range_day also holds under P2, which checks reversal_day first; close bullish, E = 0.271028, CL = 0.775701, R/A = 0.65"

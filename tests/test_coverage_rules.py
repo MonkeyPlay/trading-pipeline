@@ -61,9 +61,9 @@ def test_planner_refetches_days_stored_under_the_old_rule():
     reset_database(DSN)
     conn = get_db_connection(DSN)
     try:
-        md, sessions = make_market(last_day="2026-06-12", n_sessions=5)
+        bars, sessions = make_market(last_day="2026-06-12", n_sessions=5)
         upsert_contract(conn, NQ_CID, "NQ", "20260918", "CME")
-        df = md._bars[(NQ_CID, "TRADES")]
+        df = bars[NQ_CID]
         gap_day = cal.session("2026-06-10")
         hole = (df["bar_start_at"] >= gap_day.rth_open_at + pd.Timedelta(minutes=120)) & \
                (df["bar_start_at"] < gap_day.rth_open_at + pd.Timedelta(minutes=150))

@@ -8,8 +8,8 @@ belongs to, and each day is written, replaced, and reasoned about as one whole.
 The store is PostgreSQL with the TimescaleDB extension (`docker compose up -d` runs one
 locally).
 
-- **Production DB**: `trading_pipeline` (`Config.DATABASE_URL`). The collector and
-  `scripts/daily_forecast.py` write here. It is append-only in spirit — historical
+- **Production DB**: `trading_pipeline` (`Config.DATABASE_URL`). The collector writes
+  here. It is append-only in spirit — historical
   bars are immutable once settled.
 - **Dev DB**: `trading_pipeline_dev` (`Config.DEV_DATABASE_URL`). `populate_mock_data.py`
   writes here. `--reset` refuses to touch any DB that contains non-`MOCK` bars.
@@ -62,9 +62,8 @@ every single run. Each instrument's expected count is its `expected_bars` in
 `config.INSTRUMENTS` (1380 one-minute bars for the 18:00–17:00 ET ES/NQ Globex day, a
 lower bound for thinner series), and the 90% threshold is `DAY_COMPLETE_RATIO`.
 
-Instruments flagged `rth_complete` (ES, NQ, RTY: every 09:30–16:00 minute trades, and the
-v2 features and labels read those minutes one by one) must also hold their whole regular
-session: 390 bars, 210 on an early close. An early close (or a closed regular session)
+Instruments flagged `rth_complete` (ES, NQ, RTY: every 09:30–16:00 minute trades) must
+also hold their whole regular session: 390 bars, 210 on an early close. An early close (or a closed regular session)
 lowers their day count by the regular-session minutes it loses
 (`collector.coverage.day_expectation`). The planner re-judges every stored day from its
 counts under this rule instead of trusting its stored status, so a day stored as
@@ -174,7 +173,7 @@ expiry is more than the rule's `days_before_expiry` away (`collector/rolls.py`).
 
 The day → contract map is written to `active_contracts (symbol, trading_day,
 contract_id, rule)`; single-contract instruments (indices, stocks) get rows too, so it is
-the one place a feature looks up "which contract was NQ on this day". Once the chain is
+the one place to look up "which contract was NQ on this day". Once the chain is
 stored, planning is offline again; the chain is re-discovered only when it no longer
 covers the window (a new roll ahead). `--expiry` / `<SYMBOL>_EXPIRY` pin one contract
 and leave `active_contracts` untouched. `--plan-only` writes nothing.
@@ -200,31 +199,8 @@ print is absent, never forward-filled — so the age of any value is recoverable
 `get_last_bar_at_or_before(conn, contract_id, as_of_utc)` returns the last bar that had
 *closed* by an instant, with its `close_time_utc`.
 
-### Real-time bars and `bar_receipts`
-
-`collector/live_stream.py` keeps an IB keep-up-to-date 1-minute stream per instrument
-and, when a minute is final, calls `queries.save_live_bars()`, which in one transaction
-per day:
-
-- appends the bar to **`bar_receipts`** with `received_at` (when the pipeline knew the
-  final value), `revision` and `finalised_by` - `next_bar` (the stream moved on),
-  `timer` (no later update within the grace period), `initial_fill` (history sent when
-  the stream opened), `late_update` (IB changed a finished minute) or `confirm_fetch`
-  (a short historical re-read of a key minute, by default 09:28). The table is
-  append-only: a different value is the next revision, an identical one is not stored;
-- upserts the bar into `bars` with `is_completed = 0` and source `IBKR_LIVE`, so the
-  day stays `PARTIAL` and the regular collector re-downloads it once it has settled.
-
-`save_trading_day()` and `save_live_bars()` take the same per-day advisory lock, and a
-download that replaces a day re-inserts the latest revision of every live bar newer than
-the last downloaded minute: a download requested at 09:26 cannot drop the 09:28 bar the
-stream stored at 09:29. Minutes the download covers take the downloaded value; the
-receipts keep what was known live either way.
-
-The v2 feature contract ([forecast_contract_v2.md](forecast_contract_v2.md)) calls this
-column `bar_start_at` and names bars by their start: its "09:28 close" is the bar stamped
-09:28, ending 09:29. The `bar_intervals` view exposes `bar_start_at` and `bar_end_at`
-explicitly.
+Bars are named by their start: "the 09:28 close" is the bar stamped 09:28, ending 09:29.
+The `bar_intervals` view exposes `bar_start_at` and `bar_end_at` explicitly.
 
 A day whose median close falls outside the instrument's `plausible_range` is refused
 (logged as a `FAILED` collection run), since it almost always means `value_unit` does not

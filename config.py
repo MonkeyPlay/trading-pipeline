@@ -251,7 +251,6 @@ class Config:
 
     # Application Settings
     TIMEZONE = "America/New_York"
-    FEATURE_VERSION = "v1.0"
 
     @classmethod
     def collect_symbols(cls):

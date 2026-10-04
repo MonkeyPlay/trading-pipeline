@@ -32,19 +32,11 @@ TABLES = (
     "session_days",
     "bars",
     "collection_runs",
-    "feature_snapshots",
-    "predictions",
-    "outcomes",
-    "analogue_matches",
 )
 
 # Identity columns whose sequences must continue after the copied ids.
 IDENTITY_COLUMNS = {
     "collection_runs": "run_id",
-    "feature_snapshots": "snapshot_id",
-    "predictions": "prediction_id",
-    "outcomes": "outcome_id",
-    "analogue_matches": "match_id",
 }
 
 

@@ -1,7 +1,6 @@
 # tests/test_events.py
-"""The economic calendar: the ISM rule, release times, coverage (no calendar is
-never "no event"), the loader against the database, and how the first-hour
-forecast and its card show a day's releases."""
+"""The economic calendar: the ISM rule, release times, and the loader against the
+database."""
 
 import os
 from datetime import date, datetime, timezone
@@ -10,7 +9,6 @@ import psycopg
 import pytest
 
 from database import events as ev
-from forecaster import preopen as po
 
 DSN = os.getenv("TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(
@@ -52,35 +50,9 @@ def test_calendar_rows_are_new_york_times(tmp_path):
     assert rows[1]["tier"] == "high" and rows[1]["country"] == "US"
 
 
-def test_releases_count_only_on_covered_days(tmp_path):
-    rows = ev.calendar_rows(_csv(tmp_path, "cal.csv", CALENDAR))
-    cov = ev.coverage_rows(_csv(tmp_path, "cov.csv", COVERAGE))
-    events = po.events_from_rows(rows + ev.ism_rows(date(2026, 6, 1), date(2026, 6, 30)), cov)
-    assert events.of("2026-06-17") == [(270, "high", "FOMC rate decision", "14:00")]   # minutes from 09:30
-    assert events.of("2026-06-10") == [(-60, "high", "Consumer Price Index", "08:30")]
-    assert [r[2] for r in events.of("2026-06-01")] == ["ISM Manufacturing PMI"]
-    assert events.of("2026-06-18") == []              # covered, nothing scheduled: no release
-    assert events.of("2025-06-11") is None            # no coverage that day: the calendar is missing
-
-
-def test_card_lists_the_releases_and_warns_when_one_falls_inside_the_hour():
-    from dashboard.views.candles import describe_releases
-    ism = [{"time": "08:30", "name": "Consumer Price Index", "tier": "high", "minute": -60},
-           {"time": "10:00", "name": "ISM Manufacturing PMI", "tier": "high", "minute": 30}]
-    text, warn = describe_releases(ism)
-    assert text.startswith("Scheduled today: 08:30 Consumer Price Index (high) · 10:00 ISM Manufacturing PMI (high)")
-    assert warn and text.endswith("inside the hour: ISM Manufacturing PMI.")
-    fomc = [{"time": "14:00", "name": "FOMC rate decision", "tier": "high", "minute": 270}]
-    assert describe_releases(fomc) == ("Scheduled today: 14:00 FOMC rate decision (high) - not part of the forecast.",
-                                       False)                     # after the hour: nothing to warn of
-    assert describe_releases([])[0].startswith("No scheduled release today")
-    assert describe_releases(None)[0].startswith("No economic calendar covers this day")
-
-
 @needs_db
-def test_loader_is_idempotent_and_feeds_the_snapshot_and_the_model(tmp_path):
+def test_loader_is_idempotent_and_replaces_a_moved_release(tmp_path):
     from database.connection import get_db_connection, reset_database
-    from features.market_data import DbMarketData
     reset_database(DSN)
     conn = get_db_connection(DSN)
     try:
@@ -90,12 +62,9 @@ def test_loader_is_idempotent_and_feeds_the_snapshot_and_the_model(tmp_path):
         assert ev.load(conn, cal_path, cov_path) == {"events": 0, "moved": 0, "coverage": 0}
         moved = CALENDAR.replace("2026-06-17,14:00", "2026-06-18,14:00")
         assert ev.load(conn, _csv(tmp_path, "cal2.csv", moved), cov_path) == {"events": 1, "moved": 1, "coverage": 0}
-        # the v2 snapshot's reader: a covered day, its FOMC decision now on the 18th
-        start = datetime(2026, 6, 18, 13, 29, tzinfo=timezone.utc)
-        coverage, found = DbMarketData(conn).event_calendar("2026-06-18", start,
-                                                            datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc), None)
-        assert coverage is not None and [e["name"] for e in found] == ["FOMC rate decision"]
-        events = po.load_events(conn)
-        assert events.of("2026-06-17") == [] and events.of("2026-06-18")[0][2] == "FOMC rate decision"
+        # the FOMC decision's one row now stands on the 18th
+        rows = conn.execute("SELECT scheduled_at FROM economic_events WHERE event_key = %s;",
+                            ("fomc-decision:2026-06",)).fetchall()
+        assert [str(r["scheduled_at"]) for r in rows] == ["2026-06-18 18:00:00"]
     finally:
         conn.close()

@@ -22,6 +22,9 @@ Each day is judged from its bar counts by the collector's current rule
 session has gaps is not "complete" even if it was stored under an older rule.
 Several contracts can hold the same futures day (warm-up days before a roll):
 the best of them counts.
+
+Right of the weeks, the last ``RECENT_DAYS`` scheduled trading days that have
+ended are drawn one dot per day, coloured by the same rule over that day alone.
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ from database.queries import derive_day_status
 from features.session_windows import NY_TZ
 
 MAX_WEEKS = 78            # about eighteen months; older weeks are not drawn
+RECENT_DAYS = 10          # the day dots: the last two weeks of trading days
+DAY_PITCH, DAY_GAP = 13, 18   # px per day dot, px between the weeks and the dots
 
 # (category, label, colour) - the category is the value the heatmap colours by.
 BANDS = (
@@ -84,9 +89,13 @@ def _judge(row: Dict[str, Any], inst, day: date) -> tuple:
 def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
                    max_weeks: int = MAX_WEEKS) -> Dict[str, Any]:
     """
-    ``{'weeks': [monday, ...], 'symbols': [...], 'cells': {(symbol, monday): {...}}}``
+    ``{'weeks': [monday, ...], 'symbols': [...], 'cells': {(symbol, monday): {...}}, 'newest': date,
+    'days': [day, ...], 'day_cells': {(symbol, day): {...}}}``
     from the first stored week (at most ``max_weeks`` back) to the current one.
-    Each cell holds the score, colour category, day counts and a tooltip text.
+    Each cell holds the score, colour category, day counts and a tooltip text;
+    ``newest`` is the latest trading day any of the symbols holds bars for;
+    ``days`` are the last ``RECENT_DAYS`` scheduled trading days that have ended,
+    with a colour category and tooltip per symbol in ``day_cells``.
     """
     today = today or datetime.now(NY_TZ).date()
     this_monday = today - timedelta(days=today.weekday())
@@ -112,8 +121,9 @@ def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
             best[key] = {**r, "status": status, "score": score}
 
     if not best:
-        return {"weeks": [], "symbols": list(symbols), "cells": {}}
+        return {"weeks": [], "symbols": list(symbols), "cells": {}, "newest": None, "days": [], "day_cells": {}}
     first = min(d for _, d in best)
+    newest = max((d for (_, d), r in best.items() if r["score"] > 0), default=None)
     weeks = []
     monday = max(oldest, first - timedelta(days=first.weekday()))
     while monday <= this_monday:
@@ -147,54 +157,110 @@ def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
                 "partial": partial, "empty": empty, "missing": missing,
                 "tip": f"<b>{name}</b><br>Week of {monday:%a %Y-%m-%d}<br>{detail}<br>Status: {label}",
             }
-    return {"weeks": weeks, "symbols": list(symbols), "cells": cells}
+    days = expected_trading_days(today - timedelta(days=3 * RECENT_DAYS), today - timedelta(days=1))[-RECENT_DAYS:]
+    day_cells = {}
+    for symbol in symbols:
+        inst = Config.instrument(symbol)
+        name = f"{symbol} · {inst.name}" if inst else symbol
+        for d in days:
+            stored = best.get((symbol, d))
+            if stored is None:
+                score, detail = 0.0, "not collected"
+            else:
+                score = stored["score"]
+                detail = {"COMPLETE": "complete", "EMPTY": "empty at source"}.get(
+                    stored["status"], f"partial ({score * 100:.0f} %)") + f", {stored['bar_count'] or 0:,} bars"
+            cat = band(score, stored is not None and stored["status"] == "COMPLETE")
+            label = next(lbl for c, lbl, _ in BANDS if c == cat)
+            day_cells[(symbol, d)] = {
+                "category": cat,
+                "tip": f"<b>{name}</b><br>{d:%a %Y-%m-%d}<br>{detail}<br>Status: {label}",
+            }
+    return {"weeks": weeks, "symbols": list(symbols), "cells": cells, "newest": newest,
+            "days": days, "day_cells": day_cells}
 
 
 def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
-    """ECharts heatmap options for ``coverage_weeks`` output."""
-    weeks, symbols = data["weeks"], data["symbols"]
-    points = [
+    """
+    ECharts options for ``coverage_weeks`` output: the weeks as a heatmap, then
+    (when there are any) the recent days as dots in a second grid on the same rows.
+    """
+    weeks, symbols, days = data["weeks"], data["symbols"], data.get("days", [])
+    # About a dozen week labels, counted back from the newest week so it is always labelled.
+    step = max(1, -(-len(weeks) // 13))
+    colours = {c: col for c, _, col in BANDS}
+    week_points = [
         {"value": [x, y, data["cells"][(s, w)]["category"]], "tip": data["cells"][(s, w)]["tip"]}
         for y, s in enumerate(symbols) for x, w in enumerate(weeks)
     ]
+    day_points = [
+        {"value": [x, y], "tip": data["day_cells"][(s, d)]["tip"],
+         "itemStyle": {"color": colours[data["day_cells"][(s, d)]["category"]]}}
+        for y, s in enumerate(symbols) for x, d in enumerate(days)
+    ]
+    # Each day strip label sits under the last day of its week.
+    week_ends = [i for i, d in enumerate(days)
+                 if i == len(days) - 1 or days[i + 1].isocalendar()[1] != d.isocalendar()[1]]
+    strip = DAY_PITCH * len(days)
+
+    def x_axis(labels, grid, interval):
+        return {"type": "category", "data": labels, "gridIndex": grid,
+                "axisLabel": {"color": "#787b86", "fontSize": 9, ":interval": interval},
+                "axisLine": {"show": False}, "axisTick": {"show": False}, "splitArea": {"show": False}}
+
+    def y_axis(grid, labelled):
+        return {"type": "category", "data": list(symbols), "inverse": True, "gridIndex": grid,
+                "axisLabel": {"show": labelled, "color": "#b2b5be", "fontSize": 9},
+                "axisLine": {"show": False}, "axisTick": {"show": False}}
+
+    grids = [{"left": 40, "right": 8 + (strip + DAY_GAP if days else 0), "top": 6, "bottom": 40}]
+    x_axes = [x_axis([f"{w:%m-%d}" for w in weeks], 0, f"(i) => ({len(weeks) - 1} - i) % {step} === 0")]
+    y_axes = [y_axis(0, True)]
+    series: List[Dict[str, Any]] = [{
+        "type": "heatmap", "data": week_points,
+        "itemStyle": {"borderColor": "#161a25", "borderWidth": 1},
+        "emphasis": {"itemStyle": {"borderColor": "#d1d4dc", "borderWidth": 1}},
+    }]
+    if days:
+        grids.append({"right": 8, "width": strip, "top": 6, "bottom": 40})
+        x_axes.append(x_axis([f"{d:%m-%d}" for d in days], 1, f"(i) => {week_ends}.includes(i)"))
+        y_axes.append(y_axis(1, False))
+        series.append({"type": "scatter", "data": day_points, "xAxisIndex": 1, "yAxisIndex": 1,
+                       "symbol": "circle", "symbolSize": 7,
+                       "emphasis": {"itemStyle": {"borderColor": "#d1d4dc", "borderWidth": 1}}})
     return {
         "backgroundColor": "transparent",
         "animation": False,
-        "grid": {"left": 40, "right": 8, "top": 6, "bottom": 40},
+        "grid": grids,
         "tooltip": {"confine": True, "backgroundColor": "#1c212e", "borderColor": "#363a45",
                     "textStyle": {"color": "#d1d4dc", "fontSize": 11},
                     ":formatter": "p => p.data.tip"},
-        "xAxis": {"type": "category", "data": [f"{w:%m-%d}" for w in weeks],
-                  "axisLabel": {"color": "#787b86", "fontSize": 9},
-                  "axisLine": {"show": False}, "axisTick": {"show": False}, "splitArea": {"show": False}},
-        "yAxis": {"type": "category", "data": list(symbols), "inverse": True,
-                  "axisLabel": {"color": "#b2b5be", "fontSize": 9},
-                  "axisLine": {"show": False}, "axisTick": {"show": False}},
+        "xAxis": x_axes,
+        "yAxis": y_axes,
         "visualMap": {
-            "type": "piecewise", "dimension": 2, "orient": "horizontal", "left": "center", "bottom": 0,
-            "itemWidth": 9, "itemHeight": 9, "itemGap": 8, "textGap": 3,
+            "type": "piecewise", "dimension": 2, "seriesIndex": 0, "orient": "horizontal", "left": "center",
+            "bottom": 0, "itemWidth": 9, "itemHeight": 9, "itemGap": 8, "textGap": 3,
             "textStyle": {"color": "#787b86", "fontSize": 9},
             "pieces": [{"value": c, "label": lbl, "color": col} for c, lbl, col in BANDS],
         },
-        "series": [{
-            "type": "heatmap", "data": points,
-            "itemStyle": {"borderColor": "#161a25", "borderWidth": 1},
-            "emphasis": {"itemStyle": {"borderColor": "#d1d4dc", "borderWidth": 1}},
-        }],
+        "series": series,
     }
 
 
 def coverage_map(conn, symbols: Optional[List[str]] = None) -> None:
-    """Draws the map (about 480 x 150 px) where it is called."""
+    """Draws the map (about 630 x 150 px) where it is called."""
     from nicegui import ui
 
     symbols = symbols or Config.collect_symbols()
     data = coverage_weeks(conn, symbols)
     with ui.column().classes("gap-0"):
-        ui.label("Database coverage by week").classes("text-xs uppercase tracking-wide").style(
+        newest = f" · newest day {data['newest']:%a %Y-%m-%d}" if data["newest"] else ""
+        recent = f", then the last {len(data['days'])} days" if data["days"] else ""
+        ui.label(f"Database coverage by week{recent}{newest}").classes("text-xs uppercase tracking-wide").style(
             "color:#787b86")
         if not data["weeks"]:
             ui.label("No bars stored yet.").classes("text-xs").style("color:#787b86")
             return
         height = 46 + 12 * len(symbols)
-        ui.echart(chart_options(data)).style(f"width:480px;height:{height}px")
+        ui.echart(chart_options(data)).style(f"width:{480 + DAY_PITCH * len(data['days']) + DAY_GAP}px;"
+                                             f"height:{height}px")

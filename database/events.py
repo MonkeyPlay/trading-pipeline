@@ -2,7 +2,7 @@
 # database/events.py
 """
 Loads the economic calendar into ``economic_events`` and
-``economic_event_coverage`` (docs/forecast_contract_v2.md, "Events"):
+``economic_event_coverage``:
 
   data/economic_calendar.csv           scheduled releases as the agencies published
                                        them: FOMC decisions and minutes (fed); CPI,
