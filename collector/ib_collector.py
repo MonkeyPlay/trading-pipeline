@@ -910,6 +910,28 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
         conn.close()
 
 
+def update_journal(dsn) -> bool:
+    """
+    Brings the NQ prompt-v2 journal up to date after a collection: a snapshot and
+    outcome for every final session it lacks (forecaster/journal.py). A session
+    whose snapshot cannot be built is logged and retried next run. False only when
+    the update itself failed; the collected bars are stored either way.
+    """
+    try:
+        # Imported here so that a problem in the journal code can never stop a collection.
+        from forecaster.journal import catch_up
+        conn = get_db_connection(dsn)
+        try:
+            catch_up(conn)
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        logger.exception("Journal update failed; the collected bars are stored. "
+                         "Retry with: python scripts/nq_journal.py catch-up")
+        return False
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trading Pipeline IBKR Historical Data Collector")
     parser.add_argument("--db", type=str, default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -930,6 +952,8 @@ if __name__ == "__main__":
     parser.add_argument("--plan-only", action="store_true",
                         help="Report which days would be downloaded, without connecting to IB")
     parser.add_argument("--init-only", action="store_true", help="Only initialise the database and exit")
+    parser.add_argument("--no-journal", action="store_true",
+                        help="Do not bring the NQ prompt-v2 journal up to date after collecting")
 
     args = parser.parse_args()
 
@@ -958,3 +982,13 @@ if __name__ == "__main__":
         instruments=instruments, days_to_download=args.days,
         gap_fill=not args.full, start=args.start, end=args.end, plan_only=args.plan_only,
     )
+
+    # The journal's snapshots also read the context instruments, so it is updated only
+    # after a run over the whole configured set, each future on its front contract.
+    if not (args.plan_only or args.no_journal):
+        if set(Config.collect_symbols()) <= set(symbols) and not any(expiry for _, expiry in instruments):
+            if not update_journal(args.db):
+                sys.exit(1)
+        else:
+            logger.info("Journal not updated: this run did not cover every configured instrument on its front "
+                        "contract. Run a full collection, or: python scripts/nq_journal.py catch-up")

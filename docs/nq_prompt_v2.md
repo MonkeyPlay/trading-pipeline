@@ -12,11 +12,9 @@ The source specifications are the pre-open prompt **P1** and the post-session
 prompt **P2** (prompt version 2.1, definitions NQ-v2, overnight classification
 ON-v1, revised 2026-09-15), in `prompts/source/` (renamed after their titles; the
 manifest keeps the original file names), hashed in `prompts/manifest.json` (a test
-checks the hashes). They were pasted into a chat session and saved as received, so
-they are **not verified byte-for-byte** against the original
-files (`byte_exact_original: false`). Replace them with the originals and update
-the hashes when available. Adapted runtime prompts (stage 3) belong in
-`prompts/runtime/`.
+checks the hashes). Their author confirmed them as the original files on
+2026-10-04 (`byte_exact_original: true`). Adapted runtime prompts (stage 3) belong
+in `prompts/runtime/`.
 
 ## What is built
 
@@ -210,7 +208,20 @@ python scripts/nq_journal.py outcomes --start 2025-09-01 --end 2026-09-25   # la
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25   # snapshot + outcome per session
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25 --profile operational_0927
 python scripts/nq_journal.py show --date 2026-09-24                         # snapshot + P2's 40-field record
+python scripts/nq_journal.py catch-up                                       # every final session not yet stored
 ```
+
+**The collector keeps the journal current.** After every full collection
+(`python -m collector.ib_collector` over all configured instruments, each future on
+its front contract - so `run_pipeline.sh` too) it runs `catch-up`
+([forecaster/journal.py](../forecaster/journal.py)): a research-profile snapshot and
+outcome for every session since the journal's first that is final (two hours past
+its close) and has no snapshot yet, outcomes for stored snapshots still without
+one, and a re-check of the sessions the collector re-downloads (a vendor revision
+becomes a new outcome revision). A stored snapshot is never rebuilt. A session
+whose snapshot cannot be built is logged and retried next run. `--no-journal`
+skips the step; a `--symbol` subset or a pinned contract skips it too, since
+snapshots also read the context instruments.
 
 Migration 0009 (the `journal` schema) is applied by the first process that
 starts after it is pulled - the dashboard and the collector migrate on start.
@@ -299,6 +310,8 @@ classifications join the review with stage 2.
 
 ## Not built yet
 
+- The operational profile (09:27) is registered but not caught up automatically;
+  run `backfill --profile operational_0927` when live runs need it.
 - Live capture with receipt provenance, the 09:29:50 deadline and the
   inference-attempt log (needs a real-time feed again; stage 3).
 - Your verdicts on `stage1_review_v1` (the set and the page are ready).

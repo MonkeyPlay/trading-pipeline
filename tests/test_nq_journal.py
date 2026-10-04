@@ -312,6 +312,30 @@ def test_review_set_cli_and_append_only_verdicts(market, capsys):
 
 
 @needs_db
+def test_catch_up_takes_every_final_session_once(market):
+    from database import journal_store as store
+    from forecaster.journal import catch_up
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    stored = lambda: {str(s["session_date"]): s for s in store.list_snapshots(conn, "2000-01-01", DAY, version)}
+    had = stored()
+    first = min(had)
+    final = cal.ny_instant(date.fromisoformat(DAY), time(18, 0))      # two hours after DAY's close
+
+    catch_up(conn, now=final - timedelta(minutes=1))                     # DAY is not final yet
+    earlier = {s.session_date.isoformat() for s in cal.sessions_between(first, PREV)}
+    assert set(stored()) == set(had) | earlier
+
+    result = catch_up(conn, now=final)
+    snaps = stored()
+    assert set(snaps) == earlier | {DAY} and result["failed"] == []
+    assert result["snapshots"] == (0 if DAY in had else 1)
+    assert all(store.latest_outcome(conn, s["snapshot_id"], defs.LABEL_VERSION) for s in snaps.values())
+    assert all(snaps[d]["snapshot_id"] == s["snapshot_id"] for d, s in had.items())   # stored ones stay frozen
+    assert catch_up(conn, now=final)["snapshots"] == 0                  # nothing taken twice
+
+
+@needs_db
 def test_a_roll_day_takes_every_reference_from_the_new_contract(market):
     """Last in the module: it adds a December contract and rolls DAY onto it, then restores the roll."""
     conn, bars, sessions = market

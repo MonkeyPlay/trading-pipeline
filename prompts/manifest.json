@@ -12,8 +12,8 @@
       "revised": "2026-09-15",
       "sha256": "64ab7f2eb0f01f7b2ffa6e36efcd2d2f8c4471ffa4a6d8edfdedd9c04189f08c",
       "bytes": 25333,
-      "provenance": "Pasted into a Claude Code session on 2026-10-03 and saved as received. Not verified byte-for-byte against the original file: chat paste may have altered whitespace or formatting. Replace with the original file (and update this hash) when available. Renamed from its original filename on 2026-10-03; contents unchanged.",
-      "byte_exact_original": false
+      "provenance": "Confirmed by the prompts' author on 2026-10-04 as the original file. Saved on 2026-10-03 and renamed after its title; contents unchanged since.",
+      "byte_exact_original": true
     },
     {
       "id": "P2",
@@ -26,8 +26,8 @@
       "revised": "2026-09-15",
       "sha256": "28403a4fea99c413e53eaa51e00eb6309dcf39bd97bb528bf70a450fe55e4bf4",
       "bytes": 23008,
-      "provenance": "Pasted into a Claude Code session on 2026-10-03 and saved as received. Not verified byte-for-byte against the original file: chat paste may have altered whitespace or formatting. Replace with the original file (and update this hash) when available. Renamed from its original filename on 2026-10-03; contents unchanged.",
-      "byte_exact_original": false
+      "provenance": "Confirmed by the prompts' author on 2026-10-04 as the original file. Saved on 2026-10-03 and renamed after its title; contents unchanged since.",
+      "byte_exact_original": true
     }
   ]
 }

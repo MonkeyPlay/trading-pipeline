@@ -8,6 +8,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py snapshot --start 2026-06-01 --end 2026-09-25
     python scripts/nq_journal.py outcomes --start 2026-06-01 --end 2026-09-25
     python scripts/nq_journal.py backfill --start 2026-06-01 --end 2026-09-25  # snapshot + outcome, in order
+    python scripts/nq_journal.py catch-up                                   # every final session not yet stored
     python scripts/nq_journal.py show --date 2026-09-24                     # snapshot + P2's 40-field record
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
@@ -18,14 +19,14 @@ reconstructions. Outcomes are recorded only once a session is final (two hours
 after its scheduled close) and become a new revision only when they change.
 
 Every command registers the label, convention and snapshot definitions first; a
-changed definition under an existing version name stops the run.
+changed definition under an existing version name stops the run. The IB collector
+runs ``catch-up`` itself after every full collection (forecaster/journal.py).
 """
 
 import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -36,48 +37,19 @@ from contracts import nq_prompt_v2 as defs
 from database import journal_store as store
 from database.connection import get_db_connection, init_database
 from features import calendar as cal
-from features.nq_evidence import SnapshotError, build_snapshot
-from forecaster import labels_prompt_v2 as labels
+from features.nq_evidence import SnapshotError
 from forecaster import review_set
+from forecaster.journal import catch_up, record_outcome, register, take_snapshot
 from forecaster.outcome_display import p2_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("nq_journal")
 
 
-def register(conn):
-    for rec in defs.all_records():
-        store.register_version(conn, rec)
-
-
 def _sessions(args):
     if args.date:
         return [cal.session(args.date)]
     return cal.sessions_between(args.start, args.end)
-
-
-def take_snapshot(conn, day, profile):
-    snap = build_snapshot(conn, day, profile)
-    snapshot_id, created = store.save_snapshot(conn, snap)
-    th, refs = snap.payload["thresholds"], snap.payload["references"]
-    not_valid = [k for k, v in refs.items() if v["status"] != "valid"]
-    logger.info(f"{day} [{profile}]: snapshot {snapshot_id[:8]} ({'new' if created else 'already stored'}) "
-                f"on {snap.payload['identity']['local_symbol'] or snap.contract_id}, T={th['T']} B={th['B']}; "
-                f"unavailable references: {', '.join(not_valid) or 'none'}")
-    return snapshot_id
-
-
-def record_outcome(conn, snapshot, now=None):
-    """Labels one stored snapshot once its session is final. Returns the revision, or None if not final."""
-    if not labels.session_finalised(snapshot["session_date"], now or datetime.now(timezone.utc)):
-        return None
-    out = labels.compute_outcome(snapshot, labels.load_realised_bars(conn, snapshot))
-    revision, created = store.save_outcome(conn, snapshot["snapshot_id"], defs.LABEL_VERSION, out)
-    summary = ", ".join(f"{t}={v['label'] or v['reason'].upper()}" for t, v in out["labels"].items())
-    if created and revision > 1:
-        logger.warning(f"{snapshot['session_date']}: outcome revised to revision {revision}.")
-    logger.info(f"{snapshot['session_date']}: outcome r{revision} {summary}")
-    return revision
 
 
 # --------------------------------------------------------------------------
@@ -115,6 +87,11 @@ def cmd_backfill(conn, args):
             continue
         record_outcome(conn, store.get_snapshot(conn, snapshot_id))
     return status
+
+
+def cmd_catch_up(conn, args):
+    """Every final session since the journal's first that has no snapshot yet, then outcomes (catch_up)."""
+    return 1 if catch_up(conn, args.profile)["failed"] else 0
 
 
 def cmd_show(conn, args):
@@ -217,6 +194,8 @@ def main(argv=None):
     common(sub.add_parser("snapshot", help="Build and store evidence snapshot(s)"))
     common(sub.add_parser("outcomes", help="Label the stored snapshots of final sessions"), single=False)
     common(sub.add_parser("backfill", help="Snapshot + outcome, session by session"))
+    common(sub.add_parser("catch-up", help="Snapshot + outcome for every final session not yet stored"),
+           single=False, ranged=False)
     common(sub.add_parser("show", help="Print one session's snapshot and latest outcome"), ranged=False)
     p = sub.add_parser("review-set", help="Choose and store a review set of diverse sessions")
     p.add_argument("--name", required=True, help="Review set name (immutable once stored)")
@@ -238,7 +217,7 @@ def main(argv=None):
     try:
         register(conn)
         handler = {"register": lambda c, a: 0, "snapshot": cmd_snapshot, "outcomes": cmd_outcomes,
-                   "backfill": cmd_backfill, "show": cmd_show, "review-set": cmd_review_set,
+                   "backfill": cmd_backfill, "catch-up": cmd_catch_up, "show": cmd_show, "review-set": cmd_review_set,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

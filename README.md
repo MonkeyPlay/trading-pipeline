@@ -155,7 +155,10 @@ python -m collector.ib_collector --start 2026-08-01 --end 2026-08-31
 python -m collector.ib_collector --days 30 --full                 # re-download everything
 ```
 
-With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`.
+With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`, then brings
+the NQ prompt-v2 journal up to date: a snapshot and outcome for every final session it
+does not hold yet ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal`
+skips that; a `--symbol` subset or a pinned `--expiry` skips it too.
 
 **Futures follow their front contract.** Each future has a roll rule in `config.py`
 (equity indices: the quarterly contract, rolling 8 days before expiry). The collector asks
