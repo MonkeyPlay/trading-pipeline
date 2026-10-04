@@ -1,6 +1,6 @@
 # matching/structural.py
 """
-Structural analogue selection (guideline stage 2B / 2C, matcher nq_match_p1_v1 in
+Structural analogue selection (guideline stage 2B / 2C, matcher nq_match_p1_v2 in
 contracts/nq_preopen.py): P1 section 7's rubric over the pre-open structure
 annotations, then the selected sessions' realised outcomes.
 
@@ -10,7 +10,12 @@ annotations, then the selected sessions' realised outcomes.
   rank(target, pool)          every pool session scored against the target with
                               P1's weights, the 75% comparable-weight floor, and
                               the five best by similarity, comparable weight,
-                              recency and snapshot id - outcomes play no part
+                              recency and snapshot id - outcomes play no part; a
+                              session with more than one record is left out
+  prior_manifest(...)         the earlier sessions (once each) and outcome revisions
+                              the prior is built from - every snapshot of the profile,
+                              annotated or not - each excluded one counted under its
+                              reason, and their digest
   outcome_summary(...)        after selection: per P1 target the analogues' raw
                               class counts and frequencies, the denominator, the
                               smoothed baseline and the prior it shrinks towards
@@ -27,7 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
@@ -51,6 +56,14 @@ class Record:
     protocol_version: str
     integrity_status: str
     features: Dict[str, Any] = field(hash=False)
+
+
+@dataclass(frozen=True)
+class SessionRef:
+    """One session of the prior pool: a snapshot of the profile, whether or not it has a structure annotation."""
+    snapshot_id: str
+    session_date: str
+    symbol: str
 
 
 def features(annotation: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,7 +108,7 @@ def rank(target: Record, pool: Sequence[Record]) -> Dict[str, Any]:
     scored; every other candidate is counted under its exclusion reason.
     """
     excluded: Counter = Counter()
-    scored = []
+    eligible = []
     for other in pool:
         if other.snapshot_id == target.snapshot_id or other.session_date >= target.session_date:
             excluded["not_earlier"] += 1
@@ -106,7 +119,11 @@ def rank(target: Record, pool: Sequence[Record]) -> Dict[str, Any]:
         elif other.integrity_status != "ok":
             excluded["contaminated"] += 1
         else:
-            scored.append(other)
+            eligible.append(other)
+    sessions = Counter((r.symbol, r.session_date) for r in eligible)
+    scored = [r for r in eligible if sessions[(r.symbol, r.session_date)] == 1]
+    if len(scored) < len(eligible):
+        excluded["duplicate_session"] += len(eligible) - len(scored)
     pool_hash = hashlib.sha256("\n".join(sorted(f"{r.snapshot_id}:{r.annotation_id}" for r in scored))
                                .encode()).hexdigest()
     candidates = []
@@ -123,6 +140,43 @@ def rank(target: Record, pool: Sequence[Record]) -> Dict[str, Any]:
                 for i, (sim, comp, other, components) in enumerate(candidates[:pre.TOP_ANALOGUES], 1)]
     return {"selected": selected, "excluded": dict(sorted(excluded.items())), "pool_size": len(scored),
             "pool_hash": pool_hash}
+
+
+def prior_manifest(target: Record, sessions: Sequence[Any],
+                   known: Callable[[str], Optional[Dict[str, Any]]]) -> Dict[str, Any]:
+    """
+    The prior's sessions (nq_match_p1_v2, guideline revision 2 2C). ``sessions`` are every snapshot of the profile
+    (anything with ``snapshot_id``, ``session_date`` and ``symbol``) - eligibility does not depend on a structure
+    annotation existing; ``known(snapshot_id)`` is the outcome revision usable for this target ({'labels',
+    'outcome_revision'}) or None. An earlier session of the target's symbol, held once, with a known outcome is in;
+    every other session is counted under its reason - other_symbol, not_earlier (the target and later),
+    duplicate_session, no_outcome_known. Per-target labels stay with the caller: a null label shrinks that target's
+    prior only. Returns ``{'labels': [...], 'manifest': [[snapshot_id, session_date, revision], ...] in session
+    order, 'excluded': {reason: n}, 'digest'}``.
+    """
+    excluded: Counter = Counter()
+    earlier = []
+    for s in sessions:
+        if s.symbol != target.symbol:
+            excluded["other_symbol"] += 1
+        elif s.session_date >= target.session_date:
+            excluded["not_earlier"] += 1
+        else:
+            earlier.append(s)
+    dates = Counter(s.session_date for s in earlier)
+    used = []
+    for s in sorted(earlier, key=lambda s: (s.session_date, s.snapshot_id)):
+        outcome = known(s.snapshot_id) if dates[s.session_date] == 1 else None
+        if dates[s.session_date] > 1:
+            excluded["duplicate_session"] += 1
+        elif outcome is None:
+            excluded["no_outcome_known"] += 1
+        else:
+            used.append((s, outcome))
+    manifest = [[s.snapshot_id, s.session_date, int(o["outcome_revision"])] for s, o in used]
+    return {"labels": [o["labels"] for _, o in used], "manifest": manifest,
+            "excluded": dict(sorted(excluded.items())),
+            "digest": hashlib.sha256(defs.canonical_json(manifest).encode()).hexdigest()}
 
 
 def _neg_date(d: str) -> int:
@@ -156,6 +210,7 @@ def outcome_summary(selected: Sequence[Dict[str, Any]], outcomes: Dict[str, Opti
         counts = {c: labels.count(c) for c in vocab}
         prior_labels = [p[target]["label"] for p in prior if p.get(target, {}).get("label") is not None]
         P = len(prior_labels)
+        prior_without = len(prior) - P
         prior_p = {c: Fraction(prior_labels.count(c), P) for c in vocab} if P else None
         raw = {c: Fraction(counts[c], n) for c in vocab} if n else None
         smoothed = {c: (counts[c] + k * prior_p[c]) / (n + k) for c in vocab} if prior_p else None
@@ -163,7 +218,8 @@ def outcome_summary(selected: Sequence[Dict[str, Any]], outcomes: Dict[str, Opti
         out["targets"][target] = {
             "status": status, "eligible": n, "without_label": len(selected) - n, "counts": counts,
             "raw": None if raw is None else {c: show(v) for c, v in raw.items()},
-            "prior_sessions": P, "prior": None if prior_p is None else {c: show(v) for c, v in prior_p.items()},
+            "prior_sessions": P, "prior_without_label": prior_without,
+            "prior": None if prior_p is None else {c: show(v) for c, v in prior_p.items()},
             "smoothed": None if smoothed is None else {c: show(v) for c, v in smoothed.items()},
         }
     return out

@@ -1,5 +1,5 @@
 # tests/test_matching.py
-"""Structural analogue selection (matching/structural.py, matcher nq_match_p1_v1): P1 section 7."""
+"""Structural analogue selection (matching/structural.py, matcher nq_match_p1_v2): P1 section 7."""
 
 from fractions import Fraction
 
@@ -49,17 +49,58 @@ def test_ranking_rules_and_exclusions():
         rec("2026-06-05"), rec("2026-06-08"),                              # both 100 at full coverage: recent first
         rec("2026-06-09", **{"Event Risk": None}),                         # 100 but 90% coverage: after them
         rec("2026-06-10", **{"Overnight Structure": "Range"}),             # 87.5
-        rec("2026-06-11", sid="b", **{"Chop Score": 0}), rec("2026-06-11", sid="a", **{"Chop Score": 0}),
+        rec("2026-06-11", **{"Chop Score": 0}),                            # chop 2/3 x 5: 96.67
     ]
     out = ms.rank(t, pool)
     assert out["excluded"] == {"contaminated": 1, "incompatible_version": 1, "low_coverage": 1, "not_earlier": 2,
                                "other_symbol": 1}
-    assert out["pool_size"] == 7
-    picked = [(m["record"].session_date, m["record"].snapshot_id) for m in out["selected"]]
-    assert picked == [("2026-06-08", "s-2026-06-08"), ("2026-06-05", "s-2026-06-05"), ("2026-06-09", "s-2026-06-09"),
-                      ("2026-06-11", "a"), ("2026-06-11", "b")]                 # chop 2/3 x 5: 96.67, id tie-break
+    assert out["pool_size"] == 6
+    picked = [m["record"].session_date for m in out["selected"]]
+    assert picked == ["2026-06-08", "2026-06-05", "2026-06-09", "2026-06-11", "2026-06-10"]
     assert ms.rank(t, list(reversed(pool))) == out                              # deterministic
     assert ms.rank(rec("2026-01-01"), pool)["selected"] == []                    # nothing earlier: no analogues
+
+
+def test_a_session_counts_once():
+    # nq_match_p1_v2: two records of one session (two snapshots, or two annotations) would be two votes for one
+    # day; the session is left out entirely rather than letting either record stand for it
+    t = rec("2026-06-12")
+    pool = [rec("2026-06-10"), rec("2026-06-11", sid="a"), rec("2026-06-11", sid="b"),
+            rec("2026-06-11", sid="c", protocol="llm")]                          # another protocol: not eligible
+    out = ms.rank(t, pool)
+    assert [m["record"].session_date for m in out["selected"]] == ["2026-06-10"]
+    assert out["excluded"] == {"duplicate_session": 2, "incompatible_version": 1} and out["pool_size"] == 1
+    assert out["pool_hash"] == ms.rank(t, [rec("2026-06-10")])["pool_hash"]
+
+
+def test_the_prior_manifest_names_every_session_and_revision_it_uses():
+    t = rec("2026-06-12")
+    sessions = [ms.SessionRef("s-2026-06-09", "2026-06-09", "NQ"), ms.SessionRef("s-2026-06-10", "2026-06-10", "NQ"),
+                ms.SessionRef("x", "2026-06-11", "NQ"), ms.SessionRef("y", "2026-06-11", "NQ"),
+                ms.SessionRef("s-2026-06-12", "2026-06-12", "NQ"), ms.SessionRef("s-2026-06-05", "2026-06-05", "ES"),
+                ms.SessionRef("s-2026-06-08", "2026-06-08", "NQ")]          # never annotated: still in the prior
+    out = lambda label, rev=1: {"labels": {"direction_15m": {"label": label}}, "outcome_revision": rev}
+    outcomes = {"s-2026-06-09": out("bullish"), "s-2026-06-10": None, "x": out("bearish"), "y": out("bearish"),
+                "s-2026-06-12": out("bullish"), "s-2026-06-05": out("bullish"), "s-2026-06-08": out(None)}
+    prior = ms.prior_manifest(t, sessions, outcomes.get)
+    assert prior["manifest"] == [["s-2026-06-08", "2026-06-08", 1], ["s-2026-06-09", "2026-06-09", 1]]
+    assert prior["excluded"] == {"duplicate_session": 2, "no_outcome_known": 1, "not_earlier": 1, "other_symbol": 1}
+    summary = ms.outcome_summary([], {}, prior["labels"])["targets"]["direction_15m"]
+    assert (summary["prior_sessions"], summary["prior_without_label"]) == (1, 1)    # a null label: this target only
+    revised = ms.prior_manifest(t, sessions, {**outcomes, "s-2026-06-09": out("bearish", 2)}.get)
+    assert revised["digest"] != prior["digest"]             # a revised prior session is a new set, analogue or not
+    assert ms.prior_manifest(t, list(reversed(sessions)), outcomes.get) == prior
+
+
+def test_a_live_target_knows_only_the_outcomes_computed_by_its_cutoff():
+    from datetime import datetime, timezone
+    from forecaster.journal import _known_as_of
+    at = lambda h: datetime(2026, 6, 12, h, tzinfo=timezone.utc)
+    history = {"a": [{"outcome_revision": 1, "computed_at": at(1)}, {"outcome_revision": 2, "computed_at": at(15)}]}
+    live = _known_as_of(history, {"data_mode": "live_capture", "cutoff_at": at(13)})
+    rebuilt = _known_as_of(history, {"data_mode": "historical_reconstruction", "cutoff_at": at(13)})
+    assert live("a")["outcome_revision"] == 1 and rebuilt("a")["outcome_revision"] == 2
+    assert live("b") is None
 
 
 def test_outcomes_attach_after_selection_with_smoothing():

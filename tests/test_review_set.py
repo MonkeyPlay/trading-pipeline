@@ -1,5 +1,5 @@
 # tests/test_review_set.py
-"""Choosing the stage-1 review set (forecaster/review_set.py) and the review page's chart levels."""
+"""Choosing the stage-1 review set (forecaster/review_set.py)."""
 
 from forecaster.review_set import select_sessions, session_items
 
@@ -41,14 +41,3 @@ def test_size_and_reasons():
     assert "first_move_5m=down_first" in chosen[0]["reasons"]
     assert all(set(c["reasons"]) for c in chosen)                        # each pick covered something new
     assert coverage["covered"] < coverage["items"]                       # two sessions cannot cover every quarter
-
-
-def test_review_chart_levels():
-    from dashboard.views.review import chart_levels
-    snap = {"payload": {"references": {"prev_rth_close": {"value": "100.25"}, "on_high": {"value": "110"},
-                                       "on_low": {"value": None}, "prev_rth_high": {"value": "120"},
-                                       "prev_rth_low": {"value": "90"}}}}
-    levels, extra = chart_levels(snap, {"O": "105", "T": "6", "vwap": "103.5"})
-    assert levels == {"previous_rth_close": 100.25, "overnight_high": 110.0, "overnight_low": None}
-    assert {e["key"]: e["value"] for e in extra} == {"prev_rth_high": 120.0, "prev_rth_low": 90.0, "vwap": 103.5,
-                                                     "o_plus_t": 111.0, "o_minus_t": 99.0}

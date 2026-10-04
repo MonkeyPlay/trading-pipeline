@@ -1,7 +1,7 @@
 # dashboard/views/analogues.py
 """
 Analogues (guideline stage 2D): a session's structural analogues - matcher
-nq_match_p1_v1 over the pre-open structure annotations (matching/structural.py) -
+nq_match_p1_v2 over the pre-open structure annotations (matching/structural.py) -
 side by side with it: every rubric feature of the session and of its up to five
 earlier analogues, each cell marked as a match, a mismatch or not comparable, with
 the similarity and the comparable weight of each analogue.
@@ -92,7 +92,8 @@ class AnaloguesPage:
             return
         self.day, self.chart_day = day, day
         snap = self.snaps[day]
-        self.aset = store.latest_analogue_set(self.conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION)
+        self.aset = store.latest_analogue_set(self.conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                              pre.RULES_PROTOCOL_VERSION)
         self.render()
 
     def toggle_outcomes(self, event) -> None:

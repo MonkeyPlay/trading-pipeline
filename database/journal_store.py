@@ -103,6 +103,8 @@ def _snapshot_dict(row) -> Dict[str, Any]:
 
 
 def get_snapshot(conn: Database, snapshot_id: str) -> Optional[Dict[str, Any]]:
+    if not _is_uuid(snapshot_id):
+        return None
     row = conn.execute("SELECT * FROM journal.snapshots WHERE snapshot_id = %s;", (snapshot_id,)).fetchone()
     return _snapshot_dict(row) if row else None
 
@@ -252,10 +254,7 @@ def save_annotation(conn: Database, snapshot_id: str, annotation: Dict[str, Any]
     return annotation_id, True
 
 
-def latest_annotation(conn: Database, snapshot_id: str, protocol_version: str) -> Optional[Dict[str, Any]]:
-    row = conn.execute(
-        "SELECT * FROM journal.structure_annotations WHERE snapshot_id = %s AND protocol_version = %s "
-        "ORDER BY created_at DESC LIMIT 1;", (snapshot_id, protocol_version)).fetchone()
+def _annotation(row) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     d = dict(zip(row.keys(), row))
@@ -263,6 +262,28 @@ def latest_annotation(conn: Database, snapshot_id: str, protocol_version: str) -
         d[key] = _load(d[key])
     d["annotation_id"], d["snapshot_id"] = str(d["annotation_id"]), str(d["snapshot_id"])
     return d
+
+
+def latest_annotation(conn: Database, snapshot_id: str, protocol_version: str) -> Optional[Dict[str, Any]]:
+    return _annotation(conn.execute(
+        "SELECT * FROM journal.structure_annotations WHERE snapshot_id = %s AND protocol_version = %s "
+        "ORDER BY created_at DESC LIMIT 1;", (snapshot_id, protocol_version)).fetchone())
+
+
+def _is_uuid(value) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except ValueError:
+        return False
+
+
+def get_annotation(conn: Database, annotation_id: str) -> Optional[Dict[str, Any]]:
+    """One structure annotation by its id (None for an unknown or malformed id)."""
+    if not _is_uuid(annotation_id):
+        return None
+    return _annotation(conn.execute("SELECT * FROM journal.structure_annotations WHERE annotation_id = %s;",
+                                    (str(annotation_id),)).fetchone())
 
 
 def first_session(conn: Database, symbol: str = "NQ") -> Optional[str]:
@@ -279,27 +300,28 @@ def save_analogue_set(conn: Database, rec: Dict[str, Any], members: List[Dict[st
     """
     Stores one analogue set and its members. ``rec`` has the journal.analogue_sets
     columns but ``set_id``; ``members`` the journal.analogue_members columns but
-    ``set_id``. Idempotent: the same target annotation, matcher, label version, pool
-    and outcome revisions return the stored set.
+    ``set_id``. Idempotent: the same target annotation, matcher, label version, pool,
+    analogue outcome revisions and prior manifest (migration 0013) return the stored set.
     """
     key = (rec["target_annotation_id"], rec["matcher_version"], rec["label_version"], rec["pool_hash"],
-           rec["outcome_digest"])
+           rec["outcome_digest"], rec.get("prior_digest"))
     with conn:
         _lock(conn, "journal.analogue_sets", *key)
         row = conn.execute(
             "SELECT set_id FROM journal.analogue_sets WHERE target_annotation_id = %s AND matcher_version = %s "
-            "AND label_version = %s AND pool_hash = %s AND outcome_digest = %s;", key).fetchone()
+            "AND label_version = %s AND pool_hash = %s AND outcome_digest = %s "
+            "AND prior_digest IS NOT DISTINCT FROM %s;", key).fetchone()
         if row is not None:
             return str(row[0]), False
         set_id = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO journal.analogue_sets (set_id, target_snapshot_id, target_annotation_id, matcher_version, "
-            "label_version, data_mode, pool_size, pool_hash, excluded, outcome_digest, mean_similarity, "
-            "outcome_summary) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            "label_version, data_mode, pool_size, pool_hash, excluded, outcome_digest, prior_digest, "
+            "mean_similarity, outcome_summary) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
             (set_id, rec["target_snapshot_id"], rec["target_annotation_id"], rec["matcher_version"],
              rec["label_version"], rec["data_mode"], rec["pool_size"], rec["pool_hash"],
-             canonical_json(rec["excluded"]), rec["outcome_digest"], rec["mean_similarity"],
-             canonical_json(rec["outcome_summary"])))
+             canonical_json(rec["excluded"]), rec["outcome_digest"], rec.get("prior_digest"),
+             rec["mean_similarity"], canonical_json(rec["outcome_summary"])))
         conn.executemany(
             "INSERT INTO journal.analogue_members (set_id, rank, snapshot_id, annotation_id, session_date, similarity, "
             "comparable_weight, components, outcome_revision, outcome_computed_at) "
@@ -310,15 +332,7 @@ def save_analogue_set(conn: Database, rec: Dict[str, Any], members: List[Dict[st
     return set_id, True
 
 
-def latest_analogue_set(conn: Database, target_snapshot_id: str, matcher_version: str,
-                        label_version: str) -> Optional[Dict[str, Any]]:
-    """The newest analogue set of a target, with ``members`` in rank order."""
-    row = conn.execute(
-        "SELECT * FROM journal.analogue_sets WHERE target_snapshot_id = %s AND matcher_version = %s "
-        "AND label_version = %s ORDER BY created_at DESC LIMIT 1;",
-        (target_snapshot_id, matcher_version, label_version)).fetchone()
-    if row is None:
-        return None
+def _analogue_set(conn: Database, row) -> Dict[str, Any]:
     d = dict(zip(row.keys(), row))
     d["excluded"], d["outcome_summary"] = _load(d["excluded"]), _load(d["outcome_summary"])
     for k in ("set_id", "target_snapshot_id", "target_annotation_id"):
@@ -330,23 +344,102 @@ def latest_analogue_set(conn: Database, target_snapshot_id: str, matcher_version
     return d
 
 
+def get_analogue_set(conn: Database, set_id: str) -> Optional[Dict[str, Any]]:
+    """One analogue set by its id - the exact lookup a forecast run uses - with its target annotation's
+    ``protocol_version`` and ``members`` in rank order; None when there is no such set."""
+    if not _is_uuid(set_id):
+        return None
+    row = conn.execute(
+        "SELECT s.*, a.protocol_version FROM journal.analogue_sets s JOIN journal.structure_annotations a "
+        "ON a.annotation_id = s.target_annotation_id WHERE s.set_id = %s;", (str(set_id),)).fetchone()
+    return None if row is None else _analogue_set(conn, row)
+
+
+def latest_analogue_set(conn: Database, target_snapshot_id: str, matcher_version: str, label_version: str,
+                        protocol_version: str) -> Optional[Dict[str, Any]]:
+    """The newest analogue set of a target whose annotation is under ``protocol_version`` (a rules set and a Claude
+    set of one snapshot are different sets), with ``members`` in rank order."""
+    row = conn.execute(
+        "SELECT s.*, a.protocol_version FROM journal.analogue_sets s JOIN journal.structure_annotations a "
+        "ON a.annotation_id = s.target_annotation_id WHERE s.target_snapshot_id = %s AND s.matcher_version = %s "
+        "AND s.label_version = %s AND a.protocol_version = %s ORDER BY s.created_at DESC LIMIT 1;",
+        (target_snapshot_id, matcher_version, label_version, protocol_version)).fetchone()
+    return None if row is None else _analogue_set(conn, row)
+
+
 # --------------------------------------------------------------------------
 # LLM annotation attempts (migration 0012)
 # --------------------------------------------------------------------------
 
 def save_annotation_attempt(conn: Database, rec: Dict[str, Any]) -> str:
-    """Appends one LLM annotation attempt (journal.annotation_attempts columns but ``attempt_id``)."""
+    """Appends one LLM annotation attempt (journal.annotation_attempts columns but ``attempt_id``); ``request_id``
+    names the ledger request it answers (migration 0013), at most one attempt per request."""
     attempt_id = str(uuid.uuid4())
     with conn:
         conn.execute(
             "INSERT INTO journal.annotation_attempts (attempt_id, snapshot_id, protocol_version, model, request_hash, "
-            "status, error, response, usage, annotation_id, started_at, finished_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            "status, error, response, usage, annotation_id, started_at, finished_at, request_id, raw_text) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
             (attempt_id, rec["snapshot_id"], rec["protocol_version"], rec["model"], rec["request_hash"],
              rec["status"], rec.get("error"), None if rec.get("response") is None else canonical_json(rec["response"]),
              None if rec.get("usage") is None else canonical_json(rec["usage"]), rec.get("annotation_id"),
-             rec["started_at"], rec["finished_at"]))
+             rec["started_at"], rec["finished_at"], rec.get("request_id"), rec.get("raw_text")))
     return attempt_id
+
+
+# --------------------------------------------------------------------------
+# Inference request ledger (migration 0013)
+# --------------------------------------------------------------------------
+
+def save_inference_request(conn: Database, rec: Dict[str, Any]) -> str:
+    """Records one LLM request before it is sent - the exact canonical request (``request``) with its hashes, the
+    code revision and ``mode`` (live | batch); returns its id, which a batch uses as the custom_id."""
+    request_id = str(uuid.uuid4())
+    with conn:
+        conn.execute(
+            "INSERT INTO journal.inference_requests (request_id, snapshot_id, protocol_version, model, request, "
+            "request_hash, prompt_sha256, schema_sha256, evidence_sha256, code_revision, mode) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            (request_id, rec["snapshot_id"], rec["protocol_version"], rec["model"], canonical_json(rec["request"]),
+             rec["request_hash"], rec["prompt_sha256"], rec["schema_sha256"], rec["evidence_sha256"],
+             rec["code_revision"], rec["mode"]))
+    return request_id
+
+
+def save_inference_batch(conn: Database, batch_id: str, request_ids: List[str], submitted_at) -> None:
+    """Records a submitted batch and its requests, as soon as the batch id is known."""
+    with conn:
+        conn.execute("INSERT INTO journal.inference_batches (batch_id, submitted_at, request_count) "
+                     "VALUES (%s, %s, %s);", (batch_id, submitted_at, len(request_ids)))
+        conn.executemany("INSERT INTO journal.inference_batch_requests (batch_id, request_id) VALUES (%s, %s);",
+                         [(batch_id, r) for r in request_ids])
+
+
+def _request_rows(rows) -> List[Dict[str, Any]]:
+    return [dict(zip(r.keys(), r), request_id=str(r["request_id"]), snapshot_id=str(r["snapshot_id"]),
+                 request=_load(r["request"])) for r in rows]
+
+
+def inference_batch_requests(conn: Database, batch_id: str) -> List[Dict[str, Any]]:
+    """The requests of one recorded batch, as sent, each with ``answered`` (an attempt exists) and its batch's
+    ``submitted_at``."""
+    return _request_rows(conn.execute(
+        "SELECT r.*, b.submitted_at, EXISTS (SELECT 1 FROM journal.annotation_attempts t "
+        "WHERE t.request_id = r.request_id) AS answered FROM journal.inference_batch_requests m "
+        "JOIN journal.inference_requests r ON r.request_id = m.request_id JOIN journal.inference_batches b "
+        "ON b.batch_id = m.batch_id WHERE m.batch_id = %s ORDER BY r.created_at;", (batch_id,)).fetchall())
+
+
+def unresolved_inference_requests(conn: Database, protocol_version: str) -> List[Dict[str, Any]]:
+    """Requests of the protocol without an attempt - in flight, in an unfinished batch, or lost when a run ended
+    mid-request - with their ``batch_id`` (None: a live request, or a batch whose id was never recorded) and
+    session date, oldest first."""
+    return _request_rows(conn.execute(
+        "SELECT r.*, m.batch_id, s.session_date FROM journal.inference_requests r "
+        "JOIN journal.snapshots s ON s.snapshot_id = r.snapshot_id "
+        "LEFT JOIN journal.inference_batch_requests m ON m.request_id = r.request_id "
+        "WHERE r.protocol_version = %s AND NOT EXISTS (SELECT 1 FROM journal.annotation_attempts t "
+        "WHERE t.request_id = r.request_id) ORDER BY r.created_at;", (protocol_version,)).fetchall())
 
 
 # --------------------------------------------------------------------------
@@ -405,6 +498,18 @@ def latest_annotation_verdicts(conn: Database, name: str) -> List[Dict[str, Any]
             for r in rows]
 
 
+def outcome_history(conn: Database, label_version: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Every outcome revision under a label version, per snapshot id, oldest revision first (each with
+    ``labels``, ``outcome_revision`` and ``computed_at``)."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for row in conn.execute("SELECT * FROM journal.outcomes WHERE label_version = %s "
+                            "ORDER BY snapshot_id, outcome_revision;", (label_version,)).fetchall():
+        d = dict(zip(row.keys(), row))
+        d["labels"], d["measurements"] = _load(d["labels"]), _load(d["measurements"])
+        out.setdefault(str(d["snapshot_id"]), []).append(d)
+    return out
+
+
 def get_outcome(conn: Database, snapshot_id: str, label_version: str, revision: int) -> Optional[Dict[str, Any]]:
     """One outcome revision (an analogue set records the revision it used)."""
     row = conn.execute("SELECT * FROM journal.outcomes WHERE snapshot_id = %s AND label_version = %s "
@@ -414,3 +519,109 @@ def get_outcome(conn: Database, snapshot_id: str, label_version: str, revision: 
     d = dict(zip(row.keys(), row))
     d["labels"], d["measurements"] = _load(d["labels"]), _load(d["measurements"])
     return d
+
+
+# --------------------------------------------------------------------------
+# Forecast runs (migration 0014)
+# --------------------------------------------------------------------------
+
+_RUN_COLUMNS = ("run_id", "idempotency_key", "symbol", "session_date", "contract_id", "profile", "snapshot_id",
+                "annotation_id", "analogue_set_id", "label_version", "algorithm_version", "schema_version",
+                "issue_policy", "code_revision", "mode", "input_cutoff_at", "deadline_at", "generation_started_at",
+                "generation_completed_at", "lifecycle_status", "supersedes_run_id", "failure_reason",
+                "evidence_digest", "outputs")
+_PREDICTION_COLUMNS = ("target", "status", "predicted_label", "estimation_status", "distribution", "eligible",
+                       "without_label", "prior_sessions", "prior_without_label", "reason")
+
+
+def find_forecast_run(conn: Database, idempotency_key: str) -> Optional[str]:
+    row = conn.execute("SELECT run_id FROM journal.forecast_runs WHERE idempotency_key = %s;",
+                       (idempotency_key,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def save_forecast_run(conn: Database, run: Dict[str, Any], evidence: Dict[str, Any],
+                      predictions: List[Dict[str, Any]]) -> Tuple[str, bool]:
+    """
+    Stores one forecast run with its evidence and predictions in one transaction; ``(run_id, created)``. A run with
+    an idempotency key already stored returns that run. The database decides issuance: it stamps issued_at with
+    its own clock and turns a live run inserted after its deadline into a late one (migration 0014).
+    """
+    with conn:
+        _lock(conn, "journal.forecast_runs", run["idempotency_key"])
+        existing = find_forecast_run(conn, run["idempotency_key"])
+        if existing is not None:
+            return existing, False
+        run_id = str(uuid.uuid4())
+        values = {**run, "run_id": run_id, "outputs": canonical_json(run["outputs"])}
+        conn.execute(f"INSERT INTO journal.forecast_runs ({', '.join(_RUN_COLUMNS)}) "
+                     f"VALUES ({', '.join(['%s'] * len(_RUN_COLUMNS))});", tuple(values.get(c) for c in _RUN_COLUMNS))
+        conn.execute("INSERT INTO journal.forecast_evidence (run_id, evidence, evidence_digest) VALUES (%s, %s, %s);",
+                     (run_id, canonical_json(evidence), run["evidence_digest"]))
+        conn.executemany(
+            f"INSERT INTO journal.forecast_predictions (run_id, {', '.join(_PREDICTION_COLUMNS)}) "
+            f"VALUES (%s, {', '.join(['%s'] * len(_PREDICTION_COLUMNS))});",
+            [(run_id, *[canonical_json(p[c]) if c == "distribution" and p[c] is not None else p[c]
+                        for c in _PREDICTION_COLUMNS]) for p in predictions])
+    return run_id, True
+
+
+def add_forecast_event(conn: Database, run_id: str, event: str, detail: Optional[str] = None) -> None:
+    """Appends a run event; the database stamps its time."""
+    with conn:
+        conn.execute("INSERT INTO journal.forecast_run_events (run_id, event, detail) VALUES (%s, %s, %s);",
+                     (run_id, event, detail))
+
+
+def _run(row) -> Dict[str, Any]:
+    d = dict(zip(row.keys(), row))
+    for k in ("run_id", "snapshot_id", "annotation_id", "analogue_set_id", "supersedes_run_id"):
+        d[k] = None if d[k] is None else str(d[k])
+    d["session_date"], d["outputs"] = str(d["session_date"]), _load(d["outputs"])
+    return d
+
+
+def get_forecast_run(conn: Database, run_id: str) -> Optional[Dict[str, Any]]:
+    """One run by its id, with ``predictions`` (by target), ``evidence`` and ``events``; None for an unknown or
+    malformed id."""
+    if not _is_uuid(run_id):
+        return None
+    row = conn.execute("SELECT * FROM journal.forecast_runs WHERE run_id = %s;", (str(run_id),)).fetchone()
+    if row is None:
+        return None
+    d = _run(row)
+    d["predictions"] = {}
+    for p in conn.execute("SELECT * FROM journal.forecast_predictions WHERE run_id = %s ORDER BY target;",
+                          (d["run_id"],)).fetchall():
+        p = dict(zip(p.keys(), p))
+        p["distribution"] = _load(p["distribution"])
+        d["predictions"][p["target"]] = p
+    ev = conn.execute("SELECT evidence FROM journal.forecast_evidence WHERE run_id = %s;", (d["run_id"],)).fetchone()
+    d["evidence"] = None if ev is None else _load(ev[0])
+    d["events"] = [dict(zip(e.keys(), e)) for e in conn.execute(
+        "SELECT event, at, detail FROM journal.forecast_run_events WHERE run_id = %s ORDER BY event_id;",
+        (d["run_id"],)).fetchall()]
+    return d
+
+
+def list_forecast_runs(conn: Database, start: str, end: str, profile: Optional[str] = None,
+                       mode: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Runs of sessions in [start, end] (without predictions), oldest session first, newest run first within it -
+    for navigation; a forecast is always read by its run id."""
+    rows = conn.execute(
+        "SELECT * FROM journal.forecast_runs WHERE session_date BETWEEN %s AND %s "
+        "AND (%s::text IS NULL OR profile = %s) AND (%s::text IS NULL OR mode = %s) "
+        "ORDER BY session_date, created_at DESC;", (start, end, profile, profile, mode, mode)).fetchall()
+    return [_run(r) for r in rows]
+
+
+def current_forecast_run(conn: Database, session_date: str, profile: str, mode: str, algorithm_version: str,
+                         exclude_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The newest official run (issued or unavailable) of a session under one profile, mode and algorithm - the run
+    a new one supersedes."""
+    row = conn.execute(
+        "SELECT * FROM journal.forecast_runs WHERE session_date = %s AND profile = %s AND mode = %s "
+        "AND algorithm_version = %s AND lifecycle_status IN ('issued', 'unavailable') "
+        "AND idempotency_key IS DISTINCT FROM %s ORDER BY created_at DESC LIMIT 1;",
+        (session_date, profile, mode, algorithm_version, exclude_key)).fetchone()
+    return None if row is None else _run(row)

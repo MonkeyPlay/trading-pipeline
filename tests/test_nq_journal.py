@@ -393,15 +393,157 @@ def test_analogue_sets_are_stored_once_per_pool_and_outcomes(market):
     version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
     snaps = store.list_snapshots(conn, "2000-01-01", DAY, version)
     target = snaps[-1]
-    aset = store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION)
+    aset = store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                     pre.RULES_PROTOCOL_VERSION)
     assert aset is not None and aset["pool_size"] == len(snaps) - 1                 # catch-up made it
     assert 1 <= len(aset["members"]) <= pre.TOP_ANALOGUES
     assert all(m["session_date"] < DAY and float(m["comparable_weight"]) >= 75 for m in aset["members"])
     assert [m["rank"] for m in aset["members"]] == list(range(1, len(aset["members"]) + 1))
     assert set(aset["outcome_summary"]["targets"]) == set(pre.OUTCOME_TARGETS)
+    prior = aset["outcome_summary"]["prior"]
+    assert aset["prior_digest"] == prior["digest"] is not None and prior["known_as_of"].startswith("reconstruction")
+    assert prior["sessions"] == len(prior["manifest"]) == len(snaps) - 1 and prior["excluded"] == {"not_earlier": 1}
+    assert aset["protocol_version"] == pre.RULES_PROTOCOL_VERSION
+    assert store.get_analogue_set(conn, aset["set_id"])["members"] == aset["members"]
+    assert store.get_analogue_set(conn, "not-a-uuid") is None
     assert match(conn) == 0                                                          # nothing changed: nothing new
+    # the lookup is per annotation protocol: no Claude set exists, so none is returned in its place
+    assert store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                     pre.LLM_PROTOCOL_VERSION) is None
     with pytest.raises(psycopg.Error, match="append-only"):
         conn.execute("DELETE FROM journal.analogue_members;")
+
+
+@needs_db
+def test_a_revised_outcome_outside_the_analogues_makes_a_new_set(market):
+    """The prior manifest (nq_match_p1_v2): more sessions than analogues, then a revised outcome of one that is not
+    an analogue - the prior changes, so the target gets a new set with the same analogues."""
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster.journal import match
+    from scripts.nq_journal import main
+    conn = market[0]
+    assert main(["--db", DSN, "backfill", "--start", "2026-06-01", "--end", "2026-06-09"]) == 0
+    assert main(["--db", DSN, "annotate", "--start", "2026-06-01", "--end", "2026-06-09"]) == 0
+    match(conn)
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    snaps = store.list_snapshots(conn, "2000-01-01", DAY, version)
+    target = snaps[-1]
+    lookup = lambda: store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                               pre.RULES_PROTOCOL_VERSION)
+    before = lookup()
+    members = {m["snapshot_id"] for m in before["members"]}
+    other = next(s for s in snaps[:-1] if s["snapshot_id"] not in members)
+    last = store.latest_outcome(conn, other["snapshot_id"], defs.LABEL_VERSION)
+    assert store.save_outcome(conn, other["snapshot_id"], defs.LABEL_VERSION,
+                              {"labels": last["labels"], "measurements": last["measurements"],
+                               "digest": "vendor revision"})[1]
+    assert match(conn) > 0
+    after = lookup()
+    assert after["set_id"] != before["set_id"] and after["prior_digest"] != before["prior_digest"]
+    assert (after["outcome_digest"], [m["snapshot_id"] for m in after["members"]]) == \
+        (before["outcome_digest"], [m["snapshot_id"] for m in before["members"]])
+    assert match(conn) == 0
+
+
+@needs_db
+def test_baseline_forecasts_are_issued_once_from_explicit_evidence(market):
+    """Stage 3 (guideline revision 2): catch-up issued a historical-replay run per session; a rerun is idempotent, a
+    run reproduces from its frozen evidence and reads back into P1's record, bad evidence ids are rejected."""
+    from contracts import nq_forecast as fc
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster.forecast_baseline import baseline_forecast
+    from forecaster.forecast_display import percent
+    from forecaster.forecast_service import ForecastInputError, forecast_all, forecast_session, run_forecast
+    from forecaster.preopen_display import p1_record
+    conn = market[0]
+    forecast_all(conn)                                   # the revised prior of the previous test: new runs
+    assert forecast_all(conn) == 0                       # nothing new on a rerun
+    run, created = forecast_session(conn, DAY)
+    assert not created and run["lifecycle_status"] == "issued" and run["issued_at"] is not None
+    assert run["mode"] == "historical_replay" and run["deadline_at"] is None and run["code_revision"]
+    assert set(run["predictions"]) == {t for _, t in fc.FORECAST_TARGETS}
+    assert run["evidence"]["data_mode"] == "historical_reconstruction"
+    assert run["evidence"]["prior"]["known_as_of"].startswith("reconstruction")
+
+    # reproducible: the baseline of the stored evidence is the stored forecast
+    again = baseline_forecast(run["evidence"])
+    for target, p in again["predictions"].items():
+        stored = run["predictions"][target]
+        assert (p["status"], p["predicted_label"], p["distribution"]) == \
+            (stored["status"], stored["predicted_label"], stored["distribution"])
+
+    # P1's record from the run and the evidence it was issued on - never another set
+    snap, ann = store.get_snapshot(conn, run["snapshot_id"]), store.get_annotation(conn, run["annotation_id"])
+    aset = store.get_analogue_set(conn, run["analogue_set_id"])
+    provenance, rows = p1_record(snap, ann, aset, run)
+    values = {prop: value for prop, value, _ in rows}
+    dist = run["predictions"]["direction_15m"]["distribution"]
+    assert run["run_id"] in provenance
+    assert [values[p] for p in fc.PROBABILITY_PROPERTIES] == [percent(dist[c]) for c in fc.PROBABILITY_PROPERTIES.values()]
+    assert values["Forecast Confidence"] == "Unavailable" and values["Historical Analogue Count"] == str(
+        len(aset["members"]))
+    with pytest.raises(ValueError, match="other evidence"):
+        p1_record(snap, ann, None, run)
+
+    # malformed, unknown or mismatched evidence ids: rejected, nothing stored
+    runs = lambda: conn.execute("SELECT count(*) FROM journal.forecast_runs;").fetchone()[0]
+    before = runs()
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    other = store.list_snapshots(conn, PREV, PREV, version)[0]
+    other_ann = store.latest_annotation(conn, other["snapshot_id"], pre.RULES_PROTOCOL_VERSION)
+    other_set = store.latest_analogue_set(conn, other["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                          pre.RULES_PROTOCOL_VERSION)
+    for ids in [("not-a-uuid", run["annotation_id"], run["analogue_set_id"]),
+                (run["snapshot_id"], other_ann["annotation_id"], run["analogue_set_id"]),
+                (run["snapshot_id"], run["annotation_id"], other_set["set_id"]),
+                (run["snapshot_id"], run["annotation_id"], "0" * 32)]:
+        with pytest.raises(ForecastInputError):
+            run_forecast(conn, *ids)
+    with pytest.raises(ForecastInputError, match="live_capture"):
+        run_forecast(conn, run["snapshot_id"], run["annotation_id"], run["analogue_set_id"], mode="live")
+    assert runs() == before
+
+    # the database keeps the forecast contract and the history
+    with pytest.raises(psycopg.Error, match="not in the vocabulary"):
+        conn.execute("INSERT INTO journal.forecast_predictions (run_id, target, status, predicted_label, "
+                     "estimation_status, eligible, without_label, prior_sessions, prior_without_label) "
+                     "VALUES (%s, 'first_move_5m', 'predicted', 'sideways', 'analogues', 1, 0, 1, 0);",
+                     (run["run_id"],))
+    with pytest.raises(psycopg.Error, match="sum to"):
+        conn.execute("INSERT INTO journal.forecast_predictions (run_id, target, status, predicted_label, "
+                     "estimation_status, distribution, eligible, without_label, prior_sessions, prior_without_label) "
+                     "VALUES (%s, 'first_move_5m', 'predicted', 'up_first', 'analogues', "
+                     "'{\"up_first\": \"1/2\", \"down_first\": \"1/4\", \"neither\": \"1/2\"}', 1, 0, 1, 0);",
+                     (run["run_id"],))
+    for sql in ("UPDATE journal.forecast_runs SET lifecycle_status = 'issued'", "DELETE FROM journal.forecast_predictions",
+                "DELETE FROM journal.forecast_evidence"):
+        with pytest.raises(psycopg.Error, match="append-only"):
+            conn.execute(sql)
+
+
+@needs_db
+def test_a_revised_outcome_is_a_new_run_and_the_issued_one_stays(market):
+    """A vendor correction changes an analogue's outcome: the next forecast is a new run superseding the old one,
+    whose predictions and evidence do not change."""
+    from database import journal_store as store
+    from forecaster.forecast_service import forecast_all, forecast_session
+    from forecaster.journal import match
+    conn = market[0]
+    old, _ = forecast_session(conn, DAY)
+    member = old["evidence"]["members"][0]
+    last = store.latest_outcome(conn, member["snapshot_id"], defs.LABEL_VERSION)
+    assert store.save_outcome(conn, member["snapshot_id"], defs.LABEL_VERSION,
+                              {"labels": last["labels"], "measurements": last["measurements"],
+                               "digest": "another vendor revision"})[1]
+    assert match(conn) > 0 and forecast_all(conn) > 0
+    new, created = forecast_session(conn, DAY)
+    assert not created and new["run_id"] != old["run_id"] and new["supersedes_run_id"] == old["run_id"]
+    assert new["evidence"]["members"][0]["outcome_revision"] == member["outcome_revision"] + 1
+    unchanged = store.get_forecast_run(conn, old["run_id"])
+    assert (unchanged["predictions"], unchanged["evidence"], unchanged["issued_at"]) == \
+        (old["predictions"], old["evidence"], old["issued_at"])
 
 
 class _Usage:
@@ -453,6 +595,94 @@ def test_claude_annotation_attempts_are_kept_and_only_valid_ones_stored(market):
     stored = store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION)
     assert stored["annotator"] == "llm" and stored["model"] == pre.LLM_MODEL
     assert [r["status"] for r in attempts()] == ["invalid", "refused", "ok"]
+    # every request was in the ledger before it was sent, and every attempt answers exactly one of them
+    linked = conn.execute("SELECT count(*) FROM journal.inference_requests r JOIN journal.annotation_attempts t "
+                          "ON t.request_id = r.request_id WHERE r.mode = 'live';").fetchone()[0]
+    assert linked == 3 and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+    # an answer that is not JSON keeps its raw text
+    garbled = _Message({}, pre.LLM_MODEL)
+    garbled.content[0].text = "Overnight Structure: Uptrend"
+    bad = llm.annotate_live(conn, _Client(garbled), snap)
+    assert bad["status"] == "invalid" and bad["error"].startswith("not JSON")
+    assert conn.execute("SELECT raw_text FROM journal.annotation_attempts WHERE attempt_id = %s;",
+                        (bad["attempt_id"],)).fetchone()[0] == "Overnight Structure: Uptrend"
+
+
+class _Batches:
+    """The Batch API, in memory: ``create`` keeps the requests, ``results`` answers ``answered`` of them."""
+    def __init__(self, answer_for, fail=False, drop=0):
+        self.requests, self.answer_for, self.fail, self.drop = [], answer_for, fail, drop
+
+    def create(self, requests):
+        if self.fail:
+            raise RuntimeError("overloaded")
+        self.requests = list(requests)
+        return type("Batch", (), {"id": "msgbatch_test"})()
+
+    def retrieve(self, batch_id):
+        return type("Batch", (), {"processing_status": "ended"})()
+
+    def results(self, batch_id):
+        for r in self.requests[self.drop:]:
+            message = _Message(self.answer_for(r["custom_id"]), "claude-opus-5-5")
+            yield type("Result", (), {"custom_id": r["custom_id"],
+                                      "result": type("R", (), {"type": "succeeded", "message": message})()})()
+
+
+@needs_db
+def test_llm_requests_are_accounted_for_across_an_interrupted_run(market):
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster import structure_llm as llm
+    from tests.test_structure_llm import answer_from_rules
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    snaps = store.list_snapshots(conn, "2000-01-01", PREV, version)[-3:]
+    assert len(snaps) == 3
+    by_request = {}
+    batches = _Batches(lambda custom_id: answer_from_rules(by_request[custom_id]), drop=1)
+    client = type("Client", (), {"messages": type("M", (), {"batches": batches})()})()
+
+    # the run sends a batch and ends before collecting it: the batch id and its requests are on record
+    batch_id = llm.submit_batch(conn, client, snaps)
+    sent = store.inference_batch_requests(conn, batch_id)
+    assert batch_id == "msgbatch_test" and [r["custom_id"] for r in batches.requests] == [r["request_id"] for r in sent]
+    for r in sent:
+        by_request[r["request_id"]] = store.get_snapshot(conn, r["snapshot_id"])
+        assert r["request"]["system"][0]["text"] == llm._system_prompt() and r["code_revision"]
+        assert r["request_hash"] == hashlib.sha256(defs.canonical_json(r["request"]).encode()).hexdigest()
+    pending = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
+    assert {r["batch_id"] for r in pending} == {batch_id} and len(pending) == 3
+
+    # the next run collects it - after a prompt change, which must not touch what was sent: each answer is checked
+    # against the archived request; two answers, and the request the batch has no result for is closed as an error
+    real_prompt = llm._system_prompt
+    llm._system_prompt = lambda: "an edited prompt"
+    try:
+        assert llm.collect_batch(conn, client, batch_id) == {"ok": 2, "error": 1}
+    finally:
+        llm._system_prompt = real_prompt
+    assert [r["request_hash"] for r in store.inference_batch_requests(conn, batch_id)] == \
+        [r["request_hash"] for r in sent]
+    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+    assert llm.collect_batch(conn, client, batch_id) == {}                       # collecting again changes nothing
+    assert sum(store.latest_annotation(conn, s["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is not None
+               for s in snaps) == 2
+
+    # a live request whose run ended before the answer was stored stays unresolved until closed by hand
+    params, request_hash, _ = llm.build_request(snaps[0])
+    store.save_inference_request(conn, llm._ledger_record(snaps[0], params, request_hash, "live"))
+    lost = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
+    assert [(r["mode"], r["batch_id"]) for r in lost] == [("live", None)]
+    assert llm.close_unresolved(conn, lost) == 1
+    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+
+    # a batch the API refuses to create: its requests are closed at once, nothing is left pending
+    failing = type("Client", (), {"messages": type("M", (), {"batches": _Batches(None, fail=True)})()})()
+    assert llm.submit_batch(conn, failing, snaps[:1]) is None
+    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+    with pytest.raises(psycopg.Error, match="append-only"):
+        conn.execute("DELETE FROM journal.inference_requests;")
 
 
 @needs_db
@@ -560,3 +790,58 @@ def test_daily_atr_needs_every_session_of_its_window_complete(market):
     finally:
         save_trading_day(conn, NQ_CID, gap_day.session_date.isoformat(), rows)
     assert build_snapshot(conn, DAY).payload["atr"]["daily"]["status"] == "valid"
+
+
+@needs_db
+def test_a_live_forecast_is_issued_only_by_the_database_clock(market):
+    """Last in the module (it adds live-capture snapshots). The deadline comes from the issue policy and the
+    session date, never the client; a run inserted after it is late, with no issued_at."""
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    from forecaster.forecast_service import timely, utc
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    source = store.list_snapshots(conn, DAY, DAY, version)[0]
+
+    def live_copy(day, built):
+        return str(conn.execute(
+            "INSERT INTO journal.snapshots (snapshot_id, symbol, contract_id, session_date, snapshot_version, "
+            "convention_version, cutoff_at, rth_open_at, data_mode, pit_availability_status, source_payload_hash, "
+            "payload, built_at) SELECT gen_random_uuid(), symbol, contract_id, %s::date, snapshot_version, "
+            "convention_version, cutoff_at + (%s::date - session_date) * interval '1 day', "
+            "rth_open_at + (%s::date - session_date) * interval '1 day', 'live_capture', 'unverified_historical', "
+            "%s, payload, %s FROM journal.snapshots WHERE snapshot_id = %s RETURNING snapshot_id;",
+            (day, day, day, f"live:{day}", built, source["snapshot_id"])).fetchone()[0])
+
+    def issue(snapshot_id, day):
+        snap = store.get_snapshot(conn, snapshot_id)
+        now = datetime.now(UTC)
+        run = {"idempotency_key": f"live-test:{snapshot_id}", "symbol": "NQ", "session_date": day,
+               "contract_id": snap["contract_id"], "profile": defs.DEFAULT_PROFILE, "snapshot_id": snapshot_id,
+               "annotation_id": None, "analogue_set_id": None, "label_version": defs.LABEL_VERSION,
+               "algorithm_version": fc.BASELINE_VERSION, "schema_version": fc.FORECAST_SCHEMA_VERSION,
+               "issue_policy": fc.ISSUE_POLICIES["live"], "code_revision": "test", "mode": "live",
+               "input_cutoff_at": snap["cutoff_at"], "deadline_at": datetime(2100, 1, 1, tzinfo=UTC),  # ignored
+               "generation_started_at": now, "generation_completed_at": now, "lifecycle_status": "issued",
+               "supersedes_run_id": None, "failure_reason": None, "evidence_digest": "-", "outputs": {}}
+        run_id, _ = store.save_forecast_run(conn, run, {}, [])
+        return store.get_forecast_run(conn, run_id)
+
+    # a past session captured before its open: whatever the client sends, the run is late
+    past = live_copy(DAY, cal.ny_instant(date.fromisoformat(DAY), time(9, 28)))
+    late = issue(past, DAY)
+    assert late["lifecycle_status"] == "late" and late["issued_at"] is None and "after the deadline" in late[
+        "failure_reason"]
+    assert utc(late["deadline_at"]) == cal.ny_instant(date.fromisoformat(DAY), fc.LIVE_DEADLINE_ET)
+    assert not timely(late)
+
+    # a future session: issued at the database clock, timely once acknowledged before the deadline
+    future = "2099-06-12"
+    on_time = issue(live_copy(future, datetime.now(UTC)), future)
+    assert on_time["lifecycle_status"] == "issued" and not timely(on_time)
+    store.add_forecast_event(conn, on_time["run_id"], "acknowledged")
+    assert timely(store.get_forecast_run(conn, on_time["run_id"]))
+
+    # a live run on a historical reconstruction is refused by the database itself
+    with pytest.raises(psycopg.Error, match="live_capture"):
+        issue(source["snapshot_id"], DAY)

@@ -13,11 +13,15 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py match                                      # analogue sets (P1 section 7 rubric)
     python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --estimate   # Claude: size and cost
     python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --batch      # Claude backfill
+    python scripts/nq_journal.py annotate-llm --date 2026-10-02 --close-unresolved   # close requests a crash lost
     python scripts/nq_journal.py match --protocol llm                       # analogues over Claude's annotations
     python scripts/nq_journal.py analogues --date 2026-10-02 [--outcomes]   # one session's analogues
     python scripts/nq_journal.py annotation-review-set --name preopen_review_v1   # outcome-blind review set
     python scripts/nq_journal.py annotation-review-report --name preopen_review_v1
-    python scripts/nq_journal.py show --date 2026-09-24                     # snapshot + P2's 40-field record
+    python scripts/nq_journal.py show --date 2026-09-24                     # snapshot + P1 / P2 records
+    python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02   # baseline forecasts (replay)
+    python scripts/nq_journal.py forecast --snapshot-id S --annotation-id A --set-id X   # explicit evidence
+    python scripts/nq_journal.py show-forecast --run-id R                   # one stored forecast run
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
 
@@ -47,6 +51,7 @@ from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.nq_evidence import SnapshotError
 from forecaster import review_set
+from contracts import nq_forecast as fc
 from contracts import nq_preopen as preopen
 from forecaster.journal import annotate, catch_up, match, record_outcome, register, take_snapshot
 from forecaster.outcome_display import p2_record
@@ -122,10 +127,23 @@ def cmd_annotate_llm(conn, args):
     from datetime import datetime, timezone
     from forecaster import structure_llm as llm
     version = defs.PROFILES[args.profile].snapshot_version
+    unresolved = store.unresolved_inference_requests(conn, preopen.LLM_PROTOCOL_VERSION)
+    batches = sorted({r["batch_id"] for r in unresolved if r["batch_id"]})
+    stranded = [r for r in unresolved if not r["batch_id"]]
+    if stranded and args.close_unresolved:
+        print(f"Closed {llm.close_unresolved(conn, stranded)} unresolved request(s) as error attempts.")
+        stranded, unresolved = [], [r for r in unresolved if r["batch_id"]]
+    for r in stranded:
+        print(f"  unresolved {r['mode']} request {r['request_id']} ({r['session_date']}, sent {r['created_at']}): its "
+              f"answer cannot be fetched; --close-unresolved records it as an error so the session can be sent again")
+    waiting = {r["snapshot_id"] for r in unresolved}
     snaps = store.list_snapshots(conn, args.date or args.start, args.date or args.end, version)
-    todo = [s for s in snaps if store.latest_annotation(conn, s["snapshot_id"], preopen.LLM_PROTOCOL_VERSION) is None]
-    print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) without a {preopen.LLM_PROTOCOL_VERSION} annotation.")
-    if args.estimate or not todo:
+    todo = [s for s in snaps if store.latest_annotation(conn, s["snapshot_id"], preopen.LLM_PROTOCOL_VERSION) is None
+            and s["snapshot_id"] not in waiting]
+    print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) to send for {preopen.LLM_PROTOCOL_VERSION}"
+          + (f"; {len(waiting)} with an unresolved request" if waiting else "")
+          + (f"; {len(batches)} recorded batch(es) to collect first" if batches else "") + ".")
+    if args.estimate or not (todo or batches):
         if todo:
             e = llm.estimate(todo)
             print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
@@ -138,21 +156,35 @@ def cmd_annotate_llm(conn, args):
     except Exception as e:
         print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
         return 1
+    status = 0
+    for batch_id in batches:                       # an earlier run's batch: collect it, never send it again
+        print(f"  collecting recorded batch {batch_id} ...")
+        started = datetime.now(timezone.utc)
+        while client.messages.batches.retrieve(batch_id).processing_status != "ended":
+            time.sleep(llm.batch_poll_delay(started))
+        counts = llm.collect_batch(conn, client, batch_id)
+        print(f"  results: {counts}")
+        status |= not set(counts) <= {"ok"}
+    if not todo:
+        return status
     if not args.batch:
-        status = 0
         for snap in todo:
             attempt = llm.annotate_live(conn, client, snap)
             print(f"  {snap['session_date']}: {attempt['status']}" + (f" - {attempt['error']}" if attempt.get("error") else ""))
             status |= attempt["status"] not in ("ok", "contaminated")
         return status
     submitted = datetime.now(timezone.utc)
-    batch_id = llm.submit_batch(client, todo)
-    print(f"  batch {batch_id} submitted ({len(todo)} requests); waiting for it to end ...")
+    batch_id = llm.submit_batch(conn, client, todo)
+    if batch_id is None:
+        print("  no batch was created: every snapshot contaminated, or the API refused it (see the error attempts)")
+        return 1
+    print(f"  batch {batch_id} submitted and recorded ({len(todo)} requests); waiting for it to end - an "
+          f"interrupted run collects it next time ...")
     while client.messages.batches.retrieve(batch_id).processing_status != "ended":
         time.sleep(llm.batch_poll_delay(submitted))
-    counts = llm.collect_batch(conn, client, batch_id, {s["snapshot_id"]: s for s in todo}, submitted)
+    counts = llm.collect_batch(conn, client, batch_id)
     print(f"  results: {counts}")
-    return 0 if set(counts) <= {"ok"} else 1
+    return status | (0 if set(counts) <= {"ok"} else 1)
 
 
 def _components_line(members, feature):
@@ -172,9 +204,11 @@ def cmd_analogues(conn, args):
     if not snaps:
         print(f"No {version} snapshot for {args.date}.")
         return 1
-    aset = store.latest_analogue_set(conn, snaps[0]["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION)
+    aset = store.latest_analogue_set(conn, snaps[0]["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION,
+                                     PROTOCOLS[args.protocol])
     if aset is None:
-        print(f"No {preopen.MATCHER_VERSION} analogue set for {args.date}; run 'match' first.")
+        print(f"No {preopen.MATCHER_VERSION} analogue set over {PROTOCOLS[args.protocol]} for {args.date}; "
+              f"run 'match' first.")
         return 1
     members = aset["members"]
     print(f"{args.date}: {len(members)} analogue(s) from {aset['pool_size']} earlier session(s) "
@@ -269,9 +303,15 @@ def cmd_show(conn, args):
     events = p["events"]
     print(f"  events: {', '.join(e['time_et'] + ' ' + e['name'] for e in events['events']) or 'none'}"
           + ("" if events["covered_sources"] else " (no calendar coverage)"))
-    annotation = store.latest_annotation(conn, snap["snapshot_id"], preopen.RULES_PROTOCOL_VERSION)
-    aset = store.latest_analogue_set(conn, snap["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION)
-    provenance, rows = p1_record(snap, annotation, aset)
+    annotation = store.latest_annotation(conn, snap["snapshot_id"], PROTOCOLS[args.protocol])
+    aset = store.latest_analogue_set(conn, snap["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION,
+                                     PROTOCOLS[args.protocol])
+    run = store.current_forecast_run(conn, args.date, args.profile, "historical_replay", fc.BASELINE_VERSION)
+    if run is not None:                                # the run shows with the evidence it was issued on
+        run = store.get_forecast_run(conn, run["run_id"])
+        annotation = store.get_annotation(conn, run["annotation_id"]) if run["annotation_id"] else None
+        aset = store.get_analogue_set(conn, run["analogue_set_id"]) if run["analogue_set_id"] else None
+    provenance, rows = p1_record(snap, annotation, aset, run)
     print(f"  P1 pre-open record - {provenance}:")
     for i, (prop, value, basis) in enumerate(rows, 1):
         print(f"    {i:2}. {prop:36} {value}" + (f"  [{basis}]" if value == "Unavailable" else ""))
@@ -282,6 +322,69 @@ def cmd_show(conn, args):
     print(f"  outcome r{outcome['outcome_revision']} ({defs.LABEL_VERSION}) - P2 realised-outcome record:")
     for prop, value in p2_record(snap, outcome):
         print(f"    {prop:42} {value}")
+    return 0
+
+
+def cmd_forecast(conn, args):
+    """Baseline forecasts (forecaster/forecast_service.py): explicit evidence ids, or the sessions of a date range
+    resolved to their own snapshot, annotation and analogue set."""
+    from forecaster.forecast_service import ForecastInputError, forecast_session, run_forecast
+    if args.snapshot_id:
+        try:
+            run, created = run_forecast(conn, args.snapshot_id, args.annotation_id, args.set_id, args.profile)
+        except ForecastInputError as e:
+            print(f"Rejected: {e}")
+            return 1
+        _print_run_line(run, created)
+        return 0 if run["lifecycle_status"] == "issued" else 1
+    history = store.outcome_history(conn, defs.LABEL_VERSION)
+    status = 0
+    for s in cal.sessions_between(args.date or args.start, args.date or args.end):
+        result = forecast_session(conn, s.session_date.isoformat(), args.profile, PROTOCOLS[args.protocol],
+                                  history=history)
+        if result is None:
+            print(f"  {s.session_date}: no snapshot or annotation")
+            continue
+        _print_run_line(*result)
+        status |= result[0]["lifecycle_status"] not in ("issued", "unavailable")
+    return status
+
+
+def _print_run_line(run, created):
+    fifteen = run["predictions"].get("direction_15m")
+    detail = (f"15m direction {fifteen['predicted_label'] or fifteen['status']}" if fifteen
+              else run["failure_reason"])
+    print(f"  {run['session_date']}: run {run['run_id']} {run['lifecycle_status']}"
+          f"{' (new)' if created else ' (already stored)'} - {detail}")
+
+
+def cmd_show_forecast(conn, args):
+    """One stored forecast run, by its id: provenance, P1's forecast fields, the per-target detail and evidence."""
+    from forecaster.forecast_display import forecast_rows, target_rows
+    run = store.get_forecast_run(conn, args.run_id)
+    if run is None:
+        print(f"No forecast run {args.run_id!r}.")
+        return 1
+    print(f"Run {run['run_id']} - {run['session_date']} {run['profile']}, {run['mode'].replace('_', ' ')}, "
+          f"{run['lifecycle_status']}" + (f" at {run['issued_at']} (database clock)" if run["issued_at"] else
+                                          f": {run['failure_reason']}"))
+    print(f"  {run['algorithm_version']}, {run['schema_version']}, {run['issue_policy']}, labels "
+          f"{run['label_version']}, code {run['code_revision']}")
+    print(f"  evidence: snapshot {run['snapshot_id']}, annotation {run['annotation_id']}, analogue set "
+          f"{run['analogue_set_id']}; digest {run['evidence_digest'][:16]}"
+          + (f"; supersedes {run['supersedes_run_id']}" if run["supersedes_run_id"] else ""))
+    ev = run["evidence"] or {}
+    if ev.get("members") is not None:
+        print("  analogues: " + ", ".join(f"{m['session_date']} ({float(m['similarity']):.0f}%)"
+                                            for m in ev["members"]) + f"; prior {ev['prior']['sessions']} "
+              f"session(s) - {ev['prior']['known_as_of']}")
+    for prop, (value, basis) in forecast_rows(run).items():
+        print(f"    {prop:38} {value:16} [{basis}]")
+    for r in target_rows(run):
+        dist = ", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-"
+        print(f"  {r['target']:20} {r['status']:21} {r['class']:24} n={r['eligible']} (+{r['without_label']} "
+              f"unlabelled), prior {r['prior_sessions']} (+{r['prior_without_label']}): {dist}"
+              + (f" - {r['reason']}" if r["reason"] else ""))
     return 0
 
 
@@ -366,16 +469,30 @@ def main(argv=None):
     common(p)
     p.add_argument("--batch", action="store_true", help="Use the Batch API (half price, results within 24 h)")
     p.add_argument("--estimate", action="store_true", help="Only estimate the tokens and the cost")
+    p.add_argument("--close-unresolved", action="store_true",
+                   help="Record requests whose answer can never be fetched (a run ended mid-request) as errors")
     p = sub.add_parser("analogues", help="One session's analogues (outcome-blind unless --outcomes)")
     common(p, ranged=False)
     p.add_argument("--outcomes", action="store_true", help="Also show the analogues' outcomes")
+    p.add_argument("--protocol", choices=sorted(PROTOCOLS), default="rules", help="Annotation protocol of the set")
     p = sub.add_parser("annotation-review-set", help="Choose an outcome-blind review set of pre-open annotations")
     p.add_argument("--name", required=True)
     p.add_argument("--size", type=int, default=25)
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p = sub.add_parser("annotation-review-report", help="Summarise an annotation review set's verdicts")
     p.add_argument("--name", required=True)
-    common(sub.add_parser("show", help="Print one session's snapshot and latest outcome"), ranged=False)
+    p = sub.add_parser("forecast", help="Baseline forecasts (historical replay), stored once per evidence")
+    common(p)
+    p.add_argument("--protocol", choices=sorted(PROTOCOLS), default="rules", help="Annotation protocol")
+    p.add_argument("--snapshot-id", help="Explicit evidence: snapshot id (with --annotation-id, --set-id)")
+    p.add_argument("--annotation-id", help="Explicit evidence: annotation id")
+    p.add_argument("--set-id", help="Explicit evidence: analogue set id (omit: no analogue set)")
+    p = sub.add_parser("show-forecast", help="Print one stored forecast run")
+    p.add_argument("--run-id", required=True)
+    p = sub.add_parser("show", help="Print one session's snapshot and latest outcome")
+    common(p, ranged=False)
+    p.add_argument("--protocol", choices=sorted(PROTOCOLS), default="rules",
+                   help="Annotation protocol of the pre-open record")
     p = sub.add_parser("review-set", help="Choose and store a review set of diverse sessions")
     p.add_argument("--name", required=True, help="Review set name (immutable once stored)")
     p.add_argument("--size", type=int, default=25, help="Sessions in the set (the guideline asks for 20-30)")
@@ -392,6 +509,9 @@ def main(argv=None):
         parser.error("give --date, or --start and --end")
     if args.command in ("show", "analogues") and not args.date:
         parser.error("give --date")
+    if args.command == "forecast" and not (args.date or (args.start and args.end) or
+                                           (args.snapshot_id and args.annotation_id)):
+        parser.error("give --date, --start and --end, or --snapshot-id and --annotation-id")
 
     init_database(args.db)
     conn = get_db_connection(args.db)
@@ -402,6 +522,7 @@ def main(argv=None):
                    "match": cmd_match, "annotate-llm": cmd_annotate_llm, "analogues": cmd_analogues,
                    "annotation-review-set": cmd_annotation_review_set,
                    "annotation-review-report": cmd_annotation_review_report, "show": cmd_show, "review-set": cmd_review_set,
+                   "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

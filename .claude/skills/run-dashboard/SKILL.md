@@ -1,6 +1,6 @@
 ---
 name: run-dashboard
-description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the Session Explorer (the session chart and its reference levels) and the Review page (label review of a review set). Use to see a dashboard change working, not just its tests.
+description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the Session Explorer (the session chart and its reference levels) and the Forecast page (one stored baseline forecast run). Use to see a dashboard change working, not just its tests.
 ---
 
 # Run and drive the dashboard
@@ -33,7 +33,7 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 
 ```bash
 /tmp/pw/bin/python .claude/skills/run-dashboard/drive.py explorer    # the chart and status badge, then at 5 minutes
-/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py review      # the Review page (never presses Save: it writes verdicts)
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py forecast    # the Forecast page: the newest run, outcome hidden
 ```
 
 `--port` (default 8093) and `--out` (default `/tmp/dashboard-shots`) are optional. The step prints what the page shows and ends with `PROBLEMS: none` or the browser errors. **Look at the screenshots** it writes; then check the server log for tracebacks.

@@ -1,6 +1,6 @@
 # forecaster/structure_llm.py
 """
-The Claude structure annotation (protocol nq_structure_llm_v2, Appendix A, A1):
+The Claude structure annotation (protocol nq_structure_llm_v3, Appendix A, A1):
 the replacement for the rule-based annotation (forecaster/structure_rules.py) once
 the Claude API is available. Same output shape (contracts.nq_preopen.ANNOTATION_SCHEMA),
 same store, its own protocol version - the matcher never mixes the two.
@@ -16,10 +16,30 @@ same store, its own protocol version - the matcher never mixes the two.
   annotate_live(conn, snap)   one request now (server-side refusal fallback on); the
                               attempt is always stored, the annotation only when valid
   submit_batch / collect_batch  the historical backfill through the Batch API (half
-                              price; no fallback there)
+                              price; no fallback there); a recorded batch is collected
+                              later if the run that sent it ended first
 
-Validation: values inside the vocabularies, null exactly when unavailable (with a
-reason), every evidence id inside the bundle, and the answer from LLM_MODEL itself -
+Accounting (migration 0013): every request is a row in journal.inference_requests
+before it is sent - the exact canonical request with its prompt, schema and evidence
+hashes and the code revision - and every batch id is recorded as soon as it is known,
+its requests' ids being the batch custom_ids. A batch answer is validated against the
+request archived when it was sent, never a request rebuilt from today's code. A request
+without an attempt is unresolved: a recorded batch is collected on the next run instead
+of being sent again; a live request whose run ended before its answer was stored cannot
+be fetched again and is closed by hand (``close_unresolved``), never silently resent. An
+annotation and the attempt that produced it are stored in one transaction; an answer
+that is not JSON keeps its raw text.
+
+The evidence bundle carries each reference's status (an unavailable reference says why,
+with no value), each bar's ``complete`` flag (every minute present once, nq_conv_v5) and
+the snapshot's completeness (overnight coverage, ATRs, the Long MA history), so Claude
+sees an unavailable input as unavailable rather than reconstructing it.
+
+Validation, locally and before anything is stored: the whole answer against the
+output JSON schema (types, enums, required and unknown keys - a boolean is not a
+Chop Score), then status classified exactly when there is a value, a classified field
+with no reason, at least one evidence id and a basis, an unavailable one with a
+reason, every evidence id inside the bundle, and the answer from LLM_MODEL itself -
 an answer a fallback model served is kept as an attempt, not as an annotation of this
 protocol. Event Risk, Event Notes, Higher-Timeframe Bias and the price location come
 from the application's rules (EV-v1, HTB-v1, P1 section 7), as in the rule-based protocol. A snapshot holding anything
@@ -38,13 +58,18 @@ from contracts import nq_preopen as pre
 from contracts.nq_prompt_v2 import canonical_json
 from database import journal_store as store
 from forecaster import structure_rules as sr
+from forecaster.provenance import code_revision
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FINAL_2M_BARS = 45
 
 
 def _bar_row(b: sr.Bar) -> list:
-    return [b.id, b.o, b.h, b.l, b.c]
+    return [b.id, b.o, b.h, b.l, b.c, b.complete]
+
+
+def _sha(value) -> str:
+    return hashlib.sha256((value if isinstance(value, str) else canonical_json(value)).encode()).hexdigest()
 
 
 def _r2(x) -> Optional[float]:
@@ -61,8 +86,8 @@ def evidence_bundle(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], set]:
     for name, ref in (p.get("references") or {}).items():
         if name.startswith("_"):
             continue
-        refs[f"ref:{name}"] = ({"value": float(ref["value"])} if ref.get("status") == "valid"
-                               else {"value": None, "status": ref.get("status")})
+        refs[f"ref:{name}"] = ({"value": float(ref["value"]), "status": "valid"} if ref.get("status") == "valid"
+                               else {"value": None, "status": ref.get("status"), "detail": ref.get("detail")})
     bars5 = [b for b in sr._bars(p, "5m") if b.start >= on_start]
     bars15 = [b for b in sr._bars(p, "15m") if b.start >= on_start]
     bars2 = [b for b in sr._bars(p, "2m") if b.start >= on_start]
@@ -74,20 +99,41 @@ def evidence_bundle(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], set]:
                                                 _r2(ma["ema_trend"][i])])
     swings = [{"bar": s.bar.id, "kind": s.kind, "price": s.price,
                "confirmed_at": s.confirmed_at.strftime("%Y-%m-%dT%H:%MZ")} for s in sr.swings(bars5)]
+    cov = (p.get("bars") or {}).get("coverage") or {}
+    atr = p.get("atr") or {}
+    long_ma = (p.get("moving_averages") or {}).get("long_ma_at_cutoff") or {}
+    columns = ["id", "open", "high", "low", "close", "complete"]
     bundle = {
         "session": {"date": p["identity"]["session_date"], "contract": p["identity"].get("local_symbol"),
                     "overnight_start": on_start.strftime("%Y-%m-%dT%H:%MZ"),
                     "cutoff": cutoff.strftime("%Y-%m-%dT%H:%MZ"), "cutoff_et": p["cutoff"].get("cutoff_et"),
-                    "T": (p.get("thresholds") or {}).get("T")},
+                    "T": (p.get("thresholds") or {}).get("T"), "units": "index points; times UTC"},
+        "completeness": {
+            "overnight_minutes": {"expected": cov.get("expected_minutes"), "present": cov.get("minutes"),
+                                  "complete": cov.get("complete"), "duplicates": cov.get("duplicates")},
+            "daily_atr": (atr.get("daily") or {}).get("status"), "two_minute_atr": (atr.get("two_minute") or {}).get(
+                "status"),
+            "long_ma_history": long_ma.get("status"),
+            "rule": "a value of an incomplete window is unavailable; a bar with complete=false is missing minutes",
+        },
         "references": refs,
-        "bars_5m": {"columns": ["id", "open", "high", "low", "close"], "rows": [_bar_row(b) for b in bars5]},
-        "bars_15m": {"columns": ["id", "open", "high", "low", "close"], "rows": [_bar_row(b) for b in bars15]},
-        "bars_2m_final": {"columns": ["id", "open", "high", "low", "close", "tema14_sma3", "ema14_sma3", "ema100"],
-                          "rows": final2},
+        "bars_5m": {"columns": columns, "rows": [_bar_row(b) for b in bars5]},
+        "bars_15m": {"columns": columns, "rows": [_bar_row(b) for b in bars15]},
+        "bars_2m_final": {"columns": columns + ["tema14_sma3", "ema14_sma3", "ema100"], "rows": final2},
         "swings_5m": swings,
     }
-    ids = set(refs) | {b.id for b in bars5 + bars15 + bars2[-FINAL_2M_BARS:]}
-    return bundle, ids
+    return bundle, bundle_ids(bundle)
+
+
+def bundle_ids(bundle: Dict[str, Any]) -> set:
+    """The evidence ids of a bundle: its references and its bars."""
+    return set(bundle["references"]) | {r[0] for k in ("bars_5m", "bars_15m", "bars_2m_final")
+                                        for r in bundle[k]["rows"]}
+
+
+def request_ids(params: Dict[str, Any]) -> set:
+    """The evidence ids of an archived request - the bundle that was actually sent."""
+    return bundle_ids(json.loads(params["messages"][0]["content"].split("\n", 1)[1]))
 
 
 def _system_prompt() -> str:
@@ -110,19 +156,35 @@ def build_request(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], str, set]:
     return params, hashlib.sha256(canonical_json(params).encode()).hexdigest(), ids
 
 
-def validate(answer: Dict[str, Any], ids: set) -> Optional[str]:
-    """The first problem with Claude's answer, or None."""
-    fields = answer.get("fields") or {}
-    if set(fields) != set(pre.LLM_FIELDS):
-        return f"fields {sorted(fields)} are not the protocol's"
-    for name, f in fields.items():
-        allowed = pre.FIELDS[name]["values"]
-        if f["value"] is not None and f["value"] not in allowed:
-            return f"{name}: {f['value']!r} is not an allowed value"
+def _ledger_record(snapshot: Dict[str, Any], params: Dict[str, Any], request_hash: str, mode: str) -> Dict[str, Any]:
+    return {"snapshot_id": snapshot["snapshot_id"], "protocol_version": pre.LLM_PROTOCOL_VERSION,
+            "model": pre.LLM_MODEL, "request": params, "request_hash": request_hash,
+            "prompt_sha256": _sha(params["system"][0]["text"]),
+            "schema_sha256": _sha(params["output_config"]["format"]["schema"]),
+            "evidence_sha256": _sha(params["messages"][0]["content"]), "code_revision": code_revision(),
+            "mode": mode}
+
+
+def validate(answer: Any, ids: set) -> Optional[str]:
+    """The first problem with Claude's answer (see the module docstring), or None."""
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import best_match
+    e = best_match(Draft202012Validator(pre.llm_output_schema()).iter_errors(answer))
+    if e is not None:
+        return f"schema: {'/'.join(str(p) for p in e.absolute_path) or '(answer)'}: {e.message}"
+    for name in pre.LLM_FIELDS:
+        f = answer["fields"][name]
         if (f["value"] is None) != (f["status"] == "unavailable"):
             return f"{name}: status {f['status']} does not fit value {f['value']!r}"
-        if f["value"] is None and not f.get("reason"):
+        if f["status"] == "unavailable" and not (f["reason"] or "").strip():
             return f"{name}: unavailable without a reason"
+        if f["status"] == "classified":
+            if f["reason"] is not None:
+                return f"{name}: classified with a reason ({f['reason']!r}); the prompt asks for null"
+            if not f["evidence_ids"]:
+                return f"{name}: classified without evidence ids"
+            if not f["basis"].strip():
+                return f"{name}: classified without a basis"
         unknown = [i for i in f["evidence_ids"] if i not in ids]
         if unknown:
             return f"{name}: evidence id(s) not in the bundle: {', '.join(unknown[:3])}"
@@ -157,30 +219,39 @@ def _contaminated(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     "measurements": {"model": pre.LLM_MODEL, "after_cutoff": bad[:20], "not_sent": True}})
 
 
+def _attempt(snapshot_id: str, request_id: str, request_hash: str, started_at: datetime, **kw) -> Dict[str, Any]:
+    return {"snapshot_id": snapshot_id, "protocol_version": pre.LLM_PROTOCOL_VERSION, "model": pre.LLM_MODEL,
+            "request_id": request_id, "request_hash": request_hash, "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc), **kw}
+
+
 def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, ids: set,
-                   started_at: datetime) -> Dict[str, Any]:
-    """Stores the attempt for one response (and the annotation when valid); returns the attempt record."""
+                   started_at: datetime, request_id: str) -> Dict[str, Any]:
+    """Stores the attempt for one response to ledger request ``request_id`` (and the annotation when valid);
+    returns the attempt record."""
     usage = None if getattr(message, "usage", None) is None else json.loads(message.usage.to_json())
-    attempt = {"snapshot_id": snapshot["snapshot_id"], "protocol_version": pre.LLM_PROTOCOL_VERSION,
-               "model": getattr(message, "model", pre.LLM_MODEL), "request_hash": request_hash, "usage": usage,
-               "started_at": started_at, "finished_at": datetime.now(timezone.utc)}
+    attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started_at,
+                       model=getattr(message, "model", pre.LLM_MODEL), usage=usage)
     text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), None)
     answer = None
     if message.stop_reason == "refusal":
-        attempt.update(status="refused", error=str(getattr(message, "stop_details", None)))
+        attempt.update(status="refused", error=str(getattr(message, "stop_details", None)), raw_text=text)
     elif message.stop_reason == "max_tokens":
-        attempt.update(status="invalid", error="output cut off at max_tokens")
+        attempt.update(status="invalid", error="output cut off at max_tokens", raw_text=text)
     else:
         try:
             answer = json.loads(text or "")
         except json.JSONDecodeError as e:
-            attempt.update(status="invalid", error=f"not JSON: {e}")
+            attempt.update(status="invalid", error=f"not JSON: {e}", raw_text=text)
+        if answer is None and "status" not in attempt:
+            attempt.update(status="invalid", error="an empty answer (JSON null)", raw_text=text)
+    annotation = None
     if answer is not None:
         attempt["response"] = answer
         problem = None
         if attempt["model"] != pre.LLM_MODEL:
             problem = f"served by {attempt['model']}, not {pre.LLM_MODEL} (a fallback answer is not this protocol)"
-        elif answer.get("integrity_status") == "contaminated":
+        elif isinstance(answer, dict) and answer.get("integrity_status") == "contaminated":
             problem = "Claude reported contamination the application's check does not find"
         else:
             problem = validate(answer, ids)
@@ -188,10 +259,12 @@ def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, i
             attempt.update(status="invalid", error=problem)
         else:
             annotation = to_annotation(snapshot, answer, attempt["model"])
+    with conn:                                     # an annotation and its attempt together, or neither
+        if annotation is not None:
             attempt["annotation_id"], _ = store.save_annotation(conn, snapshot["snapshot_id"], annotation,
                                                                 model=attempt["model"])
             attempt["status"] = "ok"
-    attempt["attempt_id"] = store.save_annotation_attempt(conn, attempt)
+        attempt["attempt_id"] = store.save_annotation_attempt(conn, attempt)
     return attempt
 
 
@@ -203,48 +276,101 @@ def annotate_live(conn, client, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         annotation_id, _ = store.save_annotation(conn, snapshot["snapshot_id"], contaminated, model=pre.LLM_MODEL)
         return {"status": "contaminated", "annotation_id": annotation_id}
     params, request_hash, ids = build_request(snapshot)
+    request_id = store.save_inference_request(conn, _ledger_record(snapshot, params, request_hash, "live"))
     started = datetime.now(timezone.utc)
     try:
         message = client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
     except Exception as e:  # the attempt is kept; nothing is filled in from another run
-        attempt = {"snapshot_id": snapshot["snapshot_id"], "protocol_version": pre.LLM_PROTOCOL_VERSION,
-                   "model": pre.LLM_MODEL, "request_hash": request_hash, "status": "error",
-                   "error": f"{type(e).__name__}: {e}", "started_at": started,
-                   "finished_at": datetime.now(timezone.utc)}
+        attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started, status="error",
+                           error=f"{type(e).__name__}: {e}")
         attempt["attempt_id"] = store.save_annotation_attempt(conn, attempt)
         return attempt
-    return handle_message(conn, snapshot, message, request_hash, ids, started)
+    return handle_message(conn, snapshot, message, request_hash, ids, started, request_id)
 
 
-def submit_batch(client, snapshots: Iterable[Dict[str, Any]]) -> str:
-    """Submits one request per snapshot to the Batch API (no fallback: the Batch API rejects it); returns its id."""
+def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[str]:
+    """
+    Submits one request per snapshot to the Batch API (no fallback: the Batch API rejects it). Each request is in
+    the ledger before the batch is created, its id the custom_id; the batch id is recorded the moment it is known.
+    Returns the batch id - or None when nothing was sent, or the batch was not created (its requests are then
+    closed as error attempts).
+    """
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
-    requests = []
+    requests, ledger = [], []
     for snap in snapshots:
-        if _contaminated(snap) is None:
-            params, _, _ = build_request(snap)
-            requests.append(Request(custom_id=snap["snapshot_id"], params=MessageCreateParamsNonStreaming(**params)))
-    return client.messages.batches.create(requests=requests).id
-
-
-def collect_batch(conn, client, batch_id: str, snapshots: Dict[str, Dict[str, Any]],
-                  submitted_at: datetime) -> Dict[str, int]:
-    """Stores every result of an ended batch as an attempt (and its annotation when valid); returns status counts."""
-    counts: Dict[str, int] = {}
-    for result in client.messages.batches.results(batch_id):
-        snap = snapshots[result.custom_id]
-        params, request_hash, ids = build_request(snap)
-        if result.result.type == "succeeded":
-            attempt = handle_message(conn, snap, result.result.message, request_hash, ids, submitted_at)
+        contaminated = _contaminated(snap)
+        if contaminated is not None:                   # never sent, stored as such (as annotate_live does)
+            store.save_annotation(conn, snap["snapshot_id"], contaminated, model=pre.LLM_MODEL)
         else:
-            attempt = {"snapshot_id": snap["snapshot_id"], "protocol_version": pre.LLM_PROTOCOL_VERSION,
-                       "model": pre.LLM_MODEL, "request_hash": request_hash, "status": "error",
-                       "error": f"batch result {result.result.type}", "started_at": submitted_at,
-                       "finished_at": datetime.now(timezone.utc)}
+            params, request_hash, _ = build_request(snap)
+            request_id = store.save_inference_request(conn, _ledger_record(snap, params, request_hash, "batch"))
+            requests.append(Request(custom_id=request_id, params=MessageCreateParamsNonStreaming(**params)))
+            ledger.append((request_id, snap["snapshot_id"], request_hash))
+    if not requests:
+        return None
+    submitted = datetime.now(timezone.utc)
+    try:
+        batch_id = client.messages.batches.create(requests=requests).id
+    except Exception as e:
+        for request_id, snapshot_id, request_hash in ledger:
+            store.save_annotation_attempt(conn, _attempt(snapshot_id, request_id, request_hash, submitted,
+                                                         status="error",
+                                                         error=f"batch not created: {type(e).__name__}: {e}"))
+        return None
+    store.save_inference_batch(conn, batch_id, [r for r, _, _ in ledger], submitted)
+    return batch_id
+
+
+def collect_batch(conn, client, batch_id: str) -> Dict[str, int]:
+    """
+    Stores every result of an ended, recorded batch as an attempt (and its annotation when valid), skipping requests
+    already answered, so an interrupted collection can simply run again. Each answer is validated against the
+    request archived when it was sent (its evidence ids), whatever the code does today. A request the batch has no
+    result for is closed as an error. Returns status counts.
+    """
+    ledger = {r["request_id"]: r for r in store.inference_batch_requests(conn, batch_id)}
+    counts: Dict[str, int] = {}
+
+    def count(status):
+        counts[status] = counts.get(status, 0) + 1
+
+    seen = set()
+    for result in client.messages.batches.results(batch_id):
+        req = ledger.get(result.custom_id)
+        if req is None or req["answered"]:
+            continue
+        seen.add(result.custom_id)
+        snap = store.get_snapshot(conn, req["snapshot_id"])
+        if result.result.type == "succeeded":
+            attempt = handle_message(conn, snap, result.result.message, req["request_hash"],
+                                     request_ids(req["request"]), req["submitted_at"], req["request_id"])
+        else:
+            attempt = _attempt(snap["snapshot_id"], req["request_id"], req["request_hash"], req["submitted_at"],
+                               status="error", error=f"batch result {result.result.type}")
             store.save_annotation_attempt(conn, attempt)
-        counts[attempt["status"]] = counts.get(attempt["status"], 0) + 1
+        count(attempt["status"])
+    for request_id, req in ledger.items():
+        if not req["answered"] and request_id not in seen:
+            store.save_annotation_attempt(conn, _attempt(req["snapshot_id"], request_id, req["request_hash"],
+                                                         req["submitted_at"], status="error",
+                                                         error="no result for this request in the ended batch"))
+            count("error")
     return counts
+
+
+def close_unresolved(conn, requests: Iterable[Dict[str, Any]]) -> int:
+    """Closes requests whose answer can never be fetched (a live request, or a batch whose id was not recorded,
+    from a run that ended mid-request) as error attempts, so their snapshots can be requested again. The user's
+    decision: such a request may have been billed."""
+    n = 0
+    for req in requests:
+        store.save_annotation_attempt(conn, _attempt(
+            req["snapshot_id"], req["request_id"], req["request_hash"], req["created_at"], status="error",
+            error=f"no answer stored: the {req['mode']} request's run ended before it was recorded; it may have "
+                  f"been billed"))
+        n += 1
+    return n
 
 
 def estimate(snapshots: Iterable[Dict[str, Any]]) -> Dict[str, Any]:

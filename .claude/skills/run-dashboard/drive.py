@@ -1,7 +1,7 @@
 """
 Drive the dashboard in headless Chromium and screenshot what a user sees.
 
-    python drive.py explorer|review [--port 8093] [--out /tmp/dashboard-shots]
+    python drive.py explorer|forecast [--port 8093] [--out /tmp/dashboard-shots]
 
 Run with a Python that has Playwright (see SKILL.md); it uses the cached
 headless Chromium under ~/.cache/ms-playwright.
@@ -33,18 +33,19 @@ def explorer(page, url, out):
     page.screenshot(path=f"{out}/explorer_5m.png")
 
 
-def review(page, url, out):
-    """The Review page: first session's chart and P2 record. Never presses Save (it writes verdicts)."""
-    page.goto(url + "/review", timeout=180000)
-    page.wait_for_selector("text=Realised Opening Type", timeout=180000)
+def forecast(page, url, out):
+    """The Forecast page: the newest session's newest run - provenance, frozen chart, per-target table, P1 record
+    (the realised outcome stays hidden)."""
+    page.goto(url + "/forecast", timeout=180000)
+    page.wait_for_selector("text=/^Run [0-9a-f-]{36}/", timeout=180000)
     page.wait_for_timeout(2500)
-    page.screenshot(path=f"{out}/review.png", full_page=True)
-    print(page.locator("text=/ reviewed/").first.inner_text())
+    page.screenshot(path=f"{out}/forecast.png", full_page=True)
+    print(page.locator("text=/^Run [0-9a-f-]{36}/").first.inner_text())
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("step", choices=("explorer", "review"))
+    parser.add_argument("step", choices=("explorer", "forecast"))
     parser.add_argument("--port", type=int, default=8093)
     parser.add_argument("--out", default="/tmp/dashboard-shots")
     args = parser.parse_args()

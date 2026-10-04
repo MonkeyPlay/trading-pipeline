@@ -3,8 +3,9 @@
 Stage 1 of the *Nasdaq 100 Forecast Implementation Guideline* (28 September 2026),
 built fresh on the codebase after the earlier forecasting code was removed. It
 makes a pre-open snapshot and its realised outcome refer to exactly the same
-question. Nothing here forecasts: stages 2-4 (analogue selection, the LLM
-forecast, comparison) build on it.
+question. Stage 2 (structure and analogues) and stage 3's deterministic baseline
+forecast build on it; guideline revision 2 (4 October 2026) is the current text -
+see "Stage 3" below for the forecasts and "Not built yet" for what remains.
 
 ## Sources
 
@@ -31,9 +32,14 @@ version identifier.
 | Store: version registry, snapshots, revisioned outcomes | [database/migrations/0009_journal_records.sql](../database/migrations/0009_journal_records.sql), [database/journal_store.py](../database/journal_store.py) | 1C, 1D |
 | CLI | [scripts/nq_journal.py](../scripts/nq_journal.py) | 1E backfill |
 | Tests | [tests/test_labels_prompt_v2.py](../tests/test_labels_prompt_v2.py), [tests/test_nq_journal.py](../tests/test_nq_journal.py), [tests/test_snapshot_completeness.py](../tests/test_snapshot_completeness.py) | 1E |
-| Review set: selection, the Review page, verdict store | [forecaster/review_set.py](../forecaster/review_set.py), [dashboard/views/review.py](../dashboard/views/review.py), [database/migrations/0010_review_sets.sql](../database/migrations/0010_review_sets.sql) | 1E |
+| Review set: selection and verdict store (the review pages were removed 2026-10-04) | [forecaster/review_set.py](../forecaster/review_set.py), [database/migrations/0010_review_sets.sql](../database/migrations/0010_review_sets.sql) | 1E |
 | Disagreement report against the old v5 labels | [scripts/label_disagreement_report.py](../scripts/label_disagreement_report.py), [docs/reports/](reports/) | 1E |
 | Disagreement report for a label revision (impl3 against impl5, rules v2 against v4) | [scripts/label_revision_report.py](../scripts/label_revision_report.py), [docs/reports/label_disagreement_impl3_vs_impl5.md](reports/label_disagreement_impl3_vs_impl5.md) | 1E |
+| Forecast contract: P1 property specs, baseline, issue policies | [contracts/nq_forecast.py](../contracts/nq_forecast.py) | 3A, 3B, App. B |
+| Baseline forecast, validation, service, display | [forecaster/forecast_baseline.py](../forecaster/forecast_baseline.py), [forecaster/forecast_validation.py](../forecaster/forecast_validation.py), [forecaster/forecast_service.py](../forecaster/forecast_service.py), [forecaster/forecast_display.py](../forecaster/forecast_display.py) | 3A-3C, 3F |
+| Forecast ledger (runs, evidence, predictions, events) | [database/migrations/0014_forecast_ledger.sql](../database/migrations/0014_forecast_ledger.sql), [database/journal_store.py](../database/journal_store.py) | 3C, 3D |
+| Forecast page | [dashboard/views/forecast.py](../dashboard/views/forecast.py), [dashboard/components/preopen.py](../dashboard/components/preopen.py) (`frozen_preopen_spec`) | 3F |
+| Forecast tests | [tests/test_forecast.py](../tests/test_forecast.py), [tests/test_nq_journal.py](../tests/test_nq_journal.py) | 3 acceptance |
 
 ### Versions
 
@@ -59,9 +65,15 @@ version identifier.
 | `nq_structure_rules_v3` | annotation | v2's labels, HTB-v1 worded as exclusive bands, its basis naming a close beyond the range; never stored |
 | `nq_structure_rules_v2` | annotation | v1 plus Higher-Timeframe Bias (HTB-v1) |
 | `nq_structure_rules_v1` | annotation | the same without Higher-Timeframe Bias |
-| `nq_structure_llm_v2` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5`, Higher-Timeframe Bias from HTB-v1 - built, waiting for an API key |
+| `nq_structure_llm_v3` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5`, Higher-Timeframe Bias from HTB-v1; v2's prompt and schema with strict local validation and the request ledger - built, waiting for an API key |
+| `nq_structure_llm_v2` | annotation | the same, validated less strictly and without the ledger; registered, never run |
 | `nq_structure_llm_v1` | annotation | registered, never run: Claude judged Higher-Timeframe Bias itself |
-| `nq_match_p1_v1` | matcher | P1 section 7's analogue rubric (stage 2B / 2C) |
+| `nq_match_p1_v2` | matcher | P1 section 7's analogue rubric (stage 2B / 2C); each session counts once; the prior from every snapshot (annotated or not), known as of the target, its manifest archived and hashed - current |
+| `nq_match_p1_v1` | matcher | the same rubric; a session with several records could count more than once, and a set recorded only its analogues' outcome revisions, not the prior's (its 274 impl5 sets stay as they are) |
+| `nq_forecast_schema_v1` | forecast_schema | P1's 47 properties as local specs (key, type, unit, vocabulary, owner, window, version, missing policy), prediction and lifecycle statuses, probability units - current |
+| `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
+| `nq_issue_replay_v1` | issue_policy | historical replay: research on reconstructed evidence, issued at the database clock, never timely live |
+| `nq_issue_live_v1` | issue_policy | live: a live_capture snapshot issued by 09:29:50 ET by the database clock, acknowledged after commit - registered; no live capture exists yet |
 
 Each label version keeps every rule of the one before unchanged (checked on the
 stored sessions) and adds targets; the earlier versions stay with the outcomes
@@ -136,7 +148,7 @@ the last completed bar and the source payload hash.
 Without real-time receipts a snapshot is a `historical_reconstruction` with
 point-in-time status `unverified_historical`; the database allows `verified` only
 for a `live_capture`, and a live capture only before 09:30. The real-time streamer
-was removed, so live capture comes back with stage 3.
+was removed; live capture (stage 3D) needs a real-time feed again and is not built.
 
 ### Outcomes
 
@@ -274,8 +286,11 @@ definitions:
 python scripts/nq_journal.py outcomes --start 2025-09-01 --end 2026-09-25   # label stored snapshots under the current version
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25   # snapshot + outcome per session
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25 --profile operational_0927
-python scripts/nq_journal.py show --date 2026-09-24                         # snapshot + P2's 40-field record
-python scripts/nq_journal.py catch-up                                       # every final session not yet stored
+python scripts/nq_journal.py show --date 2026-09-24                         # snapshot, P1 record with the current run, P2 record
+python scripts/nq_journal.py catch-up                                       # every final session not yet stored, through forecasts
+python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02    # baseline forecasts (historical replay), once each
+python scripts/nq_journal.py forecast --snapshot-id S --annotation-id A --set-id X   # explicit evidence ids
+python scripts/nq_journal.py show-forecast --run-id R                       # one stored run: provenance, P1 fields, per target
 ```
 
 **The collector keeps the journal current.** After every full collection
@@ -364,7 +379,6 @@ sessions both have, and explains every disagreement ([how to regenerate it](repo
 
 ```bash
 python scripts/nq_journal.py review-set --name stage1_review_v1     # done 2026-10-04: 25 sessions
-python -m dashboard.app                                              # then the Review page
 python scripts/nq_journal.py review-report --name stage1_review_v1  # agreement per field, every flag
 ```
 
@@ -373,14 +387,13 @@ python scripts/nq_journal.py review-report --name stage1_review_v1  # agreement 
 target's labels and unavailable reasons (142 classes, all covered by the first 15
 picks), early closes, contract rolls and calendar quarters, rare classes first;
 the other 10 spread the set over the year. Reviewed 2026-10-04: all 25 sessions, every field agreed,
-nothing flagged. The dashboard's **Review** page shows
-each session's chart with the frozen levels the labels used (previous RTH close /
-high / low, ON high / low, the cutoff VWAP) and O +/- T, beside P2's 40-field
-record; every field counts as agreed unless marked disagree or unsure, with a
-note. Verdicts are append-only rows (migration 0010, `journal.review_verdicts`;
-`journal.review_latest` holds the one that counts). The review checks that the
-labels mean what P1 / P2 say - not whether anything predicts them. Pre-open
-classifications join the review with stage 2.
+nothing flagged - on a dashboard form that preselected "agree", so an untouched
+field and an agreed one look the same. Verdicts are append-only rows (migration
+0010, `journal.review_verdicts`; `journal.review_latest` holds the one that counts).
+The review checked that the labels mean what P1 / P2 say - not whether anything
+predicts them. The dashboard's Review and Pre-open review pages were removed on
+2026-10-04 at your request: the stored sets and verdicts stay, and `review-report` /
+`annotation-review-report` still summarise them, but no page records new verdicts.
 
 ## Stage 2: pre-open structure and structural analogues
 
@@ -466,7 +479,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   exclusive wording and names a close beyond the range as such in the basis. On the 274 sessions: Bullish 99, Neutral 77, Bearish
   55, Neutral-bullish 11, Neutral-bearish 4, unavailable 28 (19 without a daily ATR
   in September 2025, 9 uncovered). Not a matcher input.
-- **Claude structure annotation** (`nq_structure_llm_v2`,
+- **Claude structure annotation** (`nq_structure_llm_v3`,
   [forecaster/structure_llm.py](../forecaster/structure_llm.py)), built and tested
   against a stand-in client; it runs once `ANTHROPIC_API_KEY` is in `.env`. The
   system prompt [prompts/runtime/structure_annotation_v2.md](../prompts/runtime/structure_annotation_v2.md)
@@ -478,10 +491,22 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   structure_annotation JSON schema (structured outputs). `claude-opus-5-5`, effort
   high. Claude annotates the nine descriptive fields; Event Risk, Event Notes,
   Higher-Timeframe Bias and the price location come from the same rules as the
-  rule-based protocol. Validation:
-  allowed values, null exactly when unavailable (with a reason), every evidence id in
-  the bundle. Every request is an attempt in `journal.annotation_attempts`, failures
-  included; only a valid answer becomes an annotation. Live requests have the
+  rule-based protocol. Validation, locally before anything is stored: the whole
+  answer against the output JSON schema (types, enums, required and unknown keys - a
+  boolean is not a Chop Score), then classified exactly when there is a value; a
+  classified field with no reason, at least one evidence id and a basis; an
+  unavailable one with a reason; every evidence id in the bundle. Every request is a
+  row in `journal.inference_requests` before it is sent (migration 0013) - the exact
+  canonical request, its prompt, schema and evidence hashes and the code revision -
+  and a batch's id
+  is recorded the moment it exists, its request ids being the custom_ids; every
+  answer, failures included, is an attempt in `journal.annotation_attempts` tied to
+  its request; only a valid answer becomes an annotation. A request without an
+  attempt is unresolved: `annotate-llm` collects a recorded batch on its next run
+  instead of sending it again and leaves those sessions out of new requests; a live
+  request whose run ended before the answer was stored cannot be fetched again and
+  stays unresolved until `--close-unresolved` records it as an error (it may have
+  been billed). Live requests have the
   server-side refusal fallback on, but an answer another model served is kept as an
   attempt, not as an annotation of this protocol. A snapshot holding anything after
   its cutoff is never sent. The historical backfill goes through the Batch API at
@@ -489,7 +514,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
 
 ### Analogues (2B-2D)
 
-[matching/structural.py](../matching/structural.py), matcher `nq_match_p1_v1`:
+[matching/structural.py](../matching/structural.py), matcher `nq_match_p1_v2`:
 
 - **Rubric (P1 section 7, exact weights):** price location against each session's
   own five levels 6% each; Overnight and Short-Term Structure 12.5% each; 5- and
@@ -502,16 +527,31 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
 - **Pool and selection:** earlier NQ sessions only, never the target or later; the
   five highest similarities, ties by comparable weight, then the more recent
   session, then the snapshot id; no minimum similarity; zero analogues allowed.
-  Exclusions are counted by reason.
+  Each session counts once: a session with more than one eligible record (two
+  snapshots or annotations) is left out of the pool and the prior entirely
+  (`duplicate_session`) rather than one record picked for it. Exclusions are counted
+  by reason.
 - **Outcomes after selection (2C):** each analogue's latest stage-1 outcome; per P1
   target the class counts over the analogues with a label and that denominator (an
   analogue without one is kept, not replaced), the unweighted mean similarity, and
   a separately named smoothed baseline (count + 5 x prior) / (n + 5), the prior from
   every earlier session's label; no analogue label gives the prior only, said so.
+  The prior's sessions are every snapshot of the profile - whether or not it has an
+  annotation (an annotation is a pool requirement, not a prior one) - earlier, of
+  the same symbol and held once, with an outcome known as of the target: a live
+  capture uses only revisions computed by its cutoff, a historical reconstruction
+  the latest and says so. Every excluded session is counted under its reason, and
+  a null label leaves a session out of that target's prior only
+  (`prior_without_label`). The manifest - each session with its date and outcome
+  revision - is archived with the set and hashed into `prior_digest`.
 - **Store (2D):** `journal.analogue_sets` / `journal.analogue_members` (migration
   0012, append-only): pool size and hash, exclusions, per-feature components,
-  similarity and coverage per member, the outcome revisions used and the outcome
-  summary; a set is new only when its pool or its outcome revisions change.
+  similarity and coverage per member, the outcome revisions used, the prior digest
+  (migration 0013) and the outcome summary; a set is new only when its pool, its
+  analogues' outcome revisions or its prior manifest change - a revised outcome of an
+  earlier session that is not an analogue changes the prior, so it makes a new set.
+  A set is looked up by its target's annotation protocol, so a rules set is never
+  shown for a Claude one.
   Historical sets are marked `historical_reconstruction`: their outcomes were
   computed after the fact.
 - **Dashboard:** **Analogues** (`/analogues`) puts a session and its analogues side
@@ -519,10 +559,9 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   with the similarity and coverage of each; outcomes stay hidden until "Show
   outcomes", so the page first serves the outcome-blind check of why each analogue
   qualifies. Clicking a date charts that session's own pre-open (its own contract
-  and prices, never rebased). **Pre-open review** (`/preopen-review`) is the
-  outcome-blind review of the annotations: the overnight chart to the cutoff with
-  the three lines, every field with the numbers behind it, a verdict and a note per
-  field (`journal.annotation_review_*`).
+  and prices, never rebased). The outcome-blind review of the annotations
+  (`journal.annotation_review_*`: sets preopen_review_v1 and v2, 425 verdicts, all
+  "agree" from a form that preselected it) had its own page until 2026-10-04.
 
 ```bash
 python -m database.events                                   # the calendar (also run by the collector)
@@ -561,9 +600,9 @@ the Analogues page has it under "P1 pre-open record".
 | 15-19 structure, trends, Higher-Timeframe Bias | structure annotation (rules now, Claude later); HTB-v1 | done |
 | 20-22 MA fields | 2m TradingView lines + the rules convention | done |
 | 23-24 Premarket Pattern, Chop Score | outcome-blind annotation | done |
-| 25-36 predictions, probabilities, first level, confidence | the forecast | stage 3 |
-| 37-41 analogue count, relation, dates, scores, mean | matcher `nq_match_p1_v1`; the Notion relation is not written (no export) | done, relation unavailable |
-| 42-45 targets | the forecast | stage 3 |
+| 25-36 predictions, probabilities, first level, confidence | the forecast run (`nq_baseline_p1_v1`), read by its run id; Forecast Confidence null (no convention registered) | done (historical replay) |
+| 37-41 analogue count, relation, dates, scores, mean | matcher `nq_match_p1_v2`; the Notion relation is not written (no export) | done, relation unavailable |
+| 42-45 targets | the run's reference targets: frozen candidates nearest above / below the cutoff price | done (historical replay) |
 | 46-47 Event Risk, Event Notes | EV-v1 | done |
 
 The database names the counterparts by what they are - `references.cutoff_price`,
@@ -571,13 +610,82 @@ The database names the counterparts by what they are - `references.cutoff_price`
 Notion export is not built; it would verify the live schema first (the read-only
 copy is [contracts/weekday_trades_schema.json](../contracts/weekday_trades_schema.json)).
 
+## Stage 3: deterministic forecasts (guideline revision 2)
+
+The first forecasting system is deterministic: no LLM computes or chooses anything.
+[forecaster/forecast_service.py](../forecaster/forecast_service.py) follows the
+guideline's interface - `load_snapshot`, `load_annotation`, `load_analogue_set` by
+explicit ids, `freeze_forecast_evidence`, `baseline_forecast`, `validate_forecast`,
+then the stored run.
+
+- **Baseline `nq_baseline_p1_v1`:** per P1 target (opening bias, first move, opening
+  type, 15-minute direction, session type, close direction, first level) the
+  matcher's smoothed baseline (count + 5 x prior) / (n + 5), recomputed exactly
+  from the analogue set's frozen outcome revisions and prior manifest and required
+  to equal the set's stored summary. The class is the most probable one; an exact
+  tie is `ambiguous_prediction`, never a neutral class; analogues without a label
+  and only the prior give `prior_only`; no prior label gives unavailable. The
+  estimate is conditional on classifiable outcomes - the analogues and prior
+  sessions without a label are stored beside each distribution. A standard-session
+  target is unavailable on an early close, and the first level whenever one of the
+  session's frozen candidates is (its realised label would be unavailable too).
+  P1's Bullish / Bearish / Choppy Probability are the 15-minute direction
+  distribution (Choppy = the neutral band), stored as exact fractions, shown as
+  percentages. The expected first-level price and the four reference targets
+  (the frozen candidates nearest above and below the cutoff price, coincident ones
+  named by precedence) are resolved in code - reference targets, not forecasts that
+  a price is reached. Forecast Confidence stays null: no evidence-quality
+  convention is registered (yours to define).
+- **Validation:** the evidence ids must belong together - the annotation of that
+  snapshot, the analogue set of that annotation under its protocol, label version
+  and matcher, the profile's snapshot version and candidate universe, every
+  analogue and prior session earlier, a live run only on a live capture -
+  otherwise the run is rejected and nothing is stored. The forecast must fit its
+  own contract (vocabularies, distributions over exactly the classes, summing to
+  1, the class the most probable).
+- **Ledger (migration 0014):** `journal.forecast_runs` keeps one row per attempt -
+  issued, unavailable (a contaminated annotation, no analogue set), failed, invalid
+  or late - with its ids, versions, code revision, generation times and the
+  evidence digest; `journal.forecast_evidence` the frozen evidence;
+  `journal.forecast_predictions` each target's class, distribution and
+  denominators, checked by the database against the label version's vocabulary;
+  `journal.forecast_run_events` the acknowledgement. All append-only. The database
+  checks that the ids belong together, stamps issued_at with its own clock, takes a
+  live run's deadline from the registered issue policy (09:29:50 ET on the session
+  date) and turns a later insertion into `late` - no client timestamp can change
+  either. A timely live forecast is issued and acknowledged by the deadline.
+- **Idempotency and revisions:** a run's key covers the session, profile, mode,
+  evidence ids and versions; running again returns the stored run. A new analogue
+  set (an outcome revision anywhere in the prior or the analogues) is new evidence:
+  a new run that names the one it supersedes, whose predictions and evidence never
+  change. A failed or invalid attempt is kept under its own key, so it never blocks
+  the official run.
+- **Automation:** catch-up (the collector's journal step) issues a historical-replay
+  run for every annotated snapshot after matching - research on reconstructed
+  evidence, never counted as a timely live forecast.
+- **Display:** `p1_record` fills fields 25-36 and 42-45 from one stored run, and
+  refuses a run issued on other evidence than the annotation and set shown. The
+  **Forecast** page (`/forecast`, `/forecast?run=<id>`) shows a run by its id with its
+  provenance, the chart drawn from the snapshot's own frozen 2m buckets and levels
+  (never the bars table), per-target distributions with their denominators, the
+  47-field record, and - only when asked - the realised outcome beside it (a view,
+  not a score).
+
 ## Not built yet
 
-- Running the Claude structure annotation (needs `ANTHROPIC_API_KEY`), and your
-  verdicts on the pre-open review set.
-
+- **Live capture (3D):** a scheduled pre-open job with receipt provenance for bars
+  and events, a bar-freshness policy and restart recovery. It needs a real-time
+  feed again; until then the live issue policy and the database deadline gate are
+  built and tested, but no live forecast can be issued.
+- **Stage 4:** registered experiment manifests, the official-run rule, log loss and
+  Brier scores, paired comparisons (arms A prior, B rules + matcher, C restricted
+  LLM), reliability.
+- **Optional restricted LLM (sequence item 6):** a new protocol owning only
+  Overnight Structure and Premarket Pattern, with date-blinded requests; running
+  any Claude protocol needs `ANTHROPIC_API_KEY`.
+- **Forecast Confidence:** a registered evidence-quality convention (your decision).
+- **Review:** the review pages were removed (2026-10-04), so the guideline's human
+  review (1E, 2A) has no form; the stored verdicts came from a form that preselected
+  "agree" and are no quality benchmark.
 - The operational profile (09:27) is registered but not caught up automatically;
   run `backfill --profile operational_0927` when live runs need it.
-- Live capture with receipt provenance, the 09:29:50 deadline and the
-  inference-attempt log (needs a real-time feed again; stage 3).
-- Scoring predictions against outcomes (nothing predicts yet).

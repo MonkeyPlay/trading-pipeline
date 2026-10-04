@@ -118,12 +118,15 @@ python -m database.migrate_from_sqlite --sqlite data/trading_pipeline.db
 python -m dashboard.app
 ```
 
-One page:
+Pages:
 
-- **Analogues** (`/analogues`, [dashboard/views/analogues.py](dashboard/views/analogues.py)) and
-  **Pre-open review** (`/preopen-review`) — a session's structural analogues side by side
-  (outcomes hidden until asked for) and the outcome-blind review of the pre-open annotations;
-  see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
+- **Analogues** (`/analogues`, [dashboard/views/analogues.py](dashboard/views/analogues.py)) — a
+  session's structural analogues side by side (outcomes hidden until asked for); see
+  [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
+- **Forecast** (`/forecast`, `/forecast?run=<id>`, [dashboard/views/forecast.py](dashboard/views/forecast.py))
+  — one stored baseline forecast run, by its id: provenance, the chart drawn from the snapshot's
+  frozen bars, per-target distributions with their denominators, P1's 47 fields, and the realised
+  outcome only when asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
   around the first hour. Three selectors, in order: the **session day** (searchable, newest
   first), the **instrument** with bars that day (ES, NQ, ...), and the **contract** holding it
@@ -166,8 +169,9 @@ With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`, th
 the NQ prompt-v2 journal up to date: it reloads the economic calendar, fetches the material
 Nasdaq-100 earnings releases from SEC EDGAR (set `SEC_USER_AGENT` to "name e-mail"), and
 stores a snapshot, pre-open structure annotation and outcome for every final session it
-does not hold yet ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal`
-skips that; a `--symbol` subset or a pinned `--expiry` skips it too.
+does not hold yet, then the analogue sets and the historical-replay baseline forecasts, each
+once ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal` skips that; a
+`--symbol` subset or a pinned `--expiry` skips it too.
 
 **Futures follow their front contract.** Each future has a roll rule in `config.py`
 (equity indices: the quarterly contract, rolling 8 days before expiry). The collector asks
@@ -209,9 +213,8 @@ trailing-revision window.
 
 ### Both together
 
-[scripts/run_pipeline.sh](scripts/run_pipeline.sh) starts the real-time streamer (unless one
-is already running) and runs the collector. It logs to `logs/pipeline_run.log`. It is meant
-for cron, shortly before the 09:30 ET open:
+[scripts/run_pipeline.sh](scripts/run_pipeline.sh) runs the collector (and with it the journal
+step). It logs to `logs/pipeline_run.log`. It is meant for cron:
 
 ```cron
 15 9 * * 1-5  /path/to/trading-pipeline/scripts/run_pipeline.sh
@@ -224,21 +227,12 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
-**A 09:15 run has not seen the last pre-open minutes**, and re-downloading days cannot land
-them by 09:30 for ten instruments, so a **real-time streamer** keeps one IB keep-up-to-date 1-minute stream per
-instrument open and stores each minute the moment it is final, with the time it was
-received:
-
-```cron
-0  9 * * 1-5  cd /path/to/trading-pipeline && .venv/bin/python -m collector.live_stream >> logs/live_stream.log 2>&1
-```
-
-The streamer ([collector/live_stream.py](collector/live_stream.py)) runs until `--until`
-(09:31 ET by default), re-reads the 09:28 minute of every instrument right after it ends
-(`--confirm-at`) so it is IB's own historical bar, and uses client id `IB_CLIENT_ID + 1`
-so the historical collector can run beside it. Each bar goes to `bars` (as not yet
-completed, so the regular collector re-downloads the day later) and, append-only, to
-`bar_receipts` with its `received_at` - a per-bar record of what was known when.
+**There is no live capture.** The real-time streamer and its `bar_receipts` were removed
+(commit a428bab, migration 0008), so every journal snapshot is a historical reconstruction
+and every forecast a historical replay - research on evidence read after the fact, never a
+timely live forecast. The live issue policy and the database's 09:29:50 ET deadline gate
+exist and are tested; a scheduled pre-open capture job with receipt provenance (guideline
+stage 3D) needs a real-time feed again and is not built.
 
 It collects every symbol in `SYMBOLS`, and hands the whole list to the collector in one
 process so its rate-limit pacing stays accurate.
@@ -254,11 +248,11 @@ Settings come from environment variables or a local `.env`, read by
 | `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
 | `SYMBOLS` | `ES,NQ,RTY` | Target futures, collected and shown in the Session Explorer, in order |
 | `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,2YY` | Collected as intermarket context only |
-| `EXPIRY` | `202612` | Fallback contract month where no roll assignment applies (streamer, mock data); the collector follows each roll rule regardless |
+| `EXPIRY` | `202612` | Fallback contract month where no roll assignment applies (mock data); the collector follows each roll rule regardless |
 | `<SYMBOL>_EXPIRY` | — | Pins one future everywhere, collector included, e.g. `RTY_EXPIRY=202612` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
 | `IB_PORT` | `4002` | `4002` Gateway paper · `4001` Gateway live · `7497` TWS paper · `7496` TWS live |
-| `IB_CLIENT_ID` | `1` | IB socket client id (the real-time streamer uses this + 1) |
+| `IB_CLIENT_ID` | `1` | IB socket client id |
 | `ROLL_WARMUP_SESSIONS` | `7` | Trading days of a future's next contract stored before it becomes front |
 | `DASHBOARD_HOST` | `127.0.0.1` | Interface the dashboard binds to |
 | `DASHBOARD_PORT` | `8080` | Port the dashboard listens on |
@@ -370,7 +364,7 @@ name contains `test`; they reset it).
 
 | Path | What lives there |
 |---|---|
-| [collector/](collector/) | IB API client, coverage planner, request pacing, real-time bar streamer |
+| [collector/](collector/) | IB API client, coverage planner, request pacing, contract rolls |
 | [database/](database/) | Connection, queries, migrations, backfill/repair tools, economic calendar loader |
 | [features/](features/) | Trading calendar, session/timezone classification, VWAP and the chart's reference levels |
 | [dashboard/](dashboard/) | NiceGUI app, the Session Explorer, and the Lightweight Charts component |
@@ -387,16 +381,15 @@ is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `active_contracts` (the contract that stood for each symbol per day),
-`asset_sources` (the logical-asset source map, versioned), `bar_receipts` (every
-real-time bar as received, with `received_at`; append-only), `economic_events` /
-`economic_event_coverage` (an optional event calendar), and the v1 forecast tables
-`feature_snapshots`, `predictions`, `analogue_matches`, `outcomes` (kept, no longer
-written).
+`asset_sources` (the logical-asset source map, versioned), and `economic_events` /
+`economic_event_coverage` (an optional event calendar). Migration 0008 dropped the earlier
+forecasting records (the v1 tables, the `forecast` schema) and `bar_receipts`.
 
-The `forecast` schema (`0004`) holds the records of the removed v2 forecast pipeline:
-`feature_snapshots`, `forecast_runs`, `predictions`, `realised_outcomes`,
-`outcome_metrics`, their version registries and `source_revisions`. Nothing writes them
-now; they are append-only - the database rejects UPDATE, DELETE and TRUNCATE.
+The `journal` schema (`0009`-`0014`) holds the NQ prompt-v2 records
+([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): the definition registry, evidence
+snapshots, revisioned outcomes, review sets, structure annotations, analogue sets, the
+inference request ledger and the forecast runs with their evidence and predictions. All of it
+is append-only - the database rejects UPDATE, DELETE and TRUNCATE.
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
 ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll

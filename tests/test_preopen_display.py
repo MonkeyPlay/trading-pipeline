@@ -25,7 +25,7 @@ def test_the_47_fields_in_p1s_order_with_their_owners():
     assert r["14-Day Daily ATR"][0] == "300.50" and r["2-Min ATR at 09:29"][0] == "12.35"
     assert r["Overnight Structure"][0] == "Uptrend" and r["Chop Score"][0] == "0"
     for prop in P1_FIELDS[24:36] + P1_FIELDS[41:45]:
-        assert r[prop] == (UNAVAILABLE, "no forecast produced yet (stage 3)")
+        assert r[prop] == (UNAVAILABLE, "no forecast run given")
     assert r["Historical Analogue Count"] == (UNAVAILABLE, "the journal was not searched")
 
 
@@ -37,7 +37,7 @@ def test_a_0927_profile_has_no_two_minute_atr_at_0929():
 
 
 def test_analogue_fields_follow_p1s_formats():
-    aset = {"pool_size": 12, "mean_similarity": "86.666667",
+    aset = {"pool_size": 12, "mean_similarity": "86.666667", "matcher_version": "nq_match_p1_v2",
             "members": [{"session_date": "2026-06-08", "similarity": "93.750000"},
                         {"session_date": "2026-05-29", "similarity": "79.583333"}]}
     _, r, _ = record(snapshot(UP, T=4), aset)
@@ -46,7 +46,8 @@ def test_analogue_fields_follow_p1s_formats():
     assert r["Analogue Session Similarity Scores"][0] == "2026-06-08 — 94%; 2026-05-29 — 80%"
     assert r["Analogue Similarity Score"][0] == "87%"
     assert r["Analogue Sessions Relation"][0] == UNAVAILABLE                 # no Notion write is claimed
-    _, none, _ = record(snapshot(UP, T=4), {"pool_size": 3, "mean_similarity": None, "members": []})
+    _, none, _ = record(snapshot(UP, T=4), {"pool_size": 3, "mean_similarity": None, "members": [],
+                                            "matcher_version": "nq_match_p1_v2"})
     assert none["Historical Analogue Count"][0] == "0" and none["Analogue Similarity Score"][0] == UNAVAILABLE
 
 

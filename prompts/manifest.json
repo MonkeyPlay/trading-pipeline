@@ -75,6 +75,17 @@
       "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
       "bytes": 9693,
       "provenance": "Generated 2026-10-04; the registered protocol nq_structure_llm_v2 records the same hash, so an edit needs a new protocol version."
+    },
+    {
+      "id": "nq_structure_llm_v3",
+      "path": "prompts/runtime/structure_annotation_v2.md",
+      "title": "Structure annotation - runtime prompt",
+      "derived_from": [
+        "nq_structure_llm_v2's prompt, unchanged (v3 changes the validation and adds the request ledger)"
+      ],
+      "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
+      "bytes": 9693,
+      "provenance": "The same file as nq_structure_llm_v2; nq_structure_llm_v3 records the same hash, so an edit needs a new protocol version."
     }
   ]
 }

@@ -1,5 +1,5 @@
 # tests/test_structure_llm.py
-"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v2) - without the API."""
+"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v3) - without the API."""
 
 import json
 
@@ -18,7 +18,8 @@ def answer_from_rules(snap):
     for name in pre.LLM_FIELDS:
         f = a["fields"][name]
         fields[name] = {"value": f["value"], "status": "classified" if f["value"] is not None else "unavailable",
-                        "reason": f["reason"], "evidence_ids": f["evidence_ids"], "basis": f["basis"] or "-"}
+                        "reason": None if f["value"] is not None else f["reason"],
+                        "evidence_ids": f["evidence_ids"], "basis": f["basis"] or "-"}
     return {"integrity_status": "ok", "contradictions": [], "fields": fields}
 
 
@@ -48,7 +49,7 @@ def test_validation():
     assert "does not fit" in llm.validate(bad, ids)
     bad = json.loads(json.dumps(good))
     bad["fields"]["Premarket Pattern"]["value"] = "Breakout"
-    assert "not an allowed value" in llm.validate(bad, ids)
+    assert "is not one of" in llm.validate(bad, ids)
 
 
 def test_an_annotation_keeps_the_applications_event_risk_and_price_location():
@@ -58,3 +59,31 @@ def test_an_annotation_keeps_the_applications_event_risk_and_price_location():
     assert a["annotator"] == "llm" and a["protocol_version"] == pre.LLM_PROTOCOL_VERSION
     assert a["fields"]["Event Risk"] == rules["fields"]["Event Risk"] and a["price_location"] == rules["price_location"]
     assert a["fields"]["Overnight Structure"]["value"] == "V-reversal" and list(a["fields"]) == list(pre.FIELDS)
+
+
+def test_validation_is_strict_where_the_schema_and_the_prompt_are():
+    snap = snapshot(V, T=4)
+    _, _, ids = llm.build_request(snap)
+    good = answer_from_rules(snap)
+
+    def problem(change):
+        bad = json.loads(json.dumps(good))
+        change(bad)
+        return llm.validate(bad, ids)
+
+    def field(**kw):
+        return lambda a: a["fields"]["Overnight Structure"].update(**kw)
+
+    assert "classified without evidence ids" in problem(field(evidence_ids=[]))
+    assert problem(field(status="maybe")).startswith("schema: fields/Overnight Structure/status")
+    assert problem(lambda a: a["fields"]["Chop Score"].update(value=True)).startswith("schema: fields/Chop Score")
+    assert problem(lambda a: a["fields"]["Chop Score"].update(value="1")).startswith("schema: fields/Chop Score")
+    assert problem(field(extra="x")).startswith("schema: fields/Overnight Structure")          # unknown key
+    assert problem(lambda a: a.update(integrity_status="fine")).startswith("schema: integrity_status")
+    assert problem(lambda a: a.pop("contradictions")).startswith("schema: (answer)")
+    assert "classified with a reason" in problem(field(reason="because"))
+    assert "without a basis" in problem(field(basis="  "))
+    assert "unavailable without a reason" in problem(field(value=None, status="unavailable", reason=" "))
+    assert llm.validate(["not", "an", "object"], ids).startswith("schema: (answer)")
+    # an unavailable field may cite nothing
+    assert problem(field(value=None, status="unavailable", reason="too few bars", evidence_ids=[])) is None

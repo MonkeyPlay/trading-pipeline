@@ -4,7 +4,7 @@ P1's 47-field pre-open record (section 9) - the display / export adapter of the
 guideline's Appendix B, kept apart from P2's 40-field outcome record
 (forecaster/outcome_display.py), which never overwrites it.
 
-``p1_record(snapshot, annotation, analogue_set)`` returns ``(provenance, rows)``:
+``p1_record(snapshot, annotation, analogue_set, forecast=None)`` returns ``(provenance, rows)``:
 one provenance line (versions, origin, target date, the actual cutoff and its
 price, integrity) and ``[(property, value, basis), ...]`` in P1's order. Each field
 comes from the component Appendix B makes its owner:
@@ -13,7 +13,8 @@ comes from the component Appendix B makes its owner:
          09:29 is never the cutoff price renamed; 2-Min ATR at 09:29 is shown only
          for a profile whose cutoff is 09:29, else unavailable under that name
   15-24  the structure annotation (one protocol; P1's vocabularies)
-  25-36, 42-45  the forecast - not produced yet (stage 3), shown unavailable
+  25-36, 42-45  the forecast: one stored run, read by its run id
+                 (forecaster/forecast_display.py); without a run, unavailable
   37-41  the analogue set: count (0 when searched with none qualifying, unavailable
          when not searched), dates, individual scores, their arithmetic mean
   46-47  Event Risk and Event Notes from the annotation (EV-v1)
@@ -26,10 +27,9 @@ percentages (a Notion export would write decimal fractions), analogue dates as
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
-from contracts import nq_preopen as pre
 
 UNAVAILABLE = "Unavailable"
-NO_FORECAST = "no forecast produced yet (stage 3)"
+NO_FORECAST = "no forecast run given"
 
 P1_FIELDS = [
     "Day", "Weekday", "Contract", "Previous RTH High", "Previous RTH Low", "Previous RTH Close", "Overnight Open",
@@ -67,8 +67,14 @@ def _day_label(d: str) -> str:
 
 
 def p1_record(snapshot: Dict[str, Any], annotation: Optional[Dict[str, Any]],
-              analogue_set: Optional[Dict[str, Any]]) -> Tuple[str, List[Tuple[str, str, str]]]:
-    """``(provenance, [(property, value, basis), ...])`` for one stored snapshot (see the module docstring)."""
+              analogue_set: Optional[Dict[str, Any]],
+              forecast: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Tuple[str, str, str]]]:
+    """``(provenance, [(property, value, basis), ...])`` for one stored snapshot (see the module docstring); with a
+    forecast run, its annotation and analogue set must be the ones given."""
+    if forecast is not None and (forecast["snapshot_id"] != snapshot["snapshot_id"]
+                                 or forecast["annotation_id"] != (annotation or {}).get("annotation_id")
+                                 or forecast["analogue_set_id"] != (analogue_set or {}).get("set_id")):
+        raise ValueError(f"forecast run {forecast['run_id']} was issued on other evidence")
     p = snapshot["payload"]
     ident, cut, refs = p["identity"], p["cutoff"], p.get("references") or {}
     cp = refs.get("cutoff_price") or {}
@@ -78,7 +84,10 @@ def p1_record(snapshot: Dict[str, Any], annotation: Optional[Dict[str, Any]],
                   f"({cut['data_mode'].replace('_', ' ')}, {cut['pit_availability_status'].replace('_', ' ')}), "
                   f"actual cutoff {cut['cutoff_et']} ET, {cutoff_price}; annotation "
                   f"{annotation['protocol_version'] if annotation else 'none'}; analogues "
-                  f"{pre.MATCHER_VERSION if analogue_set else 'not searched'}; no forecast")
+                  f"{analogue_set['matcher_version'] if analogue_set else 'not searched'}; "
+                  + (f"forecast run {forecast['run_id']} ({forecast['lifecycle_status']}, "
+                     f"{forecast['algorithm_version']}, {forecast['mode'].replace('_', ' ')})" if forecast
+                     else "no forecast"))
     if annotation is not None and annotation["integrity_status"] != "ok":
         return provenance + " - CONTAMINATED: no record (P1 stop rule)", []
 
@@ -110,15 +119,19 @@ def p1_record(snapshot: Dict[str, Any], annotation: Optional[Dict[str, Any]],
             out[prop] = (UNAVAILABLE, f["reason"] or f["status"])
         else:
             out[prop] = (str(f["value"]), f["basis"])
-    for prop in _FORECAST:
-        out[prop] = (UNAVAILABLE, NO_FORECAST)
+    if forecast is None:
+        for prop in _FORECAST:
+            out[prop] = (UNAVAILABLE, NO_FORECAST)
+    else:
+        from forecaster.forecast_display import forecast_rows
+        out.update(forecast_rows(forecast))
 
     if analogue_set is None:
         for prop in P1_FIELDS[36:41]:
             out[prop] = (UNAVAILABLE, "the journal was not searched")
     else:
         members = analogue_set["members"]
-        basis = f"{pre.MATCHER_VERSION}: {analogue_set['pool_size']} earlier session(s) scored"
+        basis = f"{analogue_set['matcher_version']}: {analogue_set['pool_size']} earlier session(s) scored"
         out["Historical Analogue Count"] = (str(len(members)), basis)
         out["Analogue Sessions Relation"] = (UNAVAILABLE, "no Notion export: the relation is not written; dates "
                                                           "below")

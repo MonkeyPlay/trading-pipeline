@@ -260,7 +260,10 @@ ANNOTATION_SCHEMA = {
 # Structural analogue matching (guideline stage 2B / 2C)
 # --------------------------------------------------------------------------
 
-MATCHER_VERSION = "nq_match_p1_v1"
+# nq_match_p1_v1 (registered 2026-10-04) let a session with several records in the pool count
+# more than once, and recorded only the analogues' outcome revisions, not the prior's; v2
+# (guideline revision 2) scores each session once and records the prior manifest.
+MATCHER_VERSION = "nq_match_p1_v2"
 
 # P1 section 7, exactly: feature -> weight in percent (exact fractions, they sum to 100).
 # "price:<level>" is the cutoff price Above / At / Below that session's own level.
@@ -301,6 +304,10 @@ MATCHER = {
     "score": "similarity = 100 x weighted matches / comparable_weight",
     "pool": "earlier NQ sessions (never the target date or later) of the same snapshot version whose annotation "
             "has the same protocol and integrity ok; fixed before any outcome is attached",
+    "unique_sessions": "each session counts once: a session holding more than one eligible record (snapshot or "
+                       "annotation) is left out of the pool and the prior entirely (excluded as duplicate_session), "
+                       "never picked from - its identity is a data error, and keeping any one record would let a "
+                       "duplicate choose itself",
     "selection": "the 5 highest similarities; ties by higher comparable_weight, then the more recent session, "
                  "then the snapshot id; no minimum similarity",
     "outcomes": {
@@ -311,6 +318,19 @@ MATCHER = {
         "mean_similarity": "unweighted mean of the selected similarities",
         "smoothed": "(class_count + 5 x prior) / (eligible_count + 5), the prior from every earlier session's "
                     "label under the same label version; no analogue label: prior only, said so",
+        "prior_eligibility": "every snapshot of the profile's version, annotated or not (an annotation is a pool "
+                             "requirement, not a prior one): an earlier session of the same symbol, held once, "
+                             "with an outcome known as of the target; every excluded session is counted under its "
+                             "reason (other_symbol, not_earlier, duplicate_session, no_outcome_known); per target, "
+                             "a null label leaves that session out of that target's prior only (counted as "
+                             "prior_without_label)",
+        "known_as_of": "a live capture uses, for every earlier session and analogue, the latest outcome revision "
+                       "computed by its own cutoff; a historical reconstruction uses the latest revision and says "
+                       "so (outcome_summary.prior.known_as_of)",
+        "prior_manifest": "the prior's sessions with their dates and outcome revisions, archived with the set "
+                          "(outcome_summary.prior.manifest) and hashed as prior_digest, part of the set's identity "
+                          "beside the analogues' outcome digest - a revised outcome of any earlier session makes a "
+                          "new set",
     },
 }
 
@@ -324,8 +344,11 @@ def matcher_record() -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 # nq_structure_llm_v1 (registered 2026-10-04, never run) had Claude judge Higher-Timeframe
-# Bias from the overnight bars; v2 takes it from HTB-v1 like the rule-based protocol.
-LLM_PROTOCOL_VERSION = "nq_structure_llm_v2"
+# Bias from the overnight bars; v2 takes it from HTB-v1 like the rule-based protocol. v3
+# (guideline revision 2, the same prompt and schema) validates the answer locally against
+# the full JSON schema and stricter field rules, and accounts for every request in the
+# ledger (migration 0013); v2 was registered, never run.
+LLM_PROTOCOL_VERSION = "nq_structure_llm_v3"
 LLM_MODEL = "claude-opus-5-5"
 LLM_EFFORT = "high"
 LLM_MAX_TOKENS = 16000
@@ -371,8 +394,22 @@ def llm_record() -> Dict[str, Any]:
                                  "price_location": "P1 section 7, At within one point"},
         "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
                     "the three moving averages, and the confirmed 2/2 swing points on 5m bars (ids inside the "
-                    "bundle)",
-        "validation": "values in the vocabularies, null exactly when unavailable (with a reason), every evidence "
-                      "id inside the bundle; an answer from any other model than LLM_MODEL (a server-side "
-                      "fallback) is kept as an attempt, not as an annotation of this protocol",
+                    "bundle); from v3 each reference with its status (an unavailable one with its reason and no "
+                    "value), each bar with its complete flag, and the snapshot's completeness (overnight minutes, "
+                    "ATRs, Long MA history)",
+        "validation": "locally, before anything is stored: the whole answer against output_schema (JSON Schema "
+                      "2020-12: types, enums, required and unknown keys; a boolean is not a Chop Score), then "
+                      "status classified exactly when there is a value; classified: reason null, at least one "
+                      "evidence id, a non-empty basis; unavailable: a non-empty reason; every evidence id inside "
+                      "the bundle. An answer from any other model than LLM_MODEL (a server-side fallback) is kept "
+                      "as an attempt, not as an annotation of this protocol",
+        "accounting": "every request is recorded in journal.inference_requests before it is sent - the exact "
+                      "canonical request, its prompt, schema and evidence hashes and the code revision - and every "
+                      "batch id as soon as it is known (the request id is the batch custom_id); an answer is "
+                      "validated against the archived request, never a rebuilt one; a request without an attempt "
+                      "is unresolved - a recorded batch is collected later, never sent again; a lost live request "
+                      "is closed by hand as an error attempt; at most one attempt per request; an annotation and "
+                      "its attempt are stored in one transaction; an answer that is not JSON keeps its raw text",
+        "supersedes": "nq_structure_llm_v2: the same prompt and schema, the evidence without completeness "
+                      "metadata, validated less strictly and without the request ledger",
     })
