@@ -40,7 +40,7 @@ def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs
     for m in range(MINUTES):
         o, c = price(m), price(m + 1)
         bars.append((ON_START + timedelta(minutes=m), o, max(o, c) + 0.25, min(o, c) - 0.25, c, 10))
-    rows = lambda n: [[iso(s), o, h, low, c, v, k] for s, o, h, low, c, v, k in aggregate(bars, n, CUTOFF)]
+    rows = lambda n: [[iso(s), o, h, low, c, v, k, ok] for s, o, h, low, c, v, k, ok in aggregate(bars, n, CUTOFF)]
     close = bars[-1][4]
     references = {"cutoff_price": {"value": str(close), "status": "valid"}}
     for name, value in (refs or {}).items():

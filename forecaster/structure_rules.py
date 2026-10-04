@@ -1,6 +1,6 @@
 # forecaster/structure_rules.py
 """
-Rule-based pre-open structure annotation (protocol nq_structure_rules_v3,
+Rule-based pre-open structure annotation (protocol nq_structure_rules_v4,
 contracts/nq_preopen.py): the stand-in for the Claude structure annotation of
 Appendix A (A1) until the API is in place. It reads one frozen snapshot only and
 returns contracts.nq_preopen.ANNOTATION_SCHEMA, the shape the Claude annotator
@@ -13,7 +13,9 @@ basis with the numbers. The numeric layer (moving averages on 2m bars, 2/2 swing
 points on 5m bars, window statistics) is kept in ``measurements`` so a later
 annotator can be given the same evidence.
 
-The thresholds are a trial convention (RULES), not P1's text.
+The thresholds are a trial convention (RULES), not P1's text. Every field needs
+its whole window (v4): an unbroken run of complete buckets - every minute present
+once - or it is unavailable, never classified from what is left.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from contracts import nq_preopen as pre
-from contracts.nq_prompt_v2 import ON_MIN_COVERAGE, canonical_json
+from contracts.nq_prompt_v2 import canonical_json
 from features import calendar as cal
 from features.calculations import calculate_moving_averages
 from features.nq_evidence import EARNINGS_SOURCE
@@ -51,6 +53,7 @@ class Bar:
     h: float
     l: float  # noqa: E741
     c: float
+    complete: bool = True       # every minute of the bucket present exactly once
 
     @property
     def end(self) -> datetime:
@@ -75,9 +78,32 @@ def _ts(value: str) -> datetime:
 
 
 def _bars(payload: Dict[str, Any], tf: str) -> List[Bar]:
+    """The ``tf`` buckets of the snapshot; ``complete`` from the row's flag (nq_conv_v5) or, on older rows without
+    it, from the count of 1m bars (which cannot see a duplicate minute)."""
     rows = (payload.get("bars") or {}).get(tf) or []
-    return sorted((Bar(_ts(r[0]), MINUTES[tf], float(r[1]), float(r[2]), float(r[3]), float(r[4])) for r in rows),
+    return sorted((Bar(_ts(r[0]), MINUTES[tf], float(r[1]), float(r[2]), float(r[3]), float(r[4]),
+                       bool(r[7]) if len(r) > 7 else len(r) > 6 and r[6] == MINUTES[tf]) for r in rows),
                   key=lambda b: b.start)
+
+
+def last_start(cutoff: datetime, tf: str) -> datetime:
+    """The start of the last ``tf`` bucket that ends by the cutoff."""
+    n = MINUTES[tf]
+    epoch = int(cutoff.timestamp()) // 60 - n
+    return datetime.fromtimestamp((epoch - epoch % n) * 60, _UTC)
+
+
+def unbroken(bars: Sequence[Bar], first: datetime, last: datetime, tf: str) -> Optional[str]:
+    """Why the ``tf`` buckets of [first, last] are not all present and complete (None: they are)."""
+    step = timedelta(minutes=MINUTES[tf])
+    run = {b.start: b for b in bars if first <= b.start <= last}
+    expected = int((last - first) / step) + 1
+    if len(run) < expected:
+        gone = next(first + i * step for i in range(expected) if first + i * step not in run)
+        return (f"{expected - len(run)} of {expected} {tf} buckets from {first.strftime('%H:%MZ')} missing "
+                f"(first {gone.strftime('%H:%MZ')})")
+    bad = [b.start.strftime("%H:%MZ") for b in run.values() if not b.complete]
+    return f"incomplete {tf} bucket(s) {', '.join(bad[:3])}" if bad else None
 
 
 def _num(value) -> Optional[float]:
@@ -145,9 +171,11 @@ def _stats(bars: Sequence[Bar], close: float) -> Dict[str, float]:
 # Fields
 # --------------------------------------------------------------------------
 
-def _overnight_structure(on: List[Bar], sw: List[Swing], close: float, coverage: Optional[float]):
-    if coverage is None or coverage < float(ON_MIN_COVERAGE) or len(on) < 12:
-        return _missing(f"overnight coverage {coverage} under {ON_MIN_COVERAGE} or under 12 5m bars"), {}
+def _overnight_structure(on: List[Bar], sw: List[Swing], close: float, broken: Optional[str]):
+    if broken:
+        return _missing(f"the overnight window is incomplete: {broken}"), {}
+    if len(on) < 12:
+        return _missing(f"{len(on)} 5m bars: under 12"), {}
     st = _stats(on, close)
     H, L, R = st["high"], st["low"], st["range"]
     ids = [on[0].id]
@@ -216,18 +244,24 @@ def _overnight_structure(on: List[Bar], sw: List[Swing], close: float, coverage:
     return _field("Mixed", evidence=ids, basis=basis + f", {max(len(zones) - 1, 0)} alternations: no rule fits"), st
 
 
+def _swing_window(bars5: List[Bar], cutoff: datetime) -> Optional[str]:
+    """The 5m buckets of the last three hours, with the two before them that a swing in the window is judged
+    against: all present and complete (None), or why not."""
+    first = cutoff - timedelta(minutes=180)
+    first = first + timedelta(minutes=-first.minute % 5) - timedelta(minutes=5 * 2)
+    return unbroken(bars5, first, last_start(cutoff, "5m"), "5m")
+
+
 def _premarket_pattern(bars5: List[Bar], sw: List[Swing], close: float, cutoff: datetime, T: Optional[int],
                        on_value: Optional[str]):
     if T is None:
         return _missing("T unavailable")
+    broken = _swing_window(bars5, cutoff)
+    if broken:
+        return _missing(f"the final three hours are incomplete: {broken}")
     hour_start, ctx_start = cutoff - timedelta(minutes=60), cutoff - timedelta(minutes=180)
     hour = [b for b in bars5 if b.start >= hour_start]
     ctx = [b for b in bars5 if ctx_start <= b.start < hour_start]
-    # 5m buckets inside the hour that are complete by the cutoff (11 at 09:29: 08:30 to 09:20)
-    expected = len([m for m in range(60) if (hour_start + timedelta(minutes=m)).minute % 5 == 0
-                    and hour_start + timedelta(minutes=m + 5) <= cutoff])
-    if len(hour) < 0.8 * expected or not ctx:
-        return _missing(f"{len(hour)} of {expected} 5m bars in the final hour, {len(ctx)} in the context")
     h, c = _stats(hour, close), _stats(ctx, ctx[-1].c)
     dir_hour = (1 if h["net"] > 0 else -1) if abs(h["net"]) >= 2 * T and h["efficiency"] >= 0.50 else 0
     dir_ctx = (1 if c["net"] > 0 else -1) if abs(c["net"]) >= 2 * T and c["efficiency"] >= 0.40 else 0
@@ -256,7 +290,10 @@ def _premarket_pattern(bars5: List[Bar], sw: List[Swing], close: float, cutoff: 
     return _field("Mixed", evidence=ids, basis=basis + "; no rule fits")
 
 
-def _short_term_structure(sw: List[Swing], cutoff: datetime):
+def _short_term_structure(bars5: List[Bar], sw: List[Swing], cutoff: datetime):
+    broken = _swing_window(bars5, cutoff)
+    if broken:
+        return _missing(f"the final three hours are incomplete: {broken}")
     win = [s for s in sw if s.bar.start >= cutoff - timedelta(minutes=180)]
     highs, lows = [s for s in win if s.kind == "high"], [s for s in win if s.kind == "low"]
     if len(highs) < 2 or len(lows) < 2:
@@ -271,13 +308,13 @@ def _short_term_structure(sw: List[Swing], cutoff: datetime):
     return _field("Mixed", evidence=ids, basis=basis)
 
 
-def _trend(bars: List[Bar], tf: str, n: int = 12, min_bars: int = 10):
-    if not bars:
-        return _missing(f"no complete {tf} bars")
-    window_start = bars[-1].end - timedelta(minutes=n * MINUTES[tf])
-    win = [b for b in bars if b.start >= window_start]
-    if len(win) < min_bars:
-        return _missing(f"{len(win)} of the last {n} {tf} bars present (need {min_bars})")
+def _trend(bars: List[Bar], tf: str, cutoff: datetime, n: int = 12):
+    last = last_start(cutoff, tf)
+    window_start = last - timedelta(minutes=(n - 1) * MINUTES[tf])
+    broken = unbroken(bars, window_start, last, tf)
+    if broken:
+        return _missing(f"the last {n} {tf} buckets are incomplete: {broken}")
+    win = [b for b in bars if window_start <= b.start <= last]
     st = _stats(win, win[-1].c)
     E = st["efficiency"]
     side = "bullish" if st["net"] > 0 else "bearish"
@@ -291,19 +328,18 @@ def _trend(bars: List[Bar], tf: str, n: int = 12, min_bars: int = 10):
                   basis=f"last {len(win)} {tf} bars: net {st['net']:.2f} over range {st['range']:.2f}, E {E:.2f}")
 
 
-def _ma_fields(bars2: List[Bar], close: float, cutoff: datetime, T: Optional[int]) -> Tuple[Dict[str, Any], dict]:
+def _ma_fields(bars2: List[Bar], close: float, cutoff: datetime, T: Optional[int],
+               on_start: datetime) -> Tuple[Dict[str, Any], dict]:
     out: Dict[str, Any] = {}
     win_start = cutoff - timedelta(minutes=30)
+    names = ("Price vs Long MA", "Long MA Slope", "Fast MA Alignment", "Chop Score")
+    broken = unbroken(bars2, on_start, last_start(cutoff, "2m"), "2m")
+    if broken:
+        return {k: _missing(f"the moving averages' 2m history is incomplete: {broken}") for k in names}, {}
     if len(bars2) < 116:
-        reason = f"{len(bars2)} 2m bars: too few for EMA(100)"
-        return {k: _missing(reason) for k in ("Price vs Long MA", "Long MA Slope", "Fast MA Alignment",
-                                              "Chop Score")}, {}
+        return {k: _missing(f"{len(bars2)} 2m bars: too few for EMA(100)") for k in names}, {}
     ma = moving_averages(bars2)
     idx = [i for i, b in enumerate(bars2) if b.start >= win_start]
-    if len(idx) < 12:
-        reason = f"{len(idx)} of the last 15 2m bars present"
-        return {k: _missing(reason) for k in ("Price vs Long MA", "Long MA Slope", "Fast MA Alignment",
-                                              "Chop Score")}, {}
     last = idx[-1]
     win = [bars2[i] for i in idx]
     ema, tema, trig = ([float(x) for x in ma[col]] for col in ("ema_trend", "tema", "ema_trigger"))
@@ -467,6 +503,16 @@ def event_risk(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]
             _field(notes, evidence=ids, basis=f"{pre.EVENT_RISK_VERSION} window"))
 
 
+def _overnight_gap(payload: Dict[str, Any], on: List[Bar], on_start: datetime, cutoff: datetime) -> Optional[str]:
+    """Why the overnight window [18:00, cutoff) is not complete (None: every minute once, every 5m bucket whole)."""
+    cov = (payload.get("bars") or {}).get("coverage") or {}
+    whole = cov.get("complete") if "complete" in cov else (cov.get("ratio") is not None
+                                                           and Decimal(str(cov["ratio"])) == 1)
+    if not whole:
+        return f"{cov.get('minutes', '?')} of {cov.get('expected_minutes', '?')} minutes (ratio {cov.get('ratio')})"
+    return unbroken(on, on_start, last_start(cutoff, "5m"), "5m")
+
+
 def after_cutoff(payload: Dict[str, Any], cutoff: datetime) -> List[str]:
     """Items after the cutoff that the snapshot must not hold."""
     bad = []
@@ -512,16 +558,15 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     on_start = _ts(p["schedule"]["overnight_start_at"])
     on = [b for b in bars5 if b.start >= on_start]
     sw = swings(on)
-    coverage = (p.get("bars") or {}).get("coverage", {}).get("ratio")
     fields: Dict[str, Any] = {}
-    fields["Overnight Structure"], on_stats = _overnight_structure(on, sw, close,
-                                                                   None if coverage is None else float(coverage))
+    fields["Overnight Structure"], on_stats = _overnight_structure(on, sw, close, _overnight_gap(p, on, on_start,
+                                                                                                cutoff))
     fields["Premarket Pattern"] = _premarket_pattern(on, sw, close, cutoff, T, fields["Overnight Structure"]["value"])
-    fields["Short-Term Structure"] = _short_term_structure(sw, cutoff)
-    fields["5-Minute Trend"] = _trend(on, "5m")
-    fields["15-Minute Trend"] = _trend([b for b in bars15 if b.start >= on_start], "15m")
+    fields["Short-Term Structure"] = _short_term_structure(on, sw, cutoff)
+    fields["5-Minute Trend"] = _trend(on, "5m", cutoff)
+    fields["15-Minute Trend"] = _trend([b for b in bars15 if b.start >= on_start], "15m", cutoff)
     fields["Higher-Timeframe Bias"] = higher_timeframe_bias(p)
-    ma_fields, ma_meas = _ma_fields([b for b in bars2 if b.start >= on_start], close, cutoff, T)
+    ma_fields, ma_meas = _ma_fields([b for b in bars2 if b.start >= on_start], close, cutoff, T, on_start)
     fields.update(ma_fields)
     fields["Event Risk"], fields["Event Notes"] = event_risk(p)
     fields = {name: fields[name] for name in pre.FIELDS}

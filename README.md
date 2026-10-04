@@ -2,8 +2,11 @@
 
 A local research pipeline for the **CME equity-index futures**: it collects 1-minute bars
 from Interactive Brokers into a day-partitioned TimescaleDB store and serves the sessions
-in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. No language model and
-no external API is involved.
+in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. Besides Interactive
+Brokers, two outside services are used, both by the NQ pre-open journal
+([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): SEC EDGAR, for the earnings filings behind
+Event Risk, and optionally the Claude API, for a structure annotation that runs only when
+started by hand with `ANTHROPIC_API_KEY` set. Everything else is computed locally.
 
 Ten instruments are collected out of the box:
 
@@ -276,7 +279,9 @@ size and multiplier back from IB. A non-CME or non-equity-index future would als
 session windows and holiday calendar checked, since those assume the 18:00 ET roll and the
 CME equity calendar.
 
-**No API keys are needed.** Everything is computed locally.
+**No API keys are needed** for collecting and the dashboard. The journal's earnings fetch
+asks for `SEC_USER_AGENT` ("<name> <contact e-mail>", SEC's rule for automated clients);
+the optional Claude structure annotation needs `ANTHROPIC_API_KEY`.
 
 Check what config resolves to:
 

@@ -118,6 +118,10 @@ def market():
     conn.close()
 
 
+def iso_utc(t: datetime) -> str:
+    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _expected_daily_atr(nq: pd.DataFrame, before_day: str) -> Fraction:
     """The daily ATR recomputed from the synthetic bars: RTH H / L / C, Wilder over the last 70 TRs."""
     ny = nq["bar_start_at"].dt.tz_convert("America/New_York")
@@ -141,10 +145,12 @@ def test_research_snapshot_contents(market):
     assert p["cutoff"]["last_completed_bar"] == {"bar_start_at": "2026-06-12T13:28:00Z",
                                                  "bar_end_at": "2026-06-12T13:29:00Z"}
     assert p["bars"]["1m"][-1][0] == "2026-06-12T13:28:00Z" and p["bars"]["2m"][-1][0] == "2026-06-12T13:26:00Z"
+    assert all(len(r) == 8 and r[7] is True for tf in ("2m", "5m", "15m") for r in p["bars"][tf])
+    assert p["bars"]["coverage"]["complete"] is True and p["bars"]["coverage"]["duplicates"] == 0
     refs = p["references"]
     assert {k: v["status"] for k, v in refs.items()} == {
         "overnight_open": "valid", "on_high": "valid", "on_low": "valid", "cutoff_price": "valid",
-        "price_at_0929": "not_observed", "premarket_high": "valid", "premarket_low": "valid",
+        "price_at_0929": "not_observed", "premarket_high": "valid", "premarket_low": "valid", "vwap": "valid",
         "prev_rth_high": "valid", "prev_rth_low": "valid", "prev_rth_close": "valid"}
     nq = bars[NQ_CID]
     prev_rth = nq[(nq["bar_start_at"] >= cal.session(PREV).rth_open_at)
@@ -163,6 +169,17 @@ def test_research_snapshot_contents(market):
     assert p["thresholds"]["B"] == defs.threshold_b(daily["exact"])
     assert p["thresholds"]["T"] == defs.threshold_t(p["atr"]["two_minute"]["exact"])
     assert p["atr"]["two_minute"]["last_bucket_end"] == "2026-06-12T13:28:00Z"
+
+    # the frozen first-level candidates: every reference as stored, the Long MA from the 2m history
+    long_ma = p["moving_averages"]["long_ma_at_cutoff"]
+    assert long_ma["status"] == "valid" and long_ma["first_bucket"] == iso_utc(cal.session(DAY).overnight_start_at)
+    fl = p["first_level_candidates"]
+    assert fl["ids"] == list(defs.FIRST_LEVEL_CANDIDATES) and set(fl["levels"]) == set(defs.FIRST_LEVEL_CANDIDATES)
+    assert all(c["status"] == "valid" for c in fl["levels"].values())
+    assert fl["levels"]["long_ma"]["value"] == long_ma["value"] and fl["levels"]["on_high"]["value"] == refs["on_high"]["value"]
+    from forecaster.structure_rules import annotate                  # the annotation's EMA(100) is the same line
+    ema = annotate({"payload": p})["measurements"]["moving_averages_2m"]["ema100"]
+    assert abs(float(long_ma["value"]) - ema) < 0.01
 
     prior = p["prior_sessions"]
     assert prior["contract_id"] == NQ_CID and [x["status"] for x in prior["sessions"]] == ["valid"] * 5
@@ -522,3 +539,24 @@ def test_a_roll_day_takes_every_reference_from_the_new_contract(market):
         assert prior["sessions"][-1]["high"] == dec(prev_rth["high"].max())
     finally:
         set_active_contracts(conn, "NQ", {DAY: NQ_CID}, "test")
+
+
+@needs_db
+def test_daily_atr_needs_every_session_of_its_window_complete(market):
+    """Strict continuity (nq_conv_v5): one RTH minute missing in one of the 70 sessions leaves the daily ATR
+    unavailable - it never skips to an older session. The day is restored afterwards."""
+    conn = market[0]
+    from database.queries import get_day_bars, save_trading_day
+    from tests.synthetic import NQ_CID
+    gap_day = cal.sessions_before(DAY, 30)[0]
+    rows = [dict(zip(r.keys(), r)) for r in get_day_bars(conn, NQ_CID, gap_day.session_date.isoformat())]
+    noon = iso_utc(cal.ny_instant(gap_day.session_date, time(12, 0))).replace("T", " ").rstrip("Z")
+    assert any(r["timestamp_utc"] == noon for r in rows)
+    try:
+        save_trading_day(conn, NQ_CID, gap_day.session_date.isoformat(), [r for r in rows if r["timestamp_utc"] != noon])
+        daily = build_snapshot(conn, DAY).payload["atr"]["daily"]
+        assert daily["value"] is None and daily["status"] == "incomplete_history"
+        assert gap_day.session_date.isoformat() in daily["detail"]
+    finally:
+        save_trading_day(conn, NQ_CID, gap_day.session_date.isoformat(), rows)
+    assert build_snapshot(conn, DAY).payload["atr"]["daily"]["status"] == "valid"

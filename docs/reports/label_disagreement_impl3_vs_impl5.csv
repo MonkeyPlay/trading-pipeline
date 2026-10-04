@@ -1,0 +1,318 @@
+session_date,kind,target,stored,replay,old_rules_new_snapshot,new,cause,detail
+2025-09-03,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-09-03,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_reclaim_acceptance,follows the first level tested,
+2025-09-04,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-09-05,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-09-05,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-09-09,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate vwap at 23834.318315; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high, vwap"
+2025-09-09,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-09-09,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-09-10,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-09-12,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-09-16,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: premarket_low on the other side of the open in the same bar - ambiguous,"estimate premarket_low at 24584.5; levels on both sides of the 09:30 bar's open reached: premarket_low, vwap"
+2025-09-16,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-09-19,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-09-22,label,first_level_tested,overnight_open,overnight_open,overnight_open,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-09-22,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2025-09-23,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate long_ma at 25001.079497; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, prev_rth_close, vwap"
+2025-09-23,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-09-24,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high, premarket_low on the other side of the open in the same bar - ambiguous","estimate long_ma at 24885.662739; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high, premarket_low, vwap"
+2025-09-24,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-09-26,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-09-29,label,first_level_tested,on_high,on_high,on_high,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-09-29,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_acceptance,follows the first level tested,
+2025-10-02,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-03,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-06,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-10-08,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-08,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2025-10-09,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-09,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_acceptance,follows the first level tested,
+2025-10-10,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-10-13,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate long_ma at 24826.520019; levels on both sides of the 09:30 bar's open reached: long_ma, vwap"
+2025-10-13,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-10-14,label,first_level_tested,on_low,on_low,on_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-15,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-15,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_acceptance,follows the first level tested,
+2025-10-16,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-16,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2025-10-17,label,first_level_tested,overnight_open,overnight_open,overnight_open,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-10-17,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2025-10-20,label,first_level_tested,on_high,on_high,on_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-10-22,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate vwap at 25267.572341; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, vwap"
+2025-10-22,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-10-23,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-10-27,label,first_level_tested,on_high,on_high,on_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 25815.25; levels on both sides of the 09:30 bar's open reached: long_ma, on_high, premarket_high, premarket_low"
+2025-10-27,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-10-29,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-10-29,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2025-11-03,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-11-03,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-11-04,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-11-04,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2025-11-05,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate prev_rth_low at 25544.0; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, prev_rth_low"
+2025-11-05,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-11-06,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-11-06,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2025-11-07,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-11-10,label,first_level_tested,on_high,on_high,on_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 25534.502288; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high"
+2025-11-10,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-11-11,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-11-11,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_without_acceptance,follows the first level tested,
+2025-11-12,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-11-13,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-11-13,label,prev_rth_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-11-20,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-11-20,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2025-11-21,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-11-21,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2025-11-25,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-11-26,label,first_level_tested,on_high,on_high,on_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-11-26,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2025-11-26,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-11-28,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-12-01,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-12-01,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-12-02,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate prev_rth_high at 25495.75; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, prev_rth_high"
+2025-12-02,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-12-05,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-12-05,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2025-12-08,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate vwap at 25784.194785; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, vwap"
+2025-12-08,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-12-09,label,prev_rth_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-12-10,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2025-12-10,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2025-12-11,label,on_high_outcome,not_tested,not_tested,(missing_reference),(missing_reference),snapshot: on_high 26047.5 -> incomplete; on_low 25644.5 -> incomplete,on_high unavailable
+2025-12-11,label,on_low_outcome,not_tested,not_tested,(missing_reference),(missing_reference),snapshot: on_high 26047.5 -> incomplete; on_low 25644.5 -> incomplete,on_low unavailable
+2025-12-12,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-12-17,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-12-19,label,first_level_tested,on_high,on_high,on_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2025-12-22,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2025-12-23,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-12-24,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 25791.0; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, premarket_low, prev_rth_close, prev_rth_high, vwap"
+2025-12-24,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2025-12-26,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-12-29,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2025-12-30,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 25691.25; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, vwap"
+2025-12-30,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-06,label,first_level_tested,on_high,on_high,on_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-01-06,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_without_acceptance,follows the first level tested,
+2026-01-07,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate premarket_high at 25793.75; levels on both sides of the 09:30 bar's open reached: premarket_high, vwap"
+2026-01-07,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-08,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-01-09,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-01-09,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-01-12,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate vwap at 25745.474690; levels on both sides of the 09:30 bar's open reached: premarket_high, vwap"
+2026-01-12,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-13,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate prev_rth_close at 25952.25; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, prev_rth_close"
+2026-01-13,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-14,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-01-15,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-01-15,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-01-15,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-01-22,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-01-27,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-01-28,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: premarket_low on the other side of the open in the same bar - ambiguous,"estimate vwap at 26262.586229; levels on both sides of the 09:30 bar's open reached: premarket_low, vwap"
+2026-01-28,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-29,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,(ambiguous_intrabar),FL candidates: premarket_low on the other side of the open in the same bar - ambiguous,"estimate premarket_low at 26132.0; levels on both sides of the 09:30 bar's open reached: premarket_low, prev_rth_close"
+2026-01-29,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-01-30,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 25828.831754; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high, vwap"
+2026-01-30,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-02-02,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-02-03,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),FL candidates: premarket_low on the other side of the open in the same bar - ambiguous,"estimate premarket_low at 25933.25; levels on both sides of the 09:30 bar's open reached: premarket_low, prev_rth_high"
+2026-02-03,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-02-03,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-02-05,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-02-06,label,first_level_tested,on_high,on_high,on_high,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-02-06,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-02-09,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-02-09,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-02-09,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-02-10,label,first_level_tested,overnight_open,overnight_open,overnight_open,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 25363.373316; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, premarket_high"
+2026-02-10,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-02-12,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate vwap at 25330.040956; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, vwap"
+2026-02-12,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-02-18,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-02-19,label,first_level_tested,on_low,on_low,on_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-02-19,label,prev_rth_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-02-20,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-02-20,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-02-23,label,first_level_tested,overnight_open,overnight_open,overnight_open,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate premarket_high at 24977.25; levels on both sides of the 09:30 bar's open reached: overnight_open, premarket_high"
+2026-02-23,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-02-24,label,first_level_tested,overnight_open,overnight_open,overnight_open,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-02-24,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2026-02-27,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-03-02,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-03,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 24517.614618; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high, prev_rth_low"
+2026-03-03,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-03-05,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-05,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2026-03-06,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-03-06,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-03-11,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-03-11,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-03-13,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-13,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-03-16,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-16,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-03-20,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-20,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-03-26,label,first_level_tested,on_low,on_low,on_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-26,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2026-03-27,label,first_level_tested,on_low,on_low,on_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-03-30,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-03-30,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-04-02,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-04-02,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-04-02,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-04-07,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-04-08,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-04-08,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-04-14,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-04-15,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate premarket_high at 26026.0; levels on both sides of the 09:30 bar's open reached: premarket_high, prev_rth_high"
+2026-04-15,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-04-16,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-04-21,label,first_level_tested,overnight_open,overnight_open,overnight_open,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-04-21,label,prev_rth_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-04-22,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-04-23,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-04-24,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-04-24,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-04-28,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-04-28,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-04-30,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-05-01,label,first_level_tested,overnight_open,overnight_open,overnight_open,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate overnight_open at 27631.75; levels on both sides of the 09:30 bar's open reached: overnight_open, premarket_high, prev_rth_high"
+2026-05-01,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-01,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-05-04,label,prev_rth_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-05-06,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-05-06,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-05-07,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 28738.841513; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high"
+2026-05-07,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-08,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate long_ma at 28892.231178; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low"
+2026-05-08,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-12,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-05-12,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-05-15,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-05-15,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-05-18,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-05-18,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_acceptance,follows the first level tested,
+2026-05-19,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-05-19,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2026-05-20,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 29070.75; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low"
+2026-05-20,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-21,label,first_level_tested,overnight_open,overnight_open,overnight_open,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-05-22,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,(ambiguous_intrabar),FL candidates: premarket_high on the other side of the open in the same bar - ambiguous,"estimate premarket_high at 29603.75; levels on both sides of the 09:30 bar's open reached: premarket_high, prev_rth_high"
+2026-05-22,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-26,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 29881.754018; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high"
+2026-05-26,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-05-27,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-05-27,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-05-28,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-05-28,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-05-29,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-06-02,label,first_level_tested,overnight_open,overnight_open,overnight_open,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate premarket_high at 30560.0; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, premarket_high"
+2026-06-02,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-06-03,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-06-03,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-06-04,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-06-04,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-06-08,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-06-08,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-06-16,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-06-16,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-06-17,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-06-17,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2026-06-24,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-06-24,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_acceptance,follows the first level tested,
+2026-06-25,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate long_ma at 30158.800819; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low"
+2026-06-25,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-06-26,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-06-26,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,break_acceptance,follows the first level tested,
+2026-06-29,label,first_level_tested,vwap,vwap,vwap,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-06-29,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-06-29,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-07-06,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: premarket_low on the other side of the open in the same bar - ambiguous,"estimate premarket_low at 29828.5; levels on both sides of the 09:30 bar's open reached: premarket_low, vwap"
+2026-07-06,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-07-07,label,first_level_tested,on_low,on_low,on_low,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 29580.0; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low"
+2026-07-07,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-07-09,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-07-09,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-07-10,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate long_ma at 29826.863236; levels on both sides of the 09:30 bar's open reached: long_ma, vwap"
+2026-07-10,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-07-10,label,on_low_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-07-13,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate long_ma at 29723.563192; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, prev_rth_low"
+2026-07-13,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-07-16,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate long_ma at 29461.727362; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_high"
+2026-07-16,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-07-17,label,first_level_tested,on_low,on_low,on_low,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-07-22,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-07-22,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-07-24,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-07-24,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-07-27,label,first_level_tested,(coincident_levels),(coincident_levels),(coincident_levels),premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-07-27,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-07-31,label,first_level_tested,on_high,on_high,on_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-08-07,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-07,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-08-10,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-08-11,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-13,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-13,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-08-14,label,first_level_tested,overnight_open,overnight_open,overnight_open,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-14,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_without_acceptance,follows the first level tested,
+2026-08-14,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-08-19,label,first_level_tested,prev_rth_close,prev_rth_close,prev_rth_close,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-19,label,first_level_outcome,break_reclaim_acceptance,break_reclaim_acceptance,break_reclaim_acceptance,break_acceptance,follows the first level tested,
+2026-08-20,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-08-25,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-08-25,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-08-26,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-08-27,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate premarket_low at 29515.5; levels on both sides of the 09:30 bar's open reached: long_ma, premarket_low, vwap"
+2026-08-27,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-08-28,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),"FL candidates: long_ma, premarket_low on the other side of the open in the same bar - ambiguous","estimate long_ma at 29633.153843; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, premarket_low, vwap"
+2026-08-28,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-09-03,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-09-03,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_acceptance,follows the first level tested,
+2026-09-03,label,prev_rth_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-09-08,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-09-08,label,first_level_outcome,break_acceptance,break_acceptance,break_acceptance,break_reclaim_acceptance,follows the first level tested,
+2026-09-09,label,first_level_tested,prev_rth_low,prev_rth_low,prev_rth_low,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-09-09,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-09-10,label,opening_type_15m,two_sided_whipsaw,two_sided_whipsaw,(missing_reference),(missing_reference),snapshot: on_high 29790.75 -> incomplete; on_low 29333.0 -> incomplete,rule sweep_low_rebound undecidable: on_high unavailable; on_low unavailable
+2026-09-10,label,opening_drive_strength,(not_applicable),(not_applicable),(upstream_unavailable),(upstream_unavailable),snapshot: on_high 29790.75 -> incomplete; on_low 29333.0 -> incomplete,opening type unavailable (missing_reference)
+2026-09-10,label,first_15m_pattern,(uncovered),(uncovered),(upstream_unavailable),(upstream_unavailable),snapshot: on_high 29790.75 -> incomplete; on_low 29333.0 -> incomplete,opening type unavailable (missing_reference): drive or sweep unknown
+2026-09-10,label,on_high_outcome,not_tested,not_tested,(missing_reference),(missing_reference),snapshot: on_high 29790.75 -> incomplete; on_low 29333.0 -> incomplete,on_high unavailable
+2026-09-10,label,on_low_outcome,not_tested,not_tested,(missing_reference),(missing_reference),snapshot: on_high 29790.75 -> incomplete; on_low 29333.0 -> incomplete,on_low unavailable
+2026-09-11,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-11,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_reclaim_acceptance,follows the first level tested,
+2026-09-14,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-14,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,follows the first level tested,
+2026-09-15,label,first_level_tested,vwap,vwap,vwap,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-16,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-16,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-09-17,label,first_level_tested,(none_tested),(none_tested),(none_tested),long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-17,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2026-09-18,label,first_level_tested,vwap,vwap,vwap,(ambiguous_intrabar),FL candidates: long_ma on the other side of the open in the same bar - ambiguous,"estimate long_ma at 29817.533264; levels on both sides of the 09:30 bar's open reached: long_ma, vwap"
+2026-09-18,label,first_level_outcome,break_without_acceptance,break_without_acceptance,break_without_acceptance,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-09-21,label,first_level_tested,on_high,on_high,on_high,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-22,label,first_level_tested,overnight_open,overnight_open,overnight_open,long_ma,FL candidates: Long MA (not an impl3 candidate) reached first,
+2026-09-23,label,first_level_tested,overnight_open,overnight_open,overnight_open,(ambiguous_intrabar),"FL candidates: long_ma, premarket_high on the other side of the open in the same bar - ambiguous","estimate overnight_open at 31008.5; levels on both sides of the 09:30 bar's open reached: long_ma, overnight_open, premarket_high, vwap"
+2026-09-23,label,first_level_outcome,test_rejection,test_rejection,test_rejection,(upstream_unavailable),follows the first level tested,first level tested unavailable (ambiguous_intrabar)
+2026-09-24,label,first_level_tested,vwap,vwap,vwap,premarket_high,FL candidates: Premarket High (not an impl3 candidate) reached first,
+2026-09-24,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-09-25,label,first_level_tested,prev_rth_high,prev_rth_high,prev_rth_high,premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-09-29,label,first_level_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-09-29,label,on_high_outcome,test_rejection,test_rejection,test_rejection,break_reclaim_acceptance,LO-v2: a wick beyond the level is a breach,
+2026-10-01,label,first_level_tested,(none_tested),(none_tested),(none_tested),premarket_low,FL candidates: Premarket Low (not an impl3 candidate) reached first,
+2026-10-01,label,first_level_outcome,(upstream_unavailable),(upstream_unavailable),(upstream_unavailable),break_acceptance,follows the first level tested,
+2025-12-11,structure,Overnight Structure,V-reversal,,(the overnight window is incomplete: 928 of 929 minutes (ratio 0.9989)),(the overnight window is incomplete: 928 of 929 minutes (ratio 0.9989)),rules v4: the window is incomplete,
+2025-12-11,structure,Price vs Long MA,Above/crossing,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),rules v4: the window is incomplete,
+2025-12-11,structure,Long MA Slope,Rising,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),rules v4: the window is incomplete,
+2025-12-11,structure,Fast MA Alignment,Bullish,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),rules v4: the window is incomplete,
+2025-12-11,structure,Chop Score,1,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 23:00Z),rules v4: the window is incomplete,
+2026-09-10,structure,Overnight Structure,Downtrend,,(the overnight window is incomplete: 928 of 929 minutes (ratio 0.9989)),(the overnight window is incomplete: 928 of 929 minutes (ratio 0.9989)),rules v4: the window is incomplete,
+2026-09-10,structure,Price vs Long MA,Below,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),rules v4: the window is incomplete,
+2026-09-10,structure,Long MA Slope,Falling,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),rules v4: the window is incomplete,
+2026-09-10,structure,Fast MA Alignment,Bearish,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),rules v4: the window is incomplete,
+2026-09-10,structure,Chop Score,0,,(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),(the moving averages' 2m history is incomplete: incomplete 2m bucket(s) 22:00Z),rules v4: the window is incomplete,

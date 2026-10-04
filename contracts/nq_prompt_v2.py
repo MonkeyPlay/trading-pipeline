@@ -43,18 +43,25 @@ PROMPT_VERSION = "2.1"
 # Premarket High / Low (nq_conv_v4) and the Long MA to the first-level candidates and
 # names the first level where impl3 left it unavailable: candidates at one price by
 # FIRST_LEVEL_PRECEDENCE, levels on both sides of one bar's open by the one nearest the
-# open (an estimate, flagged in the measurements).
-LABEL_VERSION = "nq_prompt_v2_1_impl4"
-FIRST_LEVEL_CONVENTION = "FL-v2"
+# open (an estimate, flagged in the measurements). impl5 (2026-10-04, guideline revision 2)
+# reads the snapshot's frozen first-level candidates (FL-v3: levels on both sides of one
+# bar's open are unavailable again, the nearest-to-open guess kept as a measurement),
+# lets a level the opening gap crossed be swept by a later RTH breach (OS-v2) and judges
+# level breaches by the bar's high / low (LO-v2).
+LABEL_VERSION = "nq_prompt_v2_1_impl5"
+FIRST_LEVEL_CONVENTION = "FL-v3"
+OPENING_SWEEP_CONVENTION = "OS-v2"
 PULLBACK_RUBRIC = "MP-v1"
 PATTERN_CONVENTION = "FP-v1"
-LEVEL_OUTCOME_CONVENTION = "LO-v1"
+LEVEL_OUTCOME_CONVENTION = "LO-v2"
 # nq_conv_v1 (registered 2026-10-03) took events from the session's calendar day only and
 # configured no moving averages; nq_conv_v2 widens the events to P1 section 8 (EV-v1 in
 # contracts/nq_preopen.py) and adds the user's TradingView moving averages; nq_conv_v3
 # adds the five prior sessions' RTH prices on the snapshot contract (HTB-v1); nq_conv_v4
-# defines the premarket window, [08:00 ET, cutoff), as the user's TradingView script does.
-CONVENTION_VERSION = "nq_conv_v4"
+# defines the premarket window, [08:00 ET, cutoff), as the user's TradingView script does;
+# nq_conv_v5 requires complete data (guideline revision 2, 1B): every minute of a bar,
+# window or indicator history, and freezes the first-level candidates in the snapshot.
+CONVENTION_VERSION = "nq_conv_v5"
 PREMARKET_START = time(8, 0)
 SYMBOL = "NQ"
 
@@ -72,11 +79,11 @@ class Profile:
 
 PROFILES: Dict[str, Profile] = {
     "research_0929": Profile(
-        "research_0929", time(9, 29), "nq_evidence_v4_r0929",
+        "research_0929", time(9, 29), "nq_evidence_v5_r0929",
         "Prompt comparison profile: bars complete by 09:29:00 ET (last 1m bar 09:28, last 2m bar "
         "09:26-09:28)."),
     "operational_0927": Profile(
-        "operational_0927", time(9, 27), "nq_evidence_v4_o0927",
+        "operational_0927", time(9, 27), "nq_evidence_v5_o0927",
         "Operational profile for live runs that need the extra time: bars complete by 09:27:00 ET (last 1m "
         "bar 09:26, last 2m bar 09:24-09:26). Its ATRs, thresholds and labels are not comparable with "
         "research_0929."),
@@ -147,11 +154,11 @@ _PATTERN_DISPLAY = {"drive_continuation": "Drive continuation", "fade_reversal":
                     "choppy": "Choppy"}
 _MATCHED = ("yes", "no", "mixed")
 _MATCHED_DISPLAY = {"yes": "Yes", "no": "No", "mixed": "Mixed"}
-_LO_RULE = ("LO-v1, from the side of O (the level equal to O: approach_unresolved): not tested (no trade reached it "
-            "in the complete window); test and rejection (reached, no 1m close strictly beyond, then a close strictly "
-            "back on the original side); break and acceptance (a close beyond, the window's final three 1m closes "
-            "strictly beyond); break-reclaim-acceptance (a close beyond, the final three strictly on the original "
-            "side); break without acceptance (a close beyond, neither).")
+_LO_RULE = ("LO-v2, from the side of O (the level equal to O: approach_unresolved): not tested (no trade reached it "
+            "in the complete window); test and rejection (reached - an exact touch - with no trade strictly beyond, "
+            "then a close strictly back on the original side); break and acceptance (a trade strictly beyond, the "
+            "window's final three 1m closes strictly beyond); break-reclaim-acceptance (a trade beyond, the final "
+            "three strictly on the original side); break without acceptance (a trade beyond, neither).")
 
 TARGETS: Dict[str, Dict[str, Any]] = {
     "first_move_5m": {
@@ -196,7 +203,8 @@ TARGETS: Dict[str, Dict[str, Any]] = {
                               "opening_drive_up": "Opening drive up", "opening_drive_down": "Opening drive down",
                               "two_sided_whipsaw": "Two-sided whipsaw", "range": "Range"},
         "rule": "P2 ordered list, first established rule wins; an unresolved higher rule makes the label None. "
-                "1 sweep low (support < O breached by >= T, a later 1m close back above it, C15 > O+T); "
+                "1 sweep low (support < O breached by >= T in RTH, a later 1m close back above it, C15 > O+T; "
+                "OS-v2: also a level the opening gap crossed); "
                 "2 sweep high (mirror, C15 < O-T); 3 drive up (C15 > O+T, eff >= 0.60, O-L15 <= T); "
                 "4 drive down (mirror); 5 whipsaw (both O+T and O-T reached); 6 range. "
                 "eff = |C15-O|/(H15-L15).",
@@ -253,13 +261,12 @@ TARGETS: Dict[str, Dict[str, Any]] = {
         "predicted_property": "Expected First Level Tested",
         "display_realised": FIRST_LEVEL_CANDIDATES,
         "display_predicted": FIRST_LEVEL_CANDIDATES,
-        "rule": "FL-v2. The first candidate reached (1m low <= level <= high) in [09:30, 09:45); its price is the "
-                "measurement first_level_price. Within one bar: a level equal to the bar's open first, else the "
-                "nearest to the open - observed when every level reached lies on one side of the open, estimated "
-                "(first_level_order) when levels on both sides were reached; levels above and below at exactly the "
-                "same distance: ambiguous_intrabar. Several candidates at that price: the first in "
-                "FIRST_LEVEL_PRECEDENCE, the others kept as first_level_coincident. A missing candidate: "
-                "missing_reference. None reached in the complete window: none_tested.",
+        "rule": "FL-v3. The first candidate of the snapshot's frozen list reached (1m low <= level <= high) in "
+                "[09:30, 09:45); its price is the measurement first_level_price. Within one bar: a level equal to "
+                "the bar's open first, else the nearest on its side; levels reached on both sides of the open: "
+                "ambiguous_intrabar, the level nearest the open kept as first_level_estimate. Several candidates at "
+                "that price: the first in FIRST_LEVEL_PRECEDENCE, the others kept as first_level_coincident. A "
+                "missing candidate: missing_reference. None reached in the complete window: none_tested.",
     },
     "first_level_outcome": {
         "labels": tuple(k for k in _LO_DISPLAY if k != "not_tested"),
@@ -469,15 +476,17 @@ LABEL_CONVENTIONS = {
     "reach": "a threshold or level is reached by a 1m bar whose high >= it (upward) or low <= it (downward)",
     "breach_by_T": "a support v is breached by at least T when a 1m low <= v - T (resistance: high >= v + T)",
     "reclaim": "a later 1m bar (strictly after the first breaching bar) closes strictly back across the level",
-    "gap_crossing": "a level strictly between the last pre-open close (the 09:29 bar) and O was crossed by the "
-                    "opening gap and is not an eligible sweep reference; unknown when the 09:29 bar is missing",
+    "gap_crossing": "impl1-impl4: a level strictly between the last pre-open close (the 09:29 bar) and O was "
+                    "crossed by the opening gap and is not an eligible sweep reference. impl5 (OS-v2): the gap "
+                    "itself is never a sweep - the breach must come from RTH bars - but a level the gap crossed "
+                    "can be swept by a later RTH breach by T and reclaim close",
     "extremes": "H, L of a window need every 1m bar of it; a close needs that window's last bar",
     "o": "O is the open of the 09:30 1m bar - never the cutoff price",
     "missing_sweep_reference": "a missing sweep reference blocks the opening type only when a sweep was possible: "
                                "the window went below O - T (support) or above O + T (resistance)",
     "first_level_candidates": "on_high, on_low, prev_rth_high, prev_rth_low, prev_rth_close, overnight_open, "
-                              "premarket_high, premarket_low (the snapshot references), vwap and long_ma; round "
-                              "numbers / other named levels are not in the candidate set",
+                              "premarket_high, premarket_low, vwap and long_ma, read from the snapshot's frozen "
+                              "candidate list (impl5); round numbers / other named levels are not in the set",
     "long_ma": "the frozen cutoff Long MA: EMA(100) of the snapshot's archived overnight 2m bars at the last one "
                "complete by the cutoff (nq_conv_v2's TradingView line, as the structure annotation computes it); "
                "unavailable under 100 2m bars",
@@ -485,18 +494,22 @@ LABEL_CONVENTIONS = {
                               "prev_rth_high, prev_rth_low, prev_rth_close, on_high, on_low, premarket_high, "
                               "premarket_low, overnight_open, vwap, long_ma",
     "vwap": "the frozen cutoff VWAP: sum(hlc3 x volume) / sum(volume) over the snapshot's archived overnight 1m "
-            "bars [18:00, cutoff), exact; unavailable when the overnight coverage is under 90% or volume is zero",
+            "bars [18:00, cutoff), exact; unavailable when a minute of the window is missing (impl1-impl4: under "
+            "90%) or volume is zero",
     "level_reach": "a level is reached by a 1m bar with low <= level <= high; a level the opening gap crossed "
                    "with no RTH trade there is not reached",
     "level_order_in_bar": "within one 1m bar price is taken to trade through every price between the bar's open "
                           "and its extremes: a level equal to the open is reached first, then the nearest on its "
-                          "side; levels on both sides of the open: first level tested takes the one nearest the "
-                          "open (an estimate - the order is not observed - flagged first_level_order: estimated); "
-                          "the LO-v1 level outcomes are unaffected",
-    "lo_v1_breach": "a breach is a 1m close strictly beyond the level; a touch or an equal close is not",
-    "lo_v1_acceptance": "acceptance: the window's final three 1m bars all close strictly on one side; those bars "
-                        "must be stored",
-    "lo_v1_original_side": "the side of O; a level equal to O has no resolvable approach",
+                          "side; levels on both sides of the open: the order is not observed - first level "
+                          "tested is ambiguous_intrabar, with the level nearest the open kept as the measurement "
+                          "first_level_estimate (impl4 named it, flagged estimated)",
+    "lo_breach": "LO-v2 (impl5): a breach is a 1m high strictly above (low strictly below) the level - the wick; a "
+                 "trade exactly at the level is a touch, not a breach (LO-v1: a close strictly beyond)",
+    "lo_return": "returns and acceptance use closes: acceptance is the window's final three 1m closes all strictly "
+                 "on one side; those bars must be stored",
+    "lo_order": "a bar's close is its last price, so a breach and a close back in one bar are ordered; no other "
+                "LO-v2 decision needs the order inside a bar",
+    "lo_original_side": "the side of O; a level equal to O has no resolvable approach",
     "measurements": "window highs / lows need every 1m bar of the window and are kept when later bars are "
                     "missing (IB high / low need only 09:30-10:29); RTH high / low / close only on a standard "
                     "session",
@@ -547,9 +560,8 @@ def display(target: str, label: Optional[str], side: str = "realised") -> str:
 # Calculation convention (CONVENTION_VERSION)
 # --------------------------------------------------------------------------
 
-DAILY_ATR = {"period": 14, "window_true_ranges": 70, "search_sessions": 105}
+DAILY_ATR = {"period": 14, "window_true_ranges": 70}
 TWO_MINUTE_ATR = {"period": 14, "window_true_ranges": 70}
-ON_MIN_COVERAGE = Decimal("0.90")
 CUTOFF_PRICE_MAX_AGE_MINUTES = 5
 
 CONVENTION = {
@@ -558,7 +570,10 @@ CONVENTION = {
     "bar_timestamps": "bars are named by their start; a 1m bar is complete at start + 1 minute",
     "aggregation": {
         "anchoring": "clock buckets in ET: 2m on even minutes, 5m on multiples of 5, 15m on multiples of 15",
-        "complete": "a bucket is used only when its end <= the cutoff",
+        "ended": "a bucket is built only when its end <= the cutoff",
+        "complete": "a bucket is complete when every one of its minutes has exactly one 1m bar; only complete "
+                    "buckets enter a calculation needing exact OHLC - an incomplete one is kept, flagged, never "
+                    "filled",
         "empty": "a bucket without 1m bars produces no bar",
     },
     "daily_atr": {
@@ -568,27 +583,33 @@ CONVENTION = {
                          "(13:00 on early closes), from the calendar",
         "contract": "each session's active contract",
         "previous_close": "the same contract's RTH close of its previous scheduled session",
-        "missing": "a session without every RTH minute bar (or whose previous session lacks them) contributes "
-                   "no true range and is skipped; the most recent 70 valid true ranges are used, searched over "
-                   "at most 105 sessions; fewer: unavailable",
+        "missing": "strict continuity: the 70 true ranges are those of the 70 scheduled sessions before the "
+                   "target, each with every RTH minute bar on its active contract and the previous session's on "
+                   "the same contract; one incomplete session makes the ATR unavailable (nq_conv_v1-v4 skipped "
+                   "it and searched up to 105 sessions)",
     },
     "two_minute_atr": {
         **TWO_MINUTE_ATR,
         "smoothing": "wilder, seeded as the daily ATR",
         "bars": "2m clock buckets of the snapshot contract's 1m bars in the overnight window, complete by the "
                 "cutoff; true range against the previous bucket's close; the most recent 70 true ranges",
+        "continuity": "the last 71 buckets must all be complete, consecutive and end at the last bucket boundary "
+                      "before the cutoff; otherwise unavailable",
         "not": "never the 1m ATR rescaled",
     },
     "references": {
         "prev_rth": "previous scheduled session (calendar), same contract as the snapshot, RTH [09:30, scheduled "
                     "close); needs every RTH minute bar",
         "overnight_window": "[18:00 ET the calendar day before the session, cutoff)",
-        "on_extremes": "high / low of the overnight window; needs at least 90% of its minutes",
+        "on_extremes": "high / low of the overnight window; needs every one of its minutes (nq_conv_v1-v4: 90%); "
+                       "a partial window keeps its observed high / low only as provisional diagnostics",
         "overnight_open": "open of the 1m bar starting exactly 18:00 ET",
         "cutoff_price": "close of the last 1m bar complete by the cutoff, if it ended at most 5 minutes before it",
         "price_at_0929": "unavailable in both profiles: neither observes 09:29:00-09:29:59",
         "premarket_high_low": "high / low of the 1m bars in [08:00 ET, cutoff) - the user's TradingView "
-                              "premarket session 08:00-09:30 cut at the cutoff; needs at least 90% of its minutes",
+                              "premarket session 08:00-09:30 cut at the cutoff; needs every one of its minutes",
+        "vwap": "the cutoff VWAP, sum(hlc3 x volume) / sum(volume) over the overnight window's 1m bars, exact; "
+                "needs every minute of the window and some volume",
     },
     "moving_averages": {
         "source": "the user's TradingView indicator 'TEMA & Session Levels' (Pine v6) at its default inputs",
@@ -597,7 +618,13 @@ CONVENTION = {
         "fast_ma": "TEMA(14) = 3 (e1 - e2) + e3 of close, then SMA(3) (the faster line, 'TEMA Smoothed')",
         "slow_ma": "EMA(14) of close, then SMA(3) (the slower line, 'EMA 9 Smoothed')",
         "ema": "Pine ta.ema: alpha = 2 / (length + 1), seeded with the first value",
+        "history": "the overnight window's 2m buckets from 18:00, every one complete and consecutive; a gap "
+                   "makes every moving-average value unavailable (no joining across it)",
+        "long_ma_at_cutoff": "EMA(100) at the last 2m bucket complete by the cutoff, kept to six decimals",
     },
+    "first_level_candidates": "frozen in the snapshot before the open: on_high, on_low, prev_rth_high, "
+                              "prev_rth_low, prev_rth_close, overnight_open, premarket_high, premarket_low, vwap, "
+                              "long_ma - each with its price or unavailable; forecasts and outcomes use this one list",
     "events": {
         "scheduled": "economic_events rows of the scheduled sources (fed, bls, ism_rule, bea, census) from the "
                      "previous session's scheduled close to the end of the session's ET day",
@@ -642,9 +669,9 @@ def _record(version: str, kind: str, definition: Dict[str, Any]) -> Dict[str, An
 def label_record() -> Dict[str, Any]:
     return _record(LABEL_VERSION, "labels", {
         "definitions": DEFINITIONS, "prompt_version": PROMPT_VERSION, "sources": ["P1", "P2"],
-        "supersedes": "nq_prompt_v2_1_impl3: the same rules but first level tested (FL-v2: premarket high / low "
-                      "and the Long MA as candidates, coincident candidates named by precedence, both sides of one "
-                      "bar's open resolved by the nearest to the open, flagged as estimated)",
+        "supersedes": "nq_prompt_v2_1_impl4: FL-v3 (the frozen candidate list; both sides of one bar's open "
+                      "unavailable, the nearest-to-open guess a measurement), OS-v2 (a level the opening gap "
+                      "crossed can be swept later), LO-v2 (wick breaches); every other rule unchanged",
         "thresholds": {"T": "max(1, ceil(0.5 x frozen two-minute ATR)) points",
                        "B": "max(1, ceil(0.05 x frozen daily ATR)) points", "A": "frozen daily ATR"},
         "targets": {t: {k: list(v) if isinstance(v, tuple) else v for k, v in d.items()} for t, d in TARGETS.items()},
@@ -653,6 +680,7 @@ def label_record() -> Dict[str, Any]:
         "pullback_rubric": PULLBACK_RUBRIC,
         "pattern_convention": PATTERN_CONVENTION,
         "first_level_convention": FIRST_LEVEL_CONVENTION, "first_level_precedence": list(FIRST_LEVEL_PRECEDENCE),
+        "opening_sweep_convention": OPENING_SWEEP_CONVENTION,
         "conventions": LABEL_CONVENTIONS,
     })
 
@@ -667,7 +695,8 @@ def snapshot_record(profile: str) -> Dict[str, Any]:
         "profile": p.name, "cutoff_et": p.cutoff.strftime("%H:%M"), "description": p.description,
         "symbol": SYMBOL, "convention_version": CONVENTION_VERSION, "data_modes": list(DATA_MODES),
         "payload": ["identity", "schedule", "cutoff", "references", "atr", "thresholds", "bars",
-                    "previous_rth_bars", "prior_sessions", "daily_atr_inputs", "events", "intermarket"],
+                    "previous_rth_bars", "prior_sessions", "daily_atr_inputs", "events", "intermarket",
+                    "moving_averages", "first_level_candidates"],
         "excluded": "target-session bars after the cutoff, labels, outcome notes and forecasts",
     })
 

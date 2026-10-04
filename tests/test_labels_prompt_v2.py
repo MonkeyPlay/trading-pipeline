@@ -183,12 +183,18 @@ def test_breach_short_of_t_or_without_a_later_reclaim_is_no_sweep():
     assert label(out, "opening_type_15m")[0] != "sweep_low_rebound"
 
 
-def test_a_level_crossed_by_the_opening_gap_is_not_a_sweep_reference():
+def test_a_level_the_opening_gap_crossed_can_still_be_swept():
+    # OS-v2 (guideline revision 2): pre-cutoff close 96, O = 100, support 98, T = 5, a later low of 93, a close
+    # back above 98 and C15 = 106 - the gap does not make the RTH breach and reclaim any less a sweep
     refs = dict(prev_rth_low=98, on_low=90, on_high=120, prev_rth_high=130)
-    gapped = run(session(bars=sweep_low_bars(), pre_close=96), snapshot(**refs))     # 96 -> open 100 crossed 98
-    assert label(gapped, "opening_type_15m") == ("two_sided_whipsaw", None)
-    unknown = run(session(bars=sweep_low_bars(), pre_close=None), snapshot(**refs))  # no 09:29 bar
-    assert label(unknown, "opening_type_15m") == (None, "missing_bars")
+    gapped = run(session(bars=sweep_low_bars(), pre_close=96), snapshot(**refs))
+    assert label(gapped, "opening_type_15m") == ("sweep_low_rebound", None)
+    no_0929 = run(session(bars=sweep_low_bars(), pre_close=None), snapshot(**refs))  # the 09:29 bar is not needed
+    assert label(no_0929, "opening_type_15m") == ("sweep_low_rebound", None)
+    # the gap alone is no breach: a level the gap crossed but no RTH bar breached by T is not swept
+    shallow = {**sweep_low_bars(), 2: (100, 100, 95, 96)}                           # low 95: 3 below 98, short of T
+    out = run(session(bars=shallow, pre_close=96), snapshot(**refs))
+    assert label(out, "opening_type_15m")[0] != "sweep_low_rebound"
 
 
 def test_a_missing_reference_blocks_the_label_only_when_it_could_matter():
@@ -352,13 +358,24 @@ def test_a_level_at_the_opening_trade_is_tested_first():
     assert label(out, "first_level_outcome") == (None, "approach_unresolved")      # equal to O: no approach
 
 
-def test_within_a_bar_the_nearest_level_to_the_open_is_first():
+def test_within_a_bar_levels_on_one_side_are_reached_nearest_first():
     one_side = run(session(bars={2: (100, 106, 100, 105)}), levels(vwap=104, on_high=105))
-    assert first(one_side) == ("vwap", None) and one_side["measurements"]["first_level_order"] == "observed"
-    both = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=104, on_low=95))     # FL-v2: 4 below 5
-    assert first(both) == ("on_high", None) and both["measurements"]["first_level_order"] == "estimated"
+    assert first(one_side) == ("vwap", None) and "first_level_estimate" not in one_side["measurements"]
+
+
+def test_both_sides_in_one_bar_are_ambiguous_with_the_estimate_kept():
+    # FL-v3: a 1m bar cannot say whether its high or low came first
+    both = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=104, on_low=95))
+    m = both["measurements"]
+    assert first(both) == (None, "ambiguous_intrabar") and m["first_level_price"] is None
+    assert (m["first_level_estimate"], m["first_level_estimate_price"], m["first_level_bar"]) == \
+        ("on_high", "104", "09:32")                                                # 4 above the open, 5 below
+    assert label(both, "first_level_outcome") == (None, "upstream_unavailable")
     tie = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=105, on_low=95))
-    assert first(tie) == (None, "ambiguous_intrabar") and tie["measurements"]["first_level_price"] is None
+    assert first(tie) == (None, "ambiguous_intrabar") and tie["measurements"]["first_level_estimate"] is None
+    # a level at the bar's open is traded first whatever else the bar reached
+    at_open = run(session(bars={0: (100, 106, 94, 101)}), levels(prev_rth_close=100, on_high=104, on_low=95))
+    assert first(at_open) == ("prev_rth_close", None)
 
 
 def test_coincident_levels_are_named_by_precedence():
@@ -379,6 +396,21 @@ def test_premarket_levels_and_the_long_ma_are_candidates():
         (None, "missing_reference")
 
 
+def test_the_snapshot_s_frozen_candidate_list_is_read_as_frozen():
+    snap = levels(vwap=104)
+    frozen = {n: {"value": None, "status": "missing", "exact": None, "source": "test"}
+              for n in defs.FIRST_LEVEL_CANDIDATES}
+    for name, value in {**FAR, "vwap": None, "on_high": 104.25}.items():
+        if value is not None:
+            frozen[name] = {"value": str(value), "status": "valid", "exact": None, "source": "test"}
+    frozen["vwap"] = {"value": "103.5", "status": "valid", "exact": "207/2", "source": "test"}
+    snap["payload"]["first_level_candidates"] = {"ids": list(defs.FIRST_LEVEL_CANDIDATES), "levels": frozen}
+    out = run(session(bars={3: (100, 104.5, 100, 102)}), snap)
+    assert first(out) == ("vwap", None) and out["measurements"]["first_level_price"] == "103.5"
+    frozen["long_ma"] = {"value": None, "status": "incomplete_history", "exact": None, "source": "test"}
+    assert first(run(session(bars={3: (100, 104.5, 100, 102)}), snap)) == (None, "missing_reference")
+
+
 def test_a_level_the_opening_gap_crossed_without_a_trade_is_not_tested():
     out = run(session(bars={6: (100, 101, 100, 100.5)}, pre_close=96), levels(overnight_open=98, vwap=101))
     assert first(out) == ("vwap", None)                  # 98 lay between the 09:29 close and O, never traded
@@ -390,7 +422,7 @@ def test_first_level_needs_every_candidate_and_the_bars_before_it():
 
 
 # --------------------------------------------------------------------------
-# LO-v1 level outcomes
+# LO-v2 level outcomes
 # --------------------------------------------------------------------------
 
 def lo(bars=None, drop=(), **over):
@@ -400,8 +432,15 @@ def lo(bars=None, drop=(), **over):
 def test_lo_not_tested_and_test_and_rejection():
     assert lo() == ("not_tested", None)
     assert label(run(session(), levels()), "on_high_outcome") == ("not_tested", None)
-    assert lo({10: (100, 100, 94, 97)}) == ("test_rejection", None)               # a wick through is no breach
+    assert lo({10: (100, 100, 95, 97)}) == ("test_rejection", None)               # an exact touch, closed back
     assert lo({10: (100, 100, 95, 95), 11: (95, 96, 95, 96)}) == ("test_rejection", None)   # an equal close neither
+
+
+def test_lo_a_wick_through_the_level_is_a_breach():
+    # LO-v2 (guideline revision 2): low 94 under support 95, then closes back above - not a test and rejection
+    assert lo({10: (100, 100, 94, 97)}) == ("break_reclaim_acceptance", None)
+    after = {m: (94.75, 94.75, 94.75, 94.75) for m in range(11, 390)}
+    assert lo({10: (100, 100, 94.75, 96), **after}) == ("break_acceptance", None)   # a quarter-point wick counts
 
 
 def test_lo_breaks():
@@ -428,7 +467,7 @@ def test_lo_session_references_need_a_standard_session():
 
 
 def test_first_level_outcome_covers_only_the_first_15_minutes():
-    bars = {3: (100, 100, 94, 97), 30: (97, 97, 88, 90), **{m: (90, 90, 90, 90) for m in range(31, 390)}}
+    bars = {3: (100, 100, 95, 97), 30: (97, 97, 88, 90), **{m: (90, 90, 90, 90) for m in range(31, 390)}}
     out = run(session(bars=bars), levels(on_low=95))
     assert first(out) == ("on_low", None)
     assert label(out, "first_level_outcome") == ("test_rejection", None)            # by 09:45
@@ -623,6 +662,20 @@ def test_p2_record_prices_show_at_two_decimals():
             "snapshot_version": "nq_evidence_v1_r0929"}
     values = dict(p2_record(snap, run(session(bars={3: (100, 104.5, 100, 102)}), snap)))
     assert values["RTH Open"] == "100.00" and values["Realised First Level Price"] == "104.12"
+
+
+def test_p2_record_names_the_first_level_estimate_and_coincident_levels():
+    from forecaster.outcome_display import p2_record
+    snap = {**levels(on_high=104, on_low=95), "data_mode": "historical_reconstruction",
+            "snapshot_version": "nq_evidence_v5_r0929"}
+    values = dict(p2_record(snap, run(session(bars={2: (100, 106, 94, 101)}), snap)))
+    assert values["Realised First Level Tested"] == values["Realised First Level Price"] == "Unavailable"
+    assert ("FL-v3: the 09:32 bar reached levels on both sides of its open; the nearest, ON High at 104, is kept "
+            "as an estimate, not a label.") in values["Outcome Data Notes"]
+    snap = {**levels(on_low=95, prev_rth_low=95), "data_mode": "historical_reconstruction",
+            "snapshot_version": "nq_evidence_v5_r0929"}
+    notes = dict(p2_record(snap, run(session(bars={4: (100, 100, 94, 96)}), snap)))["Outcome Data Notes"]
+    assert "FL-v3: ON Low at the same price, named Previous RTH Low by precedence." in notes
 
 
 # --------------------------------------------------------------------------

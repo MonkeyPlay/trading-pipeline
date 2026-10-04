@@ -30,28 +30,33 @@ version identifier.
 | P2's 40-field realised-outcome record (display adapter) | [forecaster/outcome_display.py](../forecaster/outcome_display.py) | 1D |
 | Store: version registry, snapshots, revisioned outcomes | [database/migrations/0009_journal_records.sql](../database/migrations/0009_journal_records.sql), [database/journal_store.py](../database/journal_store.py) | 1C, 1D |
 | CLI | [scripts/nq_journal.py](../scripts/nq_journal.py) | 1E backfill |
-| Tests | [tests/test_labels_prompt_v2.py](../tests/test_labels_prompt_v2.py), [tests/test_nq_journal.py](../tests/test_nq_journal.py) | 1E |
+| Tests | [tests/test_labels_prompt_v2.py](../tests/test_labels_prompt_v2.py), [tests/test_nq_journal.py](../tests/test_nq_journal.py), [tests/test_snapshot_completeness.py](../tests/test_snapshot_completeness.py) | 1E |
 | Review set: selection, the Review page, verdict store | [forecaster/review_set.py](../forecaster/review_set.py), [dashboard/views/review.py](../dashboard/views/review.py), [database/migrations/0010_review_sets.sql](../database/migrations/0010_review_sets.sql) | 1E |
 | Disagreement report against the old v5 labels | [scripts/label_disagreement_report.py](../scripts/label_disagreement_report.py), [docs/reports/](reports/) | 1E |
+| Disagreement report for a label revision (impl3 against impl5, rules v2 against v4) | [scripts/label_revision_report.py](../scripts/label_revision_report.py), [docs/reports/label_disagreement_impl3_vs_impl5.md](reports/label_disagreement_impl3_vs_impl5.md) | 1E |
 
 ### Versions
 
 | Version | Kind | What |
 |---|---|---|
-| `nq_prompt_v2_1_impl4` | labels | impl3 with first level tested under FL-v2: Premarket High / Low and the Long MA as candidates, coincident candidates named by precedence, both sides of one bar resolved by the nearest to the open (estimated, flagged) - current; every other label identical to impl3 |
+| `nq_prompt_v2_1_impl5` | labels | guideline revision 2: FL-v3 (both sides of one bar's open `ambiguous_intrabar`, the nearest kept as `first_level_estimate`; impl4's candidates and precedence), OS-v2 (a level the opening gap crossed can be swept), LO-v2 (a wick beyond a level is a breach); candidates read from the snapshot's frozen list - current |
+| `nq_prompt_v2_1_impl4` | labels | impl3 with first level tested under FL-v2: Premarket High / Low and the Long MA as candidates, coincident candidates named by precedence, both sides of one bar resolved by the nearest to the open (estimated, flagged); registered, never recorded |
 | `nq_prompt_v2_1_impl3` | labels | impl2 plus the supplementary descriptors of P2 sections 5 and 7 (MP-v1) and the first 15-minute pattern (FP-v1) |
 | `nq_prompt_v2_1_impl2` | labels | NQ-v2 scored classifications, 30-minute bias, first level tested and the LO-v1 level outcomes (P2 sections 2-6) |
 | `nq_prompt_v2_1_impl1` | labels | the first six targets only |
-| `nq_conv_v4` | convention | v3 plus the premarket window [08:00 ET, cutoff) for Premarket High / Low - current |
+| `nq_conv_v5` | convention | strict completeness (guideline revision 2, 1B): every window needs every minute exactly once, the ATRs and the Long MA unbroken runs of complete buckets, no coverage share anywhere; adds the frozen VWAP, Long MA and first-level candidate list - current |
+| `nq_conv_v4` | convention | v3 plus the premarket window [08:00 ET, cutoff) for Premarket High / Low |
 | `nq_conv_v3` | convention | v2 plus the five prior sessions' RTH prices on the snapshot contract (HTB-v1) |
 | `nq_conv_v2` | convention | what P1/P2 leave open (below): v1 plus P1 section 8's events (EV-v1) and the TradingView moving averages |
 | `nq_conv_v1` | convention | v1: events of the session's calendar day only, no moving averages |
-| `nq_evidence_v4_r0929` | snapshot | research profile, cutoff 09:29:00 ET, under `nq_conv_v4` - current |
-| `nq_evidence_v4_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v4` - registered, never built (a live-latency fallback) |
+| `nq_evidence_v5_r0929` | snapshot | research profile, cutoff 09:29:00 ET, under `nq_conv_v5` - current |
+| `nq_evidence_v5_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v5` - registered, never built (a live-latency fallback) |
+| `nq_evidence_v4_r0929` / `_o0927` | snapshot | the same under `nq_conv_v4`; registered, never built |
 | `nq_evidence_v3_r0929` / `_o0927` | snapshot | the same under `nq_conv_v3` (no premarket window) |
 | `nq_evidence_v2_r0929` / `_o0927` | snapshot | the same under `nq_conv_v2`; the 274 stored v2 snapshots, their annotations, analogue sets and the first pre-open review set stay as they are |
 | `nq_evidence_v1_r0929` / `_o0927` | snapshot | the same under `nq_conv_v1`; the 269 stored v1 snapshots and the review set stay as they are |
-| `nq_structure_rules_v3` | annotation | the rule-based pre-open structure annotation (stage 2, below): v2's labels, HTB-v1 worded as exclusive bands, its basis naming a close beyond the range - current |
+| `nq_structure_rules_v4` | annotation | the rule-based pre-open structure annotation (stage 2, below): v3 over complete windows only - current |
+| `nq_structure_rules_v3` | annotation | v2's labels, HTB-v1 worded as exclusive bands, its basis naming a close beyond the range; never stored |
 | `nq_structure_rules_v2` | annotation | v1 plus Higher-Timeframe Bias (HTB-v1) |
 | `nq_structure_rules_v1` | annotation | the same without Higher-Timeframe Bias |
 | `nq_structure_llm_v2` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5`, Higher-Timeframe Bias from HTB-v1 - built, waiting for an API key |
@@ -78,8 +83,8 @@ only within one profile.
 | `opening_bias_30m` | `bullish`, `bearish`, `neutral_band` | Two-sided realised, **Neutral** predicted |
 | `close_direction_rth` | `bullish`, `bearish`, `neutral_band` | Two-sided for the band |
 | `session_type_rth` | `reversal_day`, `bull_trend_day`, `bear_trend_day`, `two_sided_volatile_day`, `range_day` | P1/P2 option names |
-| `first_level_tested` | `on_high`, `on_low`, `prev_rth_high`, `prev_rth_low`, `prev_rth_close`, `overnight_open`, `vwap` | ON High, ..., VWAP; the price is the measurement `first_level_price` |
-| `first_level_outcome` | LO-v1 below, without `not_tested` | First Level Outcome, over [09:30, 09:45) |
+| `first_level_tested` | `on_high`, `on_low`, `prev_rth_high`, `prev_rth_low`, `prev_rth_close`, `overnight_open`, `vwap`, `premarket_high`, `premarket_low`, `long_ma` | ON High, ..., Long MA; the price is the measurement `first_level_price` (impl2-impl3: the first seven) |
+| `first_level_outcome` | LO-v2 below, without `not_tested` | First Level Outcome, over [09:30, 09:45) |
 | `on_high_outcome`, `on_low_outcome`, `prev_rth_high_outcome`, `prev_rth_low_outcome` | `not_tested`, `test_rejection`, `break_acceptance`, `break_reclaim_acceptance`, `break_without_acceptance` | Not tested / Test and rejection / Break and acceptance / Break–reclaim–acceptance / Break without acceptance, over the standard RTH |
 | `ib_direction` | `bullish`, `bearish`, `neutral_band` | Initial Balance Direction: 10:29 close - O against T |
 | `opening_drive_strength` | `strong`, `moderate` | only for an opening drive (efficiency >= 0.80 strong); otherwise `not_applicable`, shown blank |
@@ -147,60 +152,83 @@ revision, say); earlier revisions stay.
 Decisions P1/P2 leave to the implementation, recorded in the convention and label
 definitions:
 
+- **Completeness (`nq_conv_v5`, guideline revision 2, 1B, your decision
+  2026-10-04):** a frozen value needs its whole window - every minute present
+  exactly once - or it is unavailable with the gap named; nothing is computed from
+  what is left, and no coverage share is used anywhere. Each 2m / 5m / 15m bucket
+  row carries a `complete` flag (its minutes all present, none twice); a bucket
+  missing a minute is kept and flagged, never filled. An ON or premarket window
+  that is not whole keeps its observed extremes only as `provisional_high` /
+  `provisional_low` diagnostics. On the 274 sessions this changes two: 2025-12-11
+  and 2026-09-10 each miss the 18:00 minute, so their ON high / low, VWAP, Long MA
+  and the overnight and MA structure fields are unavailable (v1-v4 used 90% of the
+  overnight minutes).
 - **Daily ATR:** Wilder ATR(14) on RTH sessions [09:30, scheduled close), each
   session on its active contract with the previous close from the same contract;
-  a session without every RTH minute is skipped; the most recent 70 valid true
-  ranges, seeded with the mean of the first 14 (searched over at most 105
-  sessions). Chart parity with a TradingView daily ATR is **not verified** -
-  TradingView may use the Globex day or a continuous contract.
+  the 70 true ranges of exactly the 70 sessions before the target, each needing
+  every RTH minute of itself and of the session before, seeded with the mean of
+  the first 14. One incomplete session leaves it unavailable (`incomplete_history`);
+  v1-v4 skipped such sessions and searched back up to 105. Chart parity with a
+  TradingView daily ATR is **not verified** - TradingView may use the Globex day or
+  a continuous contract.
 - **2-minute ATR:** Wilder ATR(14) on 2m buckets anchored on even ET minutes,
   built from the snapshot contract's 1m bars in the overnight window and complete
-  by the cutoff (at 09:29 the last is 09:26-09:28); 70 true ranges. Never the 1m
-  ATR rescaled.
+  by the cutoff (at 09:29 the last is 09:26-09:28); 70 true ranges from the last 71
+  buckets, which must be consecutive, complete and end at the last bucket before the
+  cutoff. Never the 1m ATR rescaled.
 - **References:** previous RTH high / low / close need every RTH minute of the
-  previous scheduled session (same contract); ON high / low need 90% of the
-  overnight minutes [18:00 the day before, cutoff); overnight open is the bar
+  previous scheduled session (same contract); ON high / low need every overnight
+  minute [18:00 the day before, cutoff) exactly once; overnight open is the bar
   starting 18:00 exactly; the cutoff price is the last complete 1m close if at most
   5 minutes old. **Price at 09:29 is always unavailable** (neither profile observes
   09:29:00-09:29:59): the 09:29 candle closes at 09:30:00, the open, so no pre-open
   snapshot can hold it; the research cutoff is 09:29:00, the close of the 09:28
   candle. **Premarket high / low** (`nq_conv_v4`, the user's TradingView premarket
   session 08:00-09:30 cut at the cutoff): the 1m bars of [08:00 ET, cutoff) - 08:00
-  to 09:28 at the 09:29 cutoff - with at least 90% of the minutes; unavailable in
-  v1-v3. Moving averages: none in v1; v2 adds the TradingView lines (stage 2 below).
+  to 09:28 at the 09:29 cutoff - every minute (`nq_conv_v4` took 90%); unavailable
+  in v1-v3. Moving averages: none in v1; v2 adds the TradingView lines (stage 2
+  below). From `nq_conv_v5` the snapshot also freezes the **cutoff VWAP** (exact, every
+  overnight minute), the **Long MA at the cutoff** (`moving_averages.long_ma_at_cutoff`:
+  EMA(100) of every 2m bucket from 18:00, all complete and consecutive - the line
+  the structure annotation uses) and the **first-level candidate list**
+  (`first_level_candidates`: each candidate's price or why it is unavailable).
 - **First level tested (P2 section 6):** the candidates are the snapshot's ON high
-  / low, previous-RTH high / low / close, overnight open, and the **frozen cutoff
-  VWAP** - sum(hlc3 x volume) / sum(volume) over the snapshot's archived overnight
-  1m bars [18:00, cutoff), computed exactly by the labels from the stored snapshot
-  (unavailable under 90% overnight coverage); from impl4 (FL-v2) also the premarket
-  high / low and the **frozen cutoff Long MA** (EMA(100) of the archived overnight 2m
-  bars, as the structure annotation computes it). Round numbers / other named levels
-  are not in the candidate set. A level is reached by a 1m bar with low <= level <=
-  high, so a level the opening gap crossed without an RTH trade there is not reached.
-  Within one bar price is taken to trade through every price between the bar's open
-  and its extremes: a level equal to the open is first, then the nearest on its side.
-  Any unavailable candidate makes the first level unavailable (it could have been
-  first). impl2-impl3: levels on both sides of the open are `ambiguous_intrabar` and
-  candidates at one price `coincident_levels`, as P2 says.
-- **FL-v2 (impl4, the user's decision 2026-10-04):** levels reached on both sides of
-  one bar's open - the order inside a 1m bar is not observed - are resolved by the
-  one nearest the open, flagged `first_level_order: estimated` (`observed`
-  otherwise); only an exact tie in distance above and below stays
-  `ambiguous_intrabar`. This departs from the guideline's 1D caution against
-  deciding intrabar order; the flag lets any evaluation leave estimated orders out.
-  Candidates at one price are one level, named by precedence - previous RTH high /
-  low / close, ON high / low, premarket high / low, overnight open, VWAP, Long MA - so
-  a premarket high equal to the ON high is the ON high; `first_level_coincident`
-  keeps the others. P2's Outcome Data Notes say both. On the 274 sessions (against
-  impl3): first level named on 268 (impl3: 233), 56 of them by an estimated order, 45
-  by precedence; Long MA 72, premarket low 42, VWAP 32, ON high 29, premarket high
-  28, ...; none reached 4, a missing candidate 2; every other label identical.
-- **LO-v1:** the original side is the side of O (a level equal to O has no
-  resolvable approach); a breach is a 1m **close** strictly beyond the level, so a
-  wick through or an equal close is a test, not a break; test and rejection needs a
-  later close strictly back on the original side; acceptance is the window's final
-  three 1m closes strictly on one side, and those bars must be stored. Not tested
-  needs the complete window and applies to the four session references only.
+  / low, previous-RTH high / low / close, overnight open, the **cutoff VWAP** -
+  sum(hlc3 x volume) / sum(volume) over the overnight 1m bars [18:00, cutoff),
+  exact - and from impl4 the premarket high / low and the **cutoff Long MA**. impl5
+  reads them from the snapshot's frozen candidate list (`nq_conv_v5`); on an older
+  snapshot it derives the VWAP and Long MA from the archived bars under the same
+  completeness rule. Round numbers / other named levels are not in the candidate
+  set. A level is reached by a 1m bar with low <= level <= high, so a level the
+  opening gap crossed without an RTH trade there is not reached. Within one bar a
+  level equal to the bar's open is first, then the nearest on its side. Any
+  unavailable candidate makes the first level unavailable (it could have been
+  first).
+- **FL-v3 (impl5, your decision 2026-10-04 under guideline revision 2):** levels
+  reached on both sides of one bar's open are `ambiguous_intrabar` - a 1m bar does
+  not show whether its high or its low came first. The level nearest the open is
+  kept on file as a measurement, `first_level_estimate` / `first_level_estimate_price`
+  (none for an exact tie in distance above and below), never as the label; P2's
+  Outcome Data Notes name it. Candidates at one price are one level, named by
+  precedence - previous RTH high / low / close, ON high / low, premarket high / low,
+  overnight open, VWAP, Long MA - so a premarket high equal to the ON high is the ON
+  high; `first_level_coincident` keeps the others. On the 274 sessions: named on 212
+  (Long MA 55, premarket low 32, ON high 29, VWAP 22, premarket high 22, ON low 19,
+  previous RTH high 13, low 9, close 8, overnight open 3), ambiguous 56 (each with an
+  estimate), none reached 4, a missing candidate 2; 45 named by precedence.
+  History: impl2-impl3 had the first seven candidates and left candidates at one
+  price `coincident_levels` (233 named); impl4 (FL-v2, never recorded) took the
+  nearest level as the label, flagged `estimated` (268 named, 56 of them estimated).
+- **LO-v2 (impl5, guideline revision 2):** the original side is the side of O (a
+  level equal to O has no resolvable approach); a breach is a **trade** strictly
+  beyond the level - the wick; returns and acceptance use closes. Test and rejection
+  is an exact touch with no trade beyond, then a later close strictly back on the
+  original side; acceptance is the window's final three 1m closes strictly on one
+  side, and those bars must be stored. Not tested needs the complete window and
+  applies to the four session references only. LO-v1 (impl2-impl3) took a breach
+  as a 1m close beyond the level, so a wick through that closed back was a test and
+  rejection; on the 274 sessions LO-v2 moves 45 labels, all such wicks becoming a
+  break (mostly break-reclaim-acceptance).
 - **Descriptors (P2 sections 5 and 7):** opening confirmation time is the close
   time of the first 1m bar closing strictly beyond O + T / O - T in the first 15
   minutes; an extension breach is a trade strictly beyond the boundary, and "both
@@ -231,11 +259,14 @@ definitions:
   the 269 sessions get a pattern, 4% are ambiguous. The review set is where FP-v1
   is checked against your reading of the charts.
 - **Opening-type details:** reach is inclusive (high >= level); "breached by at
-  least T" is low <= level - T; the reclaim must be a later bar than the first
-  breach; a level strictly between the 09:29 close and O was crossed by the gap
-  and is not a sweep reference. A missing sweep reference only blocks the label
-  when a sweep was possible at all (the window went below O - T for a support,
-  above O + T for a resistance).
+  least T" is low <= level - T, by an RTH bar; the reclaim must be a later bar than
+  the first breach. **OS-v2 (impl5, guideline revision 2):** a level the opening
+  gap crossed is a sweep reference like any other - the gap alone is never the
+  breach, but a later RTH breach by T and a reclaim close make it a sweep, and the
+  09:29 bar is not needed. impl2-impl4 left a level strictly between the 09:29 close
+  and O out (no session of the 274 changes). A missing sweep reference only blocks
+  the label when a sweep was possible at all (the window went below O - T for a
+  support, above O + T for a resistance).
 
 ## Running it
 
@@ -262,6 +293,12 @@ snapshots also read the context instruments.
 Migration 0009 (the `journal` schema) is applied by the first process that
 starts after it is pulled - the dashboard and the collector migrate on start.
 A new label version needs no new snapshots: `outcomes` labels the stored ones.
+A new convention does: impl5 under `nq_conv_v5` is recorded by `catch-up` (or the
+collector's journal step), which builds a `nq_evidence_v5_r0929` snapshot for every
+final session, labels it, annotates it under `nq_structure_rules_v4` and matches it.
+The older versions' records stay as they are. Read
+[docs/reports/label_disagreement_impl3_vs_impl5.md](reports/label_disagreement_impl3_vs_impl5.md)
+first; `python scripts/label_revision_report.py` regenerates it.
 
 ## Findings (research profile)
 
@@ -384,7 +421,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
     detected; P1 bases Normal on scheduled risk.
   - Snapshots (`nq_evidence_v2_*`) hold scheduled releases from the previous
     session's close to the end of the day and earnings only up to the cutoff.
-- **Rule-based structure annotation** (`nq_structure_rules_v2`,
+- **Rule-based structure annotation** (`nq_structure_rules_v4`,
   [forecaster/structure_rules.py](../forecaster/structure_rules.py)): the stand-in
   for the Claude structure annotation (Appendix A, A1) until the API is in place.
   It reads one frozen snapshot only and returns the shape A1 will return - per
@@ -396,7 +433,15 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   convention (`RULES`), not P1's text: P1 does not quantify dominant, meaningful,
   flat or frequent. Higher-Timeframe Bias follows your rule HTB-v1 (below).
   On the 274 stored sessions it gives Overnight Structure Mixed 80, Uptrend 54,
-  V-reversal 48, Downtrend 34, Inverted-V 33, Range 25.
+  V-reversal 48, Downtrend 34, Inverted-V 33, Range 25. From v4 every field needs
+  its whole window as an unbroken run of complete buckets (`nq_conv_v5`): the
+  overnight structure every minute of [18:00, cutoff); the premarket pattern and
+  short-term structure the 5m buckets of the last three hours and the two before
+  them (the swing look-back); each trend its 12 buckets ending at the last one
+  before the cutoff; the four MA fields every 2m bucket from 18:00. v1-v3 used 90% of
+  the overnight minutes, 80% of the premarket hour and 10 of 12 trend bars; v4
+  changes the two sessions with a missing 18:00 minute (their overnight structure
+  and MA fields become unavailable) and nothing else.
 - **Store**: `journal.structure_annotations` (migration 0011, append-only), one row
   per snapshot, protocol and output; a rules protocol may annotate a snapshot only
   once. The collector's journal step loads the calendar, refreshes the earnings and
@@ -509,8 +554,8 @@ the Analogues page has it under "P1 pre-open record".
 |---|---|---|
 | 1-3 Day, Weekday, Contract | snapshot identity, exchange calendar | done |
 | 4-7 Previous RTH High / Low / Close, Overnight Open | snapshot references on the snapshot contract | done |
-| 8-9 ON High / Low | snapshot references (90% overnight coverage) | done |
-| 10-11 Premarket High / Low | snapshot references, [08:00 ET, cutoff) (`nq_conv_v4`) | done |
+| 8-9 ON High / Low | snapshot references, every overnight minute (`nq_conv_v5`) | done |
+| 10-11 Premarket High / Low | snapshot references, every minute of [08:00 ET, cutoff) (`nq_conv_v4`, `nq_conv_v5`) | done |
 | 12 Price at 09:29 | neither profile observes 09:29:00-09:29:59; the cutoff price is a separate field, never renamed | unavailable by design |
 | 13-14 Daily ATR, 2-Min ATR at 09:29 | snapshot ATRs; the 09:27 profile shows 2-Min ATR at 09:29 unavailable | done |
 | 15-19 structure, trends, Higher-Timeframe Bias | structure annotation (rules now, Claude later); HTB-v1 | done |

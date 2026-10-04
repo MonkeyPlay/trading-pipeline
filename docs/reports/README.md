@@ -2,6 +2,7 @@
 
 | Report | What | Script |
 |---|---|---|
+| `label_disagreement_impl3_vs_impl5.md` / `.csv` | The recorded `nq_prompt_v2_1_impl3` outcomes against impl5 on snapshots built today under `nq_conv_v5` (strict completeness), and the stored rule-based structure annotation against `nq_structure_rules_v4`; every difference walked one change at a time (bars revised, snapshot, rules) to its cause | `scripts/label_revision_report.py` |
 | `label_disagreement_v5_vs_nq_v2.md` / `.csv` | The old v5 labels (`nq_labels_v5_candidate`) against the NQ-v2 labels, session by session, with the definition behind every difference (guideline stage 1E) | `scripts/label_disagreement_report.py` |
 
 ## Regenerating the disagreement report
@@ -31,3 +32,15 @@ It replays v5 with its own code from git (commit f00a0c1), so the history must b
 present. Exit status 1 means a disagreement it could not explain, or a recomputed
 NQ-v2 label that differs from the recorded one. Drop the scratch database when
 done: `docker exec $C dropdb -U trading tp_scratch_v5_labels`.
+
+## Regenerating the impl3 / impl5 report
+
+Reads the main database only (the session is set read-only; the new snapshots are
+built in memory, never saved) and replays impl3 with its own code from git (commit
+91ea3a5), so the history must be present:
+
+```bash
+python scripts/label_revision_report.py
+```
+
+It takes about a minute. Exit status 1 means a difference with no named cause.

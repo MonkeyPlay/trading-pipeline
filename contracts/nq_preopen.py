@@ -155,10 +155,15 @@ HTB = {
 # nq_structure_rules_v1 (registered 2026-10-04) left Higher-Timeframe Bias uncovered;
 # v2 is v1 plus HTB-v1, every other rule unchanged; v3 gives the same labels with HTB-v1
 # worded as the user's exclusive bands and its basis naming a close beyond the range as
-# such (v2 called it the upper / lower third).
-RULES_PROTOCOL_VERSION = "nq_structure_rules_v3"
+# such (v2 called it the upper / lower third). v4 (guideline revision 2, strict completeness)
+# is v3 with every field needing its whole window - no coverage share, no minimum bar count
+# below the window - so it gives v3's labels wherever the data is complete.
+RULES_PROTOCOL_VERSION = "nq_structure_rules_v4"
 
 RULES = {
+    "completeness": "a field's window is an unbroken run of complete buckets (every minute present exactly "
+                    "once, nq_conv_v5) ending at the last bucket before the cutoff; anything less leaves the field "
+                    "unavailable with the gap named - nothing is classified from a partial window",
     "swings": {"timeframe": "5m", "left": 2, "right": 2,
                "rule": "a 5m bar whose high is above the 2 bars before it and at least the 2 after it (low "
                        "mirrored); confirmed at the end of the second bar after it, which must be complete by "
@@ -169,7 +174,7 @@ RULES = {
                                 "under 0.05% in the EMA(100), so the values match TradingView's to well within "
                                 "a tick"},
     "overnight_structure": {
-        "bars": "5m bars of [18:00, cutoff)", "min_coverage": "0.90 of the overnight minutes",
+        "bars": "5m bars of [18:00, cutoff)", "complete": "every minute of [18:00, cutoff) and every 5m bucket from 18:00",
         "v_reversal": "the overnight low L lies in the middle 70% of the window's time, comes after a decline of "
                       "at least 0.50 R from the highest high before it, the cutoff price has recovered at least "
                       "0.60 of that decline, a 5m close after L is above the last confirmed swing high before L, "
@@ -192,17 +197,20 @@ RULES = {
         "reversal": "directional hour against the context and the cutoff price beyond the context's last "
                     "confirmed swing high (low); without that break: Mixed",
         "range": "no directional progress: hour efficiency < 0.35, or |net| < 2T within a range <= 4T",
-        "mixed": "anything else", "min_bars": "80% of the hour's 5m bars",
+        "mixed": "anything else",
+        "complete": "every 5m bucket of the last three hours, with the two before them (the swing look-back)",
     },
-    "short_term_structure": {"window": "confirmed 5m swings in [cutoff - 180, cutoff)",
+    "short_term_structure": {"window": "confirmed 5m swings in [cutoff - 180, cutoff); every 5m bucket of it and "
+                                       "the two before complete",
                              "rule": "last two swing highs and last two swing lows both rising: Higher highs / "
                                      "Higher Lows; both falling: Lower highs / Lower lows; else Mixed; fewer than "
                                      "two of either: unavailable"},
-    "trend": {"5m": "last 12 complete 5m bars", "15m": "last 12 complete 15m bars",
+    "trend": {"5m": "the 12 5m buckets ending at the last one before the cutoff, all complete",
+              "15m": "the 12 15m buckets ending at the last one before the cutoff, all complete",
               "rule": "E = |last close - first open| / range: E >= 0.60 Bullish / Bearish, 0.30 <= E < 0.60 "
-                      "Neutral-bullish / Neutral-bearish, below 0.30 (or zero range) Neutral",
-              "min_bars": 10},
-    "price_vs_long_ma": {"window": "last 15 2m bars (30 min)",
+                      "Neutral-bullish / Neutral-bearish, below 0.30 (or zero range) Neutral"},
+    "price_vs_long_ma": {"window": "2m buckets starting in the last 30 min (14 at 09:29); the EMA(100) needs every 2m "
+                                   "bucket from 18:00 complete (the snapshot's Long MA, nq_conv_v5)",
                          "rule": "|cutoff price - EMA(100)| <= 1 point: At; else the sign changes of close - "
                                  "EMA(100) over the window: two or more Crossing, one Above/crossing or "
                                  "Crossing/below by the side now, none Above / Below"},
@@ -210,14 +218,13 @@ RULES = {
                               "Falling"},
     "fast_ma_alignment": {"rule": "sign changes of TEMA - EMA(14) over the last 15 2m bars: two or more, or one "
                                   "in the last 3 bars, Mixed; else Bullish when TEMA is above, Bearish below"},
-    "chop_score": {"window": "last 15 2m bars (the final 30 pre-open minutes)",
+    "chop_score": {"window": "the 2m buckets of the final 30 pre-open minutes",
                    "flat_long_ma": "Long MA Slope is Flat",
                    "repeated_crossings": "close crossed EMA(14) and EMA(100) at least 4 times in all (TEMA "
                                          "hugs price, so its crossings are not counted)",
                    "overlap_and_wicks": "at least 0.45 of the bars mostly inside the previous one (overlap >= "
                                         "0.70 of their own range) and at least 0.55 of the bars with wicks >= "
-                                        "0.50 of their range",
-                   "min_bars": 12},
+                                        "0.50 of their range"},
     "higher_timeframe_bias": HTB_VERSION,
     "event_risk": EVENT_RISK_VERSION,
     "integrity": "a target-session bar ending after the cutoff, or an earnings row published after it, makes "
@@ -229,8 +236,9 @@ def rules_record() -> Dict[str, Any]:
     return _record(RULES_PROTOCOL_VERSION, "annotation", {
         "annotator": "rules", "fields": FIELDS, "price_location": PRICE_LOCATION, "rules": RULES,
         "event_risk": EVENT_RISK, "higher_timeframe_bias": HTB,
-        "supersedes": "nq_structure_rules_v2: the same labels; HTB-v1 worded as exclusive bands and its basis "
-                      "naming a close beyond the range (v1: Higher-Timeframe Bias not covered)",
+        "supersedes": "nq_structure_rules_v3: the same rules over complete windows only (v3 classified the "
+                      "overnight from 90% of its minutes and the trends and MA fields from most of their bars); "
+                      "v3 superseded v2's HTB-v1 wording, v2 added HTB-v1 to v1",
         "replaced_by": "a Claude structure annotation (Appendix A, A1) under its own "
                                                  "protocol version, producing the same ANNOTATION_SCHEMA",
     })

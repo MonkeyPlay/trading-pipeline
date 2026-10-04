@@ -115,11 +115,12 @@ def _show_fraction(v: Fraction) -> str:
 
 
 def _vwap(payload: Dict[str, Any]) -> Optional[Fraction]:
-    """The frozen cutoff VWAP: sum(hlc3 x volume) / sum(volume) over the snapshot's archived
-    overnight 1m bars, exactly; None under 90% overnight coverage or without volume."""
+    """The cutoff VWAP of a snapshot without a frozen candidate list: sum(hlc3 x volume) / sum(volume)
+    over its archived overnight 1m bars, exactly; None unless every minute is archived (impl5) or without
+    volume."""
     bars = payload.get("bars") or {}
     coverage = (bars.get("coverage") or {}).get("ratio")
-    if coverage is None or Decimal(str(coverage)) < defs.ON_MIN_COVERAGE:
+    if coverage is None or Decimal(str(coverage)) < 1:          # impl5: every minute of the window
         return None
     pv, vol = Fraction(0), Fraction(0)
     for _, _o, h, low, c, v in bars.get("1m", []):
@@ -129,11 +130,14 @@ def _vwap(payload: Dict[str, Any]) -> Optional[Fraction]:
 
 
 def _long_ma(payload: Dict[str, Any], overnight_start: datetime) -> Optional[Fraction]:
-    """The frozen cutoff Long MA: EMA(100) of the snapshot's overnight 2m bars at the last one (nq_conv_v2), computed
-    as the structure annotation computes it; None under 100 bars. Kept to six decimals."""
-    from forecaster.structure_rules import _bars, moving_averages
+    """The cutoff Long MA of a snapshot without a frozen candidate list: EMA(100) of its overnight 2m bars at the
+    last one (nq_conv_v2), computed as the structure annotation computes it; None under 100 bars or unless every 2m
+    bucket from 18:00 to the last before the cutoff is complete (impl5). Kept to six decimals."""
+    from forecaster.structure_rules import _bars, _ts, last_start, moving_averages, unbroken
     bars = [b for b in _bars(payload, "2m") if b.start >= overnight_start]
-    if len(bars) < 100:
+    cutoff = (payload.get("cutoff") or {}).get("input_cutoff_at")
+    if len(bars) < 100 or unbroken(bars, overnight_start, last_start(_ts(cutoff), "2m") if cutoff
+                                   else bars[-1].start, "2m"):
         return None
     value = float(moving_averages(bars)["ema_trend"].iloc[-1])
     return Fraction(Decimal(repr(value)).quantize(_SHOW))
@@ -162,7 +166,15 @@ class _Session:
         # first-level candidates as exact values (None: unavailable) and their display prices
         self.levels: Dict[str, Optional[Fraction]] = {}
         self.level_shown: Dict[str, Optional[str]] = {}
-        for name in defs.FIRST_LEVEL_CANDIDATES:
+        frozen = (payload.get("first_level_candidates") or {}).get("levels")
+        if frozen is not None:                     # nq_conv_v5: the list frozen before the open
+            for name in defs.FIRST_LEVEL_CANDIDATES:
+                c = frozen.get(name) or {}
+                ok = c.get("status") == "valid" and c.get("value") is not None
+                self.levels[name] = (None if not ok else Fraction(c["exact"]) if c.get("exact")
+                                     else Fraction(Decimal(str(c["value"]))))
+                self.level_shown[name] = str(c["value"]) if ok else None
+        for name in defs.FIRST_LEVEL_CANDIDATES if frozen is None else ():   # older snapshots: derived here
             if name in ("vwap", "long_ma"):
                 v = _vwap(payload) if name == "vwap" else _long_ma(payload, self.session.overnight_start_at)
                 self.levels[name] = v
@@ -242,12 +254,6 @@ def opening_type_rules(x: _Session):
     O, T = x.O, x.T
     H, L, C = max(b.high for b in bars), min(b.low for b in bars), bars[-1].close
 
-    def crossed_by_gap(v: Decimal, notes: List[str]):
-        if x.pre_close is None:
-            notes.append("no 09:29 bar: whether the opening gap crossed a reference is unknown")
-            return None
-        return min(x.pre_close, O) < v < max(x.pre_close, O)
-
     def swept(name: str, v: Optional[Decimal], low_side: bool, notes: List[str]):
         if v is None:
             # Breaching a support below O by T needs L15 < O - T (a resistance: H15 > O + T);
@@ -258,10 +264,10 @@ def opening_type_rules(x: _Session):
             return None
         if (v >= O) if low_side else (v <= O):
             return False                       # not a support (resistance) of this open
+        # OS-v2: the breach must come from RTH bars, so the opening gap alone is never a sweep; a level the
+        # gap crossed is swept like any other by a later breach by T and a reclaim close
         breach = next((i for i, b in enumerate(bars) if (b.low <= v - T if low_side else b.high >= v + T)), None)
-        reclaimed = breach is not None and any((b.close > v if low_side else b.close < v) for b in bars[breach + 1:])
-        gap = crossed_by_gap(v, notes) if reclaimed else False
-        return _and(None if gap is None else not gap, reclaimed)
+        return breach is not None and any((b.close > v if low_side else b.close < v) for b in bars[breach + 1:])
 
     rules = [
         ("sweep_low_rebound",
@@ -354,10 +360,11 @@ def _session_type(x: _Session, close_dir: Dict[str, Any], meas: Dict[str, Any]) 
 
 def _first_level(x: _Session, meas: Dict[str, Any]) -> Dict[str, Any]:
     """
-    P2 section 6 under FL-v2: the first candidate reached in [09:30, 09:45), by 1m bar and order within it.
-    Within a bar the level nearest the open is first - observed when every level reached lies on one side of the
-    open, estimated when both sides were reached (first_level_order); candidates at one price are named by
-    FIRST_LEVEL_PRECEDENCE (first_level_coincident lists the others).
+    P2 section 6 under FL-v3: the first candidate reached in [09:30, 09:45), by 1m bar and order within it.
+    Within a bar a level equal to the open is first, else the nearest on its side; levels reached on both sides
+    of the open leave the order unobserved - ambiguous_intrabar, with the level nearest the open kept as
+    first_level_estimate. Candidates at one price are named by FIRST_LEVEL_PRECEDENCE (first_level_coincident
+    lists the others).
     """
     if x.O is None:
         return _label(reason="missing_bars", detail="no 09:30 bar: O unknown")
@@ -373,17 +380,19 @@ def _first_level(x: _Session, meas: Dict[str, Any]) -> Dict[str, Any]:
         reached = {n: v for n, v in x.levels.items() if low <= v <= high}
         if not reached:
             continue
+        at_open = any(v == op for v in reached.values())
         both_sides = any(v > op for v in reached.values()) and any(v < op for v in reached.values())
         nearest = min(abs(v - op) for v in reached.values())
-        first = [n for n, v in reached.items() if abs(v - op) == nearest]
-        if len({reached[n] for n in first}) > 1:          # one above and one below at the same distance
-            meas.update(first_level_price=None, first_level_bar=x.at(m))
+        first = sorted((n for n, v in reached.items() if abs(v - op) == nearest), key=defs.FIRST_LEVEL_PRECEDENCE.index)
+        if both_sides and not at_open:
+            single = len({reached[n] for n in first}) == 1      # not one above and one below at the same distance
+            meas.update(first_level_price=None, first_level_bar=x.at(m),
+                        first_level_estimate=first[0] if single else None,
+                        first_level_estimate_price=x.level_shown[first[0]] if single else None)
             return _label(reason="ambiguous_intrabar",
-                          detail=f"levels above and below the {x.at(m)} bar's open at the same distance: "
-                                 + ", ".join(sorted(first)))
-        first.sort(key=defs.FIRST_LEVEL_PRECEDENCE.index)
+                          detail=f"levels on both sides of the {x.at(m)} bar's open reached: "
+                                 + ", ".join(sorted(reached)))
         meas.update(first_level_price=x.level_shown[first[0]], first_level_bar=x.at(m),
-                    first_level_order="estimated" if both_sides and reached[first[0]] != op else "observed",
                     first_level_coincident=first[1:])
         return _label(first[0])
     meas["first_level_price"] = None
@@ -392,7 +401,8 @@ def _first_level(x: _Session, meas: Dict[str, Any]) -> Dict[str, Any]:
 
 def _level_outcome(x: _Session, level: Optional[Fraction], name: str, a: int, b: int,
                    allow_not_tested: bool) -> Dict[str, Any]:
-    """LO-v1 for one level over minutes [a, b) of the session (contracts/nq_prompt_v2.LABEL_CONVENTIONS)."""
+    """LO-v2 for one level over minutes [a, b) of the session (contracts/nq_prompt_v2.LABEL_CONVENTIONS): a breach
+    is a trade strictly beyond the level (the wick); returns and acceptance use closes."""
     if level is None:
         return _label(reason="missing_reference", detail=f"{name} unavailable")
     if x.O is None:
@@ -408,8 +418,11 @@ def _level_outcome(x: _Session, level: Optional[Fraction], name: str, a: int, b:
     def back(close: Decimal) -> bool:
         return Fraction(close) > level if from_above else Fraction(close) < level
 
+    def breached(bar: RBar) -> bool:
+        return Fraction(bar.low) < level if from_above else Fraction(bar.high) > level
+
     bars, missing = x.window(a, b)
-    if any(beyond(bar.close) for bar in bars):
+    if any(breached(bar) for bar in bars):
         final = [x.by_min.get(m) for m in range(b - 3, b)]
         if any(bar is None for bar in final):
             return _label(reason="missing_bars", detail="the window's final three 1m bars are not all stored")

@@ -110,11 +110,15 @@ def _bar_rows(bars: Sequence[Bar]) -> List[list]:
 def aggregate(bars: Sequence[Bar], minutes: int, cutoff: datetime) -> List[tuple]:
     """
     Clock buckets of ``minutes`` (2m on even minutes, 5m on multiples of 5, ...)
-    from time-ordered 1m bars: (start, open, high, low, close, volume, 1m bars).
-    Only buckets that ended by ``cutoff``; an empty bucket produces no bar. New
-    York's offset from UTC is whole hours, so UTC minute alignment is ET alignment.
+    from time-ordered 1m bars: (start, open, high, low, close, volume, 1m bars,
+    complete). Only buckets that ended by ``cutoff``; an empty bucket produces no
+    bar. ``complete`` (nq_conv_v5): every one of its minutes has exactly one 1m bar -
+    a bucket missing a minute, or holding a duplicate, is kept but flagged, never
+    filled. New York's offset from UTC is whole hours, so UTC minute alignment is ET
+    alignment.
     """
     out: Dict[datetime, list] = {}
+    seen: Dict[datetime, set] = {}
     for start, o, h, low, c, v in bars:
         epoch = int(start.timestamp()) // 60
         b_start = datetime.fromtimestamp((epoch - epoch % minutes) * 60, timezone.utc)
@@ -123,9 +127,11 @@ def aggregate(bars: Sequence[Bar], minutes: int, cutoff: datetime) -> List[tuple
         b = out.get(b_start)
         if b is None:
             out[b_start] = [o, h, low, c, v, 1]
+            seen[b_start] = {start}
         else:
             b[1], b[2], b[3], b[4], b[5] = max(b[1], h), min(b[2], low), c, b[4] + v, b[5] + 1
-    return [(s, *out[s]) for s in sorted(out)]
+            seen[b_start].add(start)
+    return [(s, *out[s], out[s][5] == minutes and len(seen[s]) == minutes) for s in sorted(out)]
 
 
 def true_range(high: Decimal, low: Decimal, prev_close: Decimal) -> Decimal:
@@ -218,13 +224,13 @@ def _rth_minutes(s: cal.Session) -> int:
 def _daily_atr(conn, symbol: str, session: cal.Session, contract_id: int) -> Tuple[Dict[str, Any], list]:
     """The frozen daily ATR (convention daily_atr) and the true ranges it used."""
     period, window = defs.DAILY_ATR["period"], defs.DAILY_ATR["window_true_ranges"]
-    sessions = cal.sessions_before(session.session_date, defs.DAILY_ATR["search_sessions"])
+    sessions = cal.sessions_before(session.session_date, window)
     if len(sessions) < 2:
         return {"value": None, "status": "insufficient_history", "true_ranges": 0}, []
     try:
         sessions = [cal.previous_session(sessions[0].session_date)] + sessions
     except cal.CalendarCoverageError:
-        pass
+        return {"value": None, "status": "insufficient_history", "true_ranges": 0}, []
     active = _active_contracts(conn, symbol, sessions[0].session_date, sessions[-1].session_date)
     rth = _rth_aggregates(conn, set(active.values()) | {contract_id}, sessions)
 
@@ -232,32 +238,54 @@ def _daily_atr(conn, symbol: str, session: cal.Session, contract_id: int) -> Tup
         row = rth.get((cid, s.session_date.isoformat()))
         return row if row is not None and row["n"] == _rth_minutes(s) else None
 
-    used, skipped = [], 0
+    # strict continuity (nq_conv_v5): the true ranges of exactly the `window` sessions before the target
+    used, incomplete = [], []
     for prev, s in zip(sessions, sessions[1:]):
         cid = active.get(s.session_date.isoformat())
         today = complete(cid, s) if cid is not None else None
         before = complete(cid, prev) if cid is not None else None
         if today is None or before is None:
-            skipped += 1
+            incomplete.append(s.session_date.isoformat())
             continue
         tr = true_range(today["high"], today["low"], before["close"])
         used.append([s.session_date.isoformat(), cid, today["high"], today["low"], today["close"],
                      before["close"], tr])
-    used = used[-window:]
-    if len(used) < window:
-        return {"value": None, "status": "insufficient_history", "true_ranges": len(used),
-                "skipped_sessions": skipped}, used
+    if len(sessions) < window + 1:
+        return {"value": None, "status": "insufficient_history", "true_ranges": len(used)}, used
+    if incomplete:
+        return {"value": None, "status": "incomplete_history", "true_ranges": len(used),
+                "detail": f"{len(incomplete)} of the {window} sessions incomplete: {', '.join(incomplete[:3])}"}, used
     atr = wilder_atr([u[6] for u in used], period)
     return {"value": _shown(atr), "exact": atr, "status": "valid", "period": period, "true_ranges": len(used),
-            "skipped_sessions": skipped, "first_session": used[0][0], "last_session": used[-1][0]}, used
+            "first_session": used[0][0], "last_session": used[-1][0]}, used
 
 
-def _two_minute_atr(buckets: Sequence[tuple]) -> Dict[str, Any]:
-    """The frozen 2-minute ATR from complete 2m buckets (convention two_minute_atr)."""
+def _last_boundary(cutoff: datetime, minutes: int) -> datetime:
+    """The start of the last ``minutes`` clock bucket that ends by ``cutoff``."""
+    epoch = int(cutoff.timestamp()) // 60 - minutes
+    return datetime.fromtimestamp((epoch - epoch % minutes) * 60, timezone.utc)
+
+
+def _consecutive(buckets: Sequence[tuple], minutes: int, last: datetime) -> Optional[str]:
+    """Why ``buckets`` are not an unbroken run of complete ``minutes`` buckets ending at ``last`` (None: they are)."""
+    if not buckets or buckets[-1][0] != last:
+        return f"the last bucket before the cutoff ({iso(last)}) is missing"
+    for a, b in zip(buckets, buckets[1:]):
+        if b[0] - a[0] != timedelta(minutes=minutes):
+            return f"a gap after {iso(a[0])}"
+    bad = [iso(b[0]) for b in buckets if not b[7]]
+    return f"incomplete bucket(s) {', '.join(bad[:3])}" if bad else None
+
+
+def _two_minute_atr(buckets: Sequence[tuple], cutoff: datetime) -> Dict[str, Any]:
+    """The frozen 2-minute ATR from the last 71 complete, consecutive 2m buckets (convention two_minute_atr)."""
     period, window = defs.TWO_MINUTE_ATR["period"], defs.TWO_MINUTE_ATR["window_true_ranges"]
     if len(buckets) < window + 1:
         return {"value": None, "status": "insufficient_history", "buckets": len(buckets)}
     use = buckets[-(window + 1):]
+    broken = _consecutive(use, 2, _last_boundary(cutoff, 2))
+    if broken:
+        return {"value": None, "status": "incomplete_history", "detail": broken}
     trs = [true_range(dec(b[2]), dec(b[3]), dec(a[4])) for a, b in zip(use, use[1:])]
     atr = wilder_atr(trs, period)
     return {"value": _shown(atr), "exact": atr, "status": "valid", "period": period, "true_ranges": len(trs),
@@ -313,20 +341,45 @@ def _prior_sessions(conn, contract_id: int, session: cal.Session) -> Dict[str, A
     return {"contract_id": contract_id, "sessions": out, "bars_digest": digest.hexdigest()}
 
 
+def _window_extremes(bars: Sequence[Bar], expected: int, what: str, high: str, low: str) -> Dict[str, Any]:
+    """High / low of a window that needs every one of its ``expected`` minutes exactly once (nq_conv_v5); a partial
+    window keeps its observed extremes only as provisional diagnostics."""
+    unique = len({b[0] for b in bars})
+    if bars and unique == expected == len(bars):
+        return {high: _ref(max(dec(b[2]) for b in bars), window_minutes=expected),
+                low: _ref(min(dec(b[3]) for b in bars), window_minutes=expected)}
+    detail = (f"{unique} of {expected} {what} minutes" + (f", {len(bars) - unique} duplicate(s)" if len(bars) > unique
+                                                         else "") + ": the window is incomplete")
+    observed = {} if not bars else {"provisional_high": max(dec(b[2]) for b in bars),
+                                    "provisional_low": min(dec(b[3]) for b in bars)}
+    return {high: _ref(None, "incomplete", detail, **observed), low: _ref(None, "incomplete", detail, **observed)}
+
+
+def _vwap(bars: Sequence[Bar], complete: bool) -> Dict[str, Any]:
+    """The cutoff VWAP, exact: sum(hlc3 x volume) / sum(volume) over a complete overnight window."""
+    if not complete:
+        return _ref(None, "incomplete", "the overnight window is incomplete")
+    pv, vol = Fraction(0), Fraction(0)
+    for _, _o, h, low, c, v in bars:
+        pv += (Fraction(dec(h)) + Fraction(dec(low)) + Fraction(dec(c))) / 3 * v
+        vol += v
+    if vol == 0:
+        return _ref(None, "no_volume", "no volume in the overnight window")
+    exact = pv / vol
+    return _ref(_shown(exact), exact=f"{exact.numerator}/{exact.denominator}")
+
+
 def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> Dict[str, Any]:
     expected = _minutes(session.overnight_start_at, cutoff)
-    coverage = Decimal(len(bars)) / Decimal(expected) if expected else Decimal(0)
+    unique = len({b[0] for b in bars})
+    coverage = Decimal(unique) / Decimal(expected) if expected else Decimal(0)
+    complete = bool(bars) and unique == expected == len(bars)
     refs: Dict[str, Any] = {}
     if bars and bars[0][0] == session.overnight_start_at:
         refs["overnight_open"] = _ref(dec(bars[0][1]))
     else:
         refs["overnight_open"] = _ref(None, "missing", "no bar starting 18:00 ET")
-    if bars and coverage >= defs.ON_MIN_COVERAGE:
-        refs["on_high"] = _ref(max(dec(b[2]) for b in bars))
-        refs["on_low"] = _ref(min(dec(b[3]) for b in bars))
-    else:
-        detail = f"{len(bars)} of {expected} overnight minutes (< {defs.ON_MIN_COVERAGE:.0%})"
-        refs["on_high"] = refs["on_low"] = _ref(None, "insufficient_coverage", detail)
+    refs.update(_window_extremes(bars, expected, "overnight", "on_high", "on_low"))
     if bars:
         last_end = bars[-1][0] + MINUTE
         age = _minutes(last_end, cutoff)
@@ -338,19 +391,44 @@ def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> D
         refs["cutoff_price"] = _ref(None, "missing", "no bar in the overnight window")
     refs["price_at_0929"] = _ref(None, "not_observed",
                                  "the cutoff precedes 09:29:59; the 09:29 minute is not observed")
-    # premarket (nq_conv_v4): [08:00 ET, cutoff), the same 90% minute coverage as the overnight window
+    # premarket (nq_conv_v4): [08:00 ET, cutoff); every minute (nq_conv_v5)
     pm_start = cal.ny_instant(session.session_date, defs.PREMARKET_START)
-    pm = [b for b in bars if b[0] >= pm_start]
-    pm_expected = _minutes(pm_start, cutoff)
-    if pm and Decimal(len(pm)) / Decimal(pm_expected) >= defs.ON_MIN_COVERAGE:
-        refs["premarket_high"] = _ref(max(dec(b[2]) for b in pm), window_minutes=len(pm))
-        refs["premarket_low"] = _ref(min(dec(b[3]) for b in pm), window_minutes=len(pm))
-    else:
-        detail = f"{len(pm)} of {pm_expected} premarket minutes (< {defs.ON_MIN_COVERAGE:.0%})"
-        refs["premarket_high"] = refs["premarket_low"] = _ref(None, "insufficient_coverage", detail)
-    refs["_coverage"] = {"expected_minutes": expected, "minutes": len(bars), "ratio": coverage.quantize(
-        Decimal("0.0001"))}
+    refs.update(_window_extremes([b for b in bars if b[0] >= pm_start], _minutes(pm_start, cutoff), "premarket",
+                                 "premarket_high", "premarket_low"))
+    refs["vwap"] = _vwap(bars, complete)
+    refs["_coverage"] = {"expected_minutes": expected, "minutes": unique, "ratio": coverage.quantize(
+        Decimal("0.0001")), "complete": complete, "duplicates": len(bars) - unique}
     return refs
+
+
+def _moving_averages(buckets: Sequence[tuple], session: cal.Session, cutoff: datetime) -> Dict[str, Any]:
+    """
+    The Long MA at the cutoff (nq_conv_v5): EMA(100) of the 2m buckets from 18:00, which must all be complete and
+    consecutive up to the last bucket before the cutoff - the same calculation the structure annotation makes.
+    """
+    from features.calculations import calculate_moving_averages
+    import pandas as pd
+    on = [b for b in buckets if b[0] >= session.overnight_start_at]
+    broken = (_consecutive(on, 2, _last_boundary(cutoff, 2)) if on and on[0][0] == session.overnight_start_at
+              else "no 2m bucket starting 18:00 ET")
+    if broken:
+        return {"long_ma_at_cutoff": _ref(None, "incomplete_history", broken)}
+    if len(on) < 100:
+        return {"long_ma_at_cutoff": _ref(None, "insufficient_history", f"{len(on)} 2m buckets, EMA(100) needs 100")}
+    ma = calculate_moving_averages(pd.DataFrame({"timestamp_utc": [b[0] for b in on], "close": [b[4] for b in on]}))
+    value = Decimal(repr(float(ma["ema_trend"].iloc[-1]))).quantize(Decimal("0.000001"))
+    return {"long_ma_at_cutoff": _ref(value, buckets=len(on), first_bucket=iso(on[0][0]),
+                                      last_bucket=iso(on[-1][0]))}
+
+
+def _first_level_candidates(refs: Dict[str, Any], moving: Dict[str, Any]) -> Dict[str, Any]:
+    """The frozen first-level candidate list (nq_conv_v5): each candidate's price or why it is unavailable."""
+    levels = {}
+    for name in defs.FIRST_LEVEL_CANDIDATES:
+        ref = moving["long_ma_at_cutoff"] if name == "long_ma" else refs.get(name) or _ref(None, "missing")
+        levels[name] = {"value": ref["value"], "status": ref["status"], "exact": ref.get("exact"),
+                        "source": "moving_averages.long_ma_at_cutoff" if name == "long_ma" else f"references.{name}"}
+    return {"ids": list(defs.FIRST_LEVEL_CANDIDATES), "levels": levels}
 
 
 EARNINGS_SOURCE = "sec_earnings"
@@ -453,7 +531,8 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         intermarket = _intermarket(conn, session, cutoff, symbol)
 
     buckets = {m: aggregate(overnight, m, cutoff) for m in (2, 5, 15)}
-    two_minute = _two_minute_atr(buckets[2])
+    two_minute = _two_minute_atr(buckets[2], cutoff)
+    moving = _moving_averages(buckets[2], session, cutoff)
     t, b = defs.threshold_t(two_minute.get("exact")), defs.threshold_b(daily.get("exact"))
     last = overnight[-1][0] if overnight else None
     data_mode, pit = "historical_reconstruction", "unverified_historical"
@@ -477,8 +556,10 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         "thresholds": {"T": t, "B": b, "A": daily.get("exact")},
         "bars": {"window": [iso(session.overnight_start_at), iso(cutoff)], "coverage": coverage,
                  "1m": _bar_rows(overnight),
-                 **{f"{m}m": [[iso(s), o, h, low, c, v, n] for s, o, h, low, c, v, n in buckets[m]]
+                 **{f"{m}m": [[iso(s), o, h, low, c, v, n, ok] for s, o, h, low, c, v, n, ok in buckets[m]]
                     for m in (2, 5, 15)}},
+        "moving_averages": moving,
+        "first_level_candidates": _first_level_candidates(refs, moving),
         "previous_rth_bars": prev_archive,
         "prior_sessions": prior_sessions,
         "daily_atr_inputs": daily_inputs,
