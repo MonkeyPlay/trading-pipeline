@@ -53,7 +53,18 @@
       ],
       "sha256": "e58c8cfa9b70c92d352b58fb5a881613d11c82044a149c728798b2de9bc5a156",
       "bytes": 9882,
-      "provenance": "Generated 2026-10-04 from the source files; the registered protocol nq_structure_llm_v1 records the same hash, so an edit needs a new protocol version."
+      "provenance": "Generated 2026-10-04 from the source files for nq_structure_llm_v1 (registered, never run); kept because that registration records its hash."
+    },
+    {
+      "id": "nq_structure_llm_v2",
+      "path": "prompts/runtime/structure_annotation_v2.md",
+      "title": "Structure annotation - runtime prompt",
+      "derived_from": [
+        "nq_structure_llm_v1's prompt, with Higher-Timeframe Bias left to HTB-v1"
+      ],
+      "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
+      "bytes": 9693,
+      "provenance": "Generated 2026-10-04; the registered protocol nq_structure_llm_v2 records the same hash, so an edit needs a new protocol version."
     }
   ]
 }

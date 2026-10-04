@@ -16,6 +16,8 @@ used, so the snapshot can be checked without the mutable source tables:
   atr, thresholds      frozen daily and 2-minute Wilder ATR(14) and T, B, A
   bars                 the overnight window's 1m bars and their complete 2m, 5m and
                        15m clock buckets; previous_rth_bars, daily_atr_inputs
+  prior_sessions       the RTH open / high / low / close of the five scheduled
+                       sessions before, on the snapshot contract (HTB-v1, nq_conv_v3)
   events, intermarket  scheduled releases from the previous session's close to the
                        end of the day and material earnings published by the cutoff
                        (nq_conv_v2, P1 section 8), last observations of the other
@@ -282,6 +284,34 @@ def _previous_rth(conn, contract_id: int, session: cal.Session) -> Tuple[Dict[st
     }, archive
 
 
+PRIOR_SESSIONS = 5
+
+
+def _prior_sessions(conn, contract_id: int, session: cal.Session) -> Dict[str, Any]:
+    """
+    The RTH open / high / low / close of the PRIOR_SESSIONS scheduled sessions before
+    ``session``, oldest first, on the snapshot contract (one price basis across a roll:
+    the collector stores warm-up sessions before a contract becomes active). A session
+    is valid only with every RTH minute bar; the hash covers every bar read.
+    """
+    digest = hashlib.sha256()
+    out = []
+    for s in cal.sessions_before(session.session_date, PRIOR_SESSIONS):
+        bars = _read_bars(conn, contract_id, s.rth_open_at, s.scheduled_close_at - MINUTE)
+        for b in bars:
+            digest.update(repr((iso(b[0]),) + tuple(b[1:5])).encode())
+        expected = _rth_minutes(s)
+        row = {"session_date": s.session_date.isoformat(), "schedule": s.schedule, "minutes": len(bars),
+               "expected_minutes": expected}
+        if len(bars) != expected:
+            row.update(status="incomplete", open=None, high=None, low=None, close=None)
+        else:
+            row.update(status="valid", open=dec(bars[0][1]), high=max(dec(b[2]) for b in bars),
+                       low=min(dec(b[3]) for b in bars), close=dec(bars[-1][4]))
+        out.append(row)
+    return {"contract_id": contract_id, "sessions": out, "bars_digest": digest.hexdigest()}
+
+
 def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> Dict[str, Any]:
     expected = _minutes(session.overnight_start_at, cutoff)
     coverage = Decimal(len(bars)) / Decimal(expected) if expected else Decimal(0)
@@ -408,6 +438,7 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         coverage = refs.pop("_coverage")
         prev_refs, prev_archive = _previous_rth(conn, cid, session)
         refs.update(prev_refs)
+        prior_sessions = _prior_sessions(conn, cid, session)
         daily, daily_inputs = _daily_atr(conn, symbol, session, cid)
         events = _events(conn, session, cutoff)
         intermarket = _intermarket(conn, session, cutoff, symbol)
@@ -440,6 +471,7 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
                  **{f"{m}m": [[iso(s), o, h, low, c, v, n] for s, o, h, low, c, v, n in buckets[m]]
                     for m in (2, 5, 15)}},
         "previous_rth_bars": prev_archive,
+        "prior_sessions": prior_sessions,
         "daily_atr_inputs": daily_inputs,
         "events": events,
         "intermarket": intermarket,

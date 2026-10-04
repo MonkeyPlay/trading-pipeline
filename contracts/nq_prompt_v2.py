@@ -46,8 +46,9 @@ PATTERN_CONVENTION = "FP-v1"
 LEVEL_OUTCOME_CONVENTION = "LO-v1"
 # nq_conv_v1 (registered 2026-10-03) took events from the session's calendar day only and
 # configured no moving averages; nq_conv_v2 widens the events to P1 section 8 (EV-v1 in
-# contracts/nq_preopen.py) and adds the user's TradingView moving averages.
-CONVENTION_VERSION = "nq_conv_v2"
+# contracts/nq_preopen.py) and adds the user's TradingView moving averages; nq_conv_v3
+# adds the five prior sessions' RTH prices on the snapshot contract (HTB-v1).
+CONVENTION_VERSION = "nq_conv_v3"
 SYMBOL = "NQ"
 
 RTH_OPEN = time(9, 30)
@@ -64,11 +65,11 @@ class Profile:
 
 PROFILES: Dict[str, Profile] = {
     "research_0929": Profile(
-        "research_0929", time(9, 29), "nq_evidence_v2_r0929",
+        "research_0929", time(9, 29), "nq_evidence_v3_r0929",
         "Prompt comparison profile: bars complete by 09:29:00 ET (last 1m bar 09:28, last 2m bar "
         "09:26-09:28)."),
     "operational_0927": Profile(
-        "operational_0927", time(9, 27), "nq_evidence_v2_o0927",
+        "operational_0927", time(9, 27), "nq_evidence_v3_o0927",
         "Operational profile for live runs that need the extra time: bars complete by 09:27:00 ET (last 1m "
         "bar 09:26, last 2m bar 09:24-09:26). Its ATRs, thresholds and labels are not comparable with "
         "research_0929."),
@@ -583,6 +584,9 @@ CONVENTION = {
         "coverage": "the coverage rows that vouch for the session date, per source",
         "recorded_at": "kept - a historical reconstruction does not prove the rows were known by the cutoff",
     },
+    "prior_sessions": "RTH open / high / low / close of the 5 scheduled sessions before the target, oldest first, "
+                      "on the snapshot contract (the collector stores warm-up sessions before a roll, so one price "
+                      "basis); a session is valid only with every RTH minute bar; a hash of the bars read",
     "intermarket": "last 1m bar complete by the cutoff of every other collected instrument (active contract), "
                    "its age and the asset's max_age_minutes (config.ASSET_SOURCES); stale values are null",
     "arithmetic": "prices as decimal.Decimal; ATRs as exact fractions (Wilder smoothing divides by 14), stored "
@@ -638,7 +642,7 @@ def snapshot_record(profile: str) -> Dict[str, Any]:
         "profile": p.name, "cutoff_et": p.cutoff.strftime("%H:%M"), "description": p.description,
         "symbol": SYMBOL, "convention_version": CONVENTION_VERSION, "data_modes": list(DATA_MODES),
         "payload": ["identity", "schedule", "cutoff", "references", "atr", "thresholds", "bars",
-                    "previous_rth_bars", "daily_atr_inputs", "events", "intermarket"],
+                    "previous_rth_bars", "prior_sessions", "daily_atr_inputs", "events", "intermarket"],
         "excluded": "target-session bars after the cutoff, labels, outcome notes and forecasts",
     })
 

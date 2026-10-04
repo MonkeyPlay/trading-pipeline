@@ -1,6 +1,6 @@
 # forecaster/structure_rules.py
 """
-Rule-based pre-open structure annotation (protocol nq_structure_rules_v1,
+Rule-based pre-open structure annotation (protocol nq_structure_rules_v2,
 contracts/nq_preopen.py): the stand-in for the Claude structure annotation of
 Appendix A (A1) until the API is in place. It reads one frozen snapshot only and
 returns contracts.nq_preopen.ANNOTATION_SCHEMA, the shape the Claude annotator
@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -360,6 +362,68 @@ def _ma_fields(bars2: List[Bar], close: float, cutoff: datetime, T: Optional[int
     return out, m
 
 
+def htb_bands(above: bool, below: bool, p: Fraction, m: Fraction) -> List[str]:
+    """
+    Every HTB-v1 band the position and momentum fall in, as the user stated them
+    (exclusive momentum bands): Bullish above the 5-session high or in the upper
+    third with m >= +0.5; Neutral-bullish in the upper third with +0.15 < m < +0.5;
+    Neutral in the middle third or with |m| <= 0.15; the bearish ones mirrored.
+    Thirds are of the range, inclusive at 2/3 and 1/3; above / below are outside it.
+    """
+    half, small = Fraction(1, 2), Fraction(15, 100)
+    inside = not (above or below)
+    upper = inside and p >= Fraction(2, 3)
+    lower = inside and p <= Fraction(1, 3)
+    middle = inside and not (upper or lower)
+    bands = []
+    if above or (upper and m >= half):
+        bands.append("Bullish")
+    if below or (lower and m <= -half):
+        bands.append("Bearish")
+    if upper and small < m < half:
+        bands.append("Neutral-bullish")
+    if lower and -half < m < -small:
+        bands.append("Neutral-bearish")
+    if middle or abs(m) <= small:
+        bands.append("Neutral")
+    return bands
+
+
+def htb_label(above: bool, below: bool, p: Fraction, m: Fraction) -> Optional[str]:
+    """The HTB-v1 label: the one band that applies; a breakout beyond the range with |m| <= 0.15 (Bullish or
+    Bearish and Neutral at once) stays the breakout; no band (location and momentum disagree) is None."""
+    bands = htb_bands(above, below, p, m)
+    return bands[0] if bands else None
+
+
+def higher_timeframe_bias(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """HTB-v1 (contracts/nq_preopen.py): the cutoff price within the five prior sessions' range, and the momentum
+    since the open five sessions back in daily ATRs; exact arithmetic."""
+    prior = (payload.get("prior_sessions") or {}).get("sessions") or []
+    valid = [x for x in prior if x["status"] == "valid"]
+    if len(valid) < pre.HTB_SESSIONS or len(prior) < pre.HTB_SESSIONS:
+        return _missing(f"{len(valid)} of {pre.HTB_SESSIONS} prior sessions verified (every RTH minute bar on the "
+                        f"snapshot contract)")
+    cp = (payload.get("references") or {}).get("cutoff_price") or {}
+    A = (payload.get("thresholds") or {}).get("A")
+    if cp.get("status") != "valid" or A is None:
+        return _missing("no valid cutoff price" if cp.get("status") != "valid" else "daily ATR unavailable")
+    close, A = Decimal(str(cp["value"])), Fraction(A)
+    high, low = max(Decimal(str(x["high"])) for x in valid), min(Decimal(str(x["low"])) for x in valid)
+    start = valid[0]
+    m = Fraction(close - Decimal(str(start["open"]))) / A
+    p = Fraction(close - low) / Fraction(high - low) if high > low else Fraction(1, 2)
+    value = htb_label(close > high, close < low, p, m)
+    upper, lower = p >= Fraction(2, 3), p <= Fraction(1, 3)
+    third = "upper" if upper else "lower" if lower else "middle"
+    basis = (f"cutoff {close} in the 5-session range {low}-{high} ({third} third, position {float(p):.2f}); momentum "
+             f"{float(m):+.2f} ATR from the {start['open']} open of {start['session_date']}")
+    ids = ["ref:cutoff_price"] + [f"prior:{x['session_date']}" for x in valid]
+    if value is None:
+        return _field(None, "unavailable", "uncovered: location and momentum disagree", ids, basis)
+    return _field(value, evidence=ids, basis=basis)
+
+
 def price_location(refs: Dict[str, Any], close: Optional[float]) -> Dict[str, Optional[str]]:
     out = {}
     for name in pre.PRICE_LOCATION["levels"]:
@@ -440,7 +504,6 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     if close is None:
         reason = f"no valid cutoff price ({cp.get('status')})"
         fields = {name: _missing(reason) for name in pre.FIELDS}
-        fields["Higher-Timeframe Bias"] = _field(None, "not_covered", "not covered by nq_structure_rules_v1")
         fields["Event Risk"], fields["Event Notes"] = event_risk(p)
         out.update(integrity_status="ok", fields=fields, price_location=price_location(refs, None), measurements={})
         return seal(out)
@@ -457,7 +520,7 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     fields["Short-Term Structure"] = _short_term_structure(sw, cutoff)
     fields["5-Minute Trend"] = _trend(on, "5m")
     fields["15-Minute Trend"] = _trend([b for b in bars15 if b.start >= on_start], "15m")
-    fields["Higher-Timeframe Bias"] = _field(None, "not_covered", "not covered by nq_structure_rules_v1")
+    fields["Higher-Timeframe Bias"] = higher_timeframe_bias(p)
     ma_fields, ma_meas = _ma_fields([b for b in bars2 if b.start >= on_start], close, cutoff, T)
     fields.update(ma_fields)
     fields["Event Risk"], fields["Event Notes"] = event_risk(p)

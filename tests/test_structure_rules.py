@@ -1,5 +1,5 @@
 # tests/test_structure_rules.py
-"""The rule-based pre-open structure annotation (forecaster/structure_rules.py, nq_structure_rules_v1)."""
+"""The rule-based pre-open structure annotation (forecaster/structure_rules.py, nq_structure_rules_v2)."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -7,7 +7,7 @@ import pytest
 
 from contracts import nq_preopen as pre
 from forecaster import structure_rules as sr
-from tests.preopen_paths import ALL_SOURCES, MINUTES, event, minute_of, piecewise, snapshot
+from tests.preopen_paths import ALL_SOURCES, MINUTES, event, minute_of, piecewise, prior_sessions, snapshot
 
 N = MINUTES
 UP = piecewise([(0, 100), (N, 300)], wiggle=4, period=60)
@@ -135,10 +135,11 @@ def test_every_field_in_the_vocabulary_and_the_output_deterministic():
     a, b = sr.annotate(snap), sr.annotate(snap)
     assert a["output_hash"] == b["output_hash"] and a["protocol_version"] == pre.RULES_PROTOCOL_VERSION
     assert list(a["fields"]) == list(pre.FIELDS)
-    assert a["fields"]["Higher-Timeframe Bias"]["status"] == "not_covered"
+    htb = a["fields"]["Higher-Timeframe Bias"]
+    assert htb["status"] == "unavailable" and htb["reason"].startswith("0 of 5 prior sessions verified")
     for name, f in a["fields"].items():
         assert f["value"] is None or pre.FIELDS[name]["values"] == "text" or f["value"] in pre.FIELDS[name]["values"]
-        assert all(i.startswith(("bar:", "ref:", "event:")) for i in f["evidence_ids"])
+        assert all(i.startswith(("bar:", "ref:", "event:", "prior:")) for i in f["evidence_ids"])
     assert a["measurements"]["swings_5m"] and a["measurements"]["moving_averages_2m"]["ema100"]
 
 
@@ -153,3 +154,50 @@ def test_missing_inputs_leave_fields_unavailable(missing):
         assert f["Overnight Structure"]["value"] == "Uptrend"
     else:
         assert all(v["value"] is None for k, v in f.items() if k not in ("Event Risk", "Event Notes"))
+
+
+
+# --------------------------------------------------------------------------
+# Higher-Timeframe Bias (HTB-v1): H5 = 120, L5 = 90, A = 30; upper third >= 110, lower <= 100
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cutoff, first_open, expected", [
+    (121, 100, "Bullish"),                   # above the 5-session high
+    (110, 95, "Bullish"),                    # upper third (exactly 2/3) and momentum exactly +0.5 ATR
+    (110, 101, "Neutral-bullish"),           # upper third, momentum +0.3
+    (110, 105.2, "Neutral-bullish"),         # momentum +0.16: just above the neutral band
+    (110, 105.5, "Neutral"),                 # momentum exactly +0.15: within +/-0.15
+    (105, 80, "Neutral"),                    # middle third, whatever the momentum
+    (100, 115, "Bearish"),                   # lower third (exactly 1/3) and momentum exactly -0.5
+    (100, 109, "Neutral-bearish"),           # lower third, momentum -0.3
+    (89, 100, "Bearish"),                    # below the 5-session low
+])
+def test_higher_timeframe_bias(cutoff, first_open, expected):
+    f = fields(UP, T=4, refs={"cutoff_price": cutoff}, prior=prior_sessions(first_open), A="30")
+    htb = f["Higher-Timeframe Bias"]
+    assert htb["value"] == expected, htb["basis"]
+    assert htb["evidence_ids"][0] == "ref:cutoff_price" and len(htb["evidence_ids"]) == 6
+
+
+def test_higher_timeframe_bias_unavailable_and_uncovered():
+    uncovered = fields(UP, T=4, refs={"cutoff_price": 110}, prior=prior_sessions(120), A="30")["Higher-Timeframe Bias"]
+    assert uncovered["value"] is None and uncovered["reason"].startswith("uncovered")   # upper third, momentum -0.33
+    short = fields(UP, T=4, refs={"cutoff_price": 110}, prior=prior_sessions(100, incomplete=True), A="30")
+    assert short["Higher-Timeframe Bias"]["reason"].startswith("4 of 5 prior sessions verified")
+    no_atr = fields(UP, T=4, refs={"cutoff_price": 110}, prior=prior_sessions(100), A=None)
+    assert no_atr["Higher-Timeframe Bias"]["reason"] == "daily ATR unavailable"
+
+
+
+def test_htb_bands_are_exclusive_except_a_flat_breakout():
+    from fractions import Fraction
+    momenta = [Fraction(k, 100) for k in range(-80, 81)]
+    for k in range(13):                                          # positions inside the range, 0 .. 1 in twelfths
+        for m in momenta:
+            assert len(sr.htb_bands(False, False, Fraction(k, 12), m)) <= 1, (k, m)
+    for m in momenta:                                            # beyond the range: the breakout band, and with
+        bands = sr.htb_bands(True, False, Fraction(5, 4), m)     # |m| <= 0.15 Neutral too - the breakout wins
+        assert bands[0] == "Bullish" and (len(bands) == 2) == (abs(m) <= Fraction(15, 100))
+        assert sr.htb_label(True, False, Fraction(5, 4), m) == "Bullish"
+    assert sr.htb_bands(False, False, Fraction(5, 6), Fraction(-20, 100)) == []      # the gap: no band at all
+    assert sr.htb_bands(False, False, Fraction(1, 6), Fraction(20, 100)) == []

@@ -1,5 +1,5 @@
 # tests/test_structure_llm.py
-"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v1) - without the API."""
+"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v2) - without the API."""
 
 import json
 

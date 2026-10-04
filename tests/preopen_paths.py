@@ -34,7 +34,8 @@ def piecewise(points, wiggle=0.0, period=40):
     return price
 
 
-def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs=None, extra_1m=()):
+def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs=None, extra_1m=(), prior=None,
+             A=None):
     bars = []
     for m in range(MINUTES):
         o, c = price(m), price(m + 1)
@@ -49,10 +50,11 @@ def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs
         "schedule": {"overnight_start_at": iso(ON_START), "scheduled_close_at": iso(SESSION.scheduled_close_at)},
         "cutoff": {"input_cutoff_at": iso(CUTOFF)},
         "references": references,
-        "thresholds": {"T": T},
+        "thresholds": {"T": T, "A": A},
         "bars": {"1m": [[iso(s), o, h, low, c, v] for s, o, h, low, c, v in bars] + list(extra_1m),
                  "2m": rows(2), "5m": rows(5), "15m": rows(15), "coverage": {"ratio": coverage}},
         "events": {"covered_sources": list(covered), "events": list(events)},
+        "prior_sessions": {"contract_id": 1, "sessions": list(prior or []), "bars_digest": "-"},
     }
     return {"snapshot_id": "test", "session_date": DAY, "payload": payload}
 
@@ -61,3 +63,16 @@ def event(source, key, name, tier, et, day=DAY):
     at = cal.ny_instant(date.fromisoformat(day), time(*map(int, et.split(":"))))
     return {"source": source, "event_key": key, "name": name, "tier": tier, "scheduled_at": iso(at),
             "time_et": et, "before_cutoff": at < CUTOFF}
+
+
+def prior_sessions(first_open, incomplete=False):
+    """Five prior sessions with H5 = 120 and L5 = 90; the first one opens at ``first_open``."""
+    rows = []
+    for i, (day, high, low) in enumerate((("2026-06-05", 115, 95), ("2026-06-08", 120, 92), ("2026-06-09", 112, 90),
+                                          ("2026-06-10", 110, 96), ("2026-06-11", 111, 94))):
+        bad = incomplete and i == 2
+        rows.append({"session_date": day, "schedule": "full", "minutes": 389 if bad else 390, "expected_minutes": 390,
+                     "status": "incomplete" if bad else "valid", "open": None if bad else str(first_open if i == 0 else 100),
+                     "high": None if bad else str(high), "low": None if bad else str(low),
+                     "close": None if bad else "100"})
+    return rows

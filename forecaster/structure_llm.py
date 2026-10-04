@@ -1,6 +1,6 @@
 # forecaster/structure_llm.py
 """
-The Claude structure annotation (protocol nq_structure_llm_v1, Appendix A, A1):
+The Claude structure annotation (protocol nq_structure_llm_v2, Appendix A, A1):
 the replacement for the rule-based annotation (forecaster/structure_rules.py) once
 the Claude API is available. Same output shape (contracts.nq_preopen.ANNOTATION_SCHEMA),
 same store, its own protocol version - the matcher never mixes the two.
@@ -10,7 +10,7 @@ same store, its own protocol version - the matcher never mixes the two.
                               45 2m bars with the three moving averages, and the
                               confirmed 2/2 swing points on 5m bars
   build_request(snapshot)     the Messages API request: the runtime prompt
-                              (prompts/runtime/structure_annotation_v1.md) as the
+                              (prompts/runtime/structure_annotation_v2.md) as the
                               system prompt, the bundle as the user message, the
                               structure_annotation schema as the required output
   annotate_live(conn, snap)   one request now (server-side refusal fallback on); the
@@ -21,8 +21,8 @@ same store, its own protocol version - the matcher never mixes the two.
 Validation: values inside the vocabularies, null exactly when unavailable (with a
 reason), every evidence id inside the bundle, and the answer from LLM_MODEL itself -
 an answer a fallback model served is kept as an attempt, not as an annotation of this
-protocol. Event Risk, Event Notes and the price location come from the application's
-rules (EV-v1, P1 section 7), as in the rule-based protocol. A snapshot holding anything
+protocol. Event Risk, Event Notes, Higher-Timeframe Bias and the price location come
+from the application's rules (EV-v1, HTB-v1, P1 section 7), as in the rule-based protocol. A snapshot holding anything
 after its cutoff is never sent: it is stored as contaminated without a request.
 """
 
@@ -136,6 +136,7 @@ def to_annotation(snapshot: Dict[str, Any], answer: Dict[str, Any], model: str) 
                      "evidence_ids": list(dict.fromkeys(f["evidence_ids"])), "basis": f["basis"]}
               for name, f in answer["fields"].items()}
     fields["Event Risk"], fields["Event Notes"] = sr.event_risk(p)
+    fields["Higher-Timeframe Bias"] = sr.higher_timeframe_bias(p)
     cp = (p.get("references") or {}).get("cutoff_price") or {}
     close = float(cp["value"]) if cp.get("status") == "valid" else None
     return sr.seal({

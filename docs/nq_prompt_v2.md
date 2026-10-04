@@ -41,13 +41,17 @@ version identifier.
 | `nq_prompt_v2_1_impl3` | labels | impl2 plus the supplementary descriptors of P2 sections 5 and 7 (MP-v1) and the first 15-minute pattern (FP-v1) - current, recorded for the 269 sessions |
 | `nq_prompt_v2_1_impl2` | labels | NQ-v2 scored classifications, 30-minute bias, first level tested and the LO-v1 level outcomes (P2 sections 2-6) |
 | `nq_prompt_v2_1_impl1` | labels | the first six targets only |
-| `nq_conv_v2` | convention | what P1/P2 leave open (below): v1 plus P1 section 8's events (EV-v1) and the TradingView moving averages - current |
+| `nq_conv_v3` | convention | v2 plus the five prior sessions' RTH prices on the snapshot contract (HTB-v1) - current |
+| `nq_conv_v2` | convention | what P1/P2 leave open (below): v1 plus P1 section 8's events (EV-v1) and the TradingView moving averages |
 | `nq_conv_v1` | convention | v1: events of the session's calendar day only, no moving averages |
-| `nq_evidence_v2_r0929` | snapshot | research profile, cutoff 09:29:00 ET, under `nq_conv_v2` - current |
-| `nq_evidence_v2_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v2` |
+| `nq_evidence_v3_r0929` | snapshot | research profile, cutoff 09:29:00 ET, under `nq_conv_v3` - current |
+| `nq_evidence_v3_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v3` |
+| `nq_evidence_v2_r0929` / `_o0927` | snapshot | the same under `nq_conv_v2`; the 274 stored v2 snapshots, their annotations, analogue sets and the first pre-open review set stay as they are |
 | `nq_evidence_v1_r0929` / `_o0927` | snapshot | the same under `nq_conv_v1`; the 269 stored v1 snapshots and the review set stay as they are |
-| `nq_structure_rules_v1` | annotation | the rule-based pre-open structure annotation (stage 2, below) |
-| `nq_structure_llm_v1` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5` - built, waiting for an API key |
+| `nq_structure_rules_v2` | annotation | the rule-based pre-open structure annotation (stage 2, below): v1 plus Higher-Timeframe Bias (HTB-v1) - current |
+| `nq_structure_rules_v1` | annotation | the same without Higher-Timeframe Bias |
+| `nq_structure_llm_v2` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5`, Higher-Timeframe Bias from HTB-v1 - built, waiting for an API key |
+| `nq_structure_llm_v1` | annotation | registered, never run: Claude judged Higher-Timeframe Bias itself |
 | `nq_match_p1_v1` | matcher | P1 section 7's analogue rubric (stage 2B / 2C) |
 
 Each label version keeps every rule of the one before unchanged (checked on the
@@ -357,7 +361,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
     detected; P1 bases Normal on scheduled risk.
   - Snapshots (`nq_evidence_v2_*`) hold scheduled releases from the previous
     session's close to the end of the day and earnings only up to the cutoff.
-- **Rule-based structure annotation** (`nq_structure_rules_v1`,
+- **Rule-based structure annotation** (`nq_structure_rules_v2`,
   [forecaster/structure_rules.py](../forecaster/structure_rules.py)): the stand-in
   for the Claude structure annotation (Appendix A, A1) until the API is in place.
   It reads one frozen snapshot only and returns the shape A1 will return - per
@@ -367,7 +371,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   window statistics) in `measurements`. A target-session item after the cutoff
   makes it `contaminated`, with no classifications. Its thresholds are a trial
   convention (`RULES`), not P1's text: P1 does not quantify dominant, meaningful,
-  flat or frequent. Higher-Timeframe Bias is not covered (not a matcher input).
+  flat or frequent. Higher-Timeframe Bias follows your rule HTB-v1 (below).
   On the 274 stored sessions it gives Overnight Structure Mixed 80, Uptrend 54,
   V-reversal 48, Downtrend 34, Inverted-V 33, Range 25.
 - **Store**: `journal.structure_annotations` (migration 0011, append-only), one row
@@ -375,18 +379,38 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   once. The collector's journal step loads the calendar, refreshes the earnings and
   annotates every snapshot without an annotation.
 
-- **Claude structure annotation** (`nq_structure_llm_v1`,
+- **Higher-Timeframe Bias (HTB-v1, your rule):** the cutoff price against the
+  highest RTH high H5 and lowest RTH low L5 of the previous five completed sessions,
+  on the snapshot contract (the snapshot freezes their RTH open / high / low / close,
+  `prior_sessions`, `nq_conv_v3`), and the momentum m = (cutoff - the RTH open five
+  sessions back) / the frozen daily ATR. Thirds of the range by position
+  p = (cutoff - L5) / (H5 - L5): upper p >= 2/3, lower p <= 1/3, inside the range.
+  Exclusive bands: Bullish above H5, or the upper third with m >= +0.5;
+  Neutral-bullish the upper third with +0.15 < m < +0.5; Neutral the middle third,
+  or |m| <= 0.15; the bearish ones mirrored. Fewer than five verified prior sessions
+  (every RTH minute on the contract) or no daily ATR: unavailable. Two cases are not
+  settled by the bands: a close beyond the range with |m| <= 0.15 is in the breakout
+  band and Neutral at once - the breakout wins (it does not occur in the 274
+  sessions); the upper third with m < -0.15, or the lower third with m > +0.15, is in
+  no band and is unavailable as `uncovered`. The registered `nq_structure_rules_v2`
+  words the same rule as an ordered list (a breakout, then Neutral, then the
+  neutral-bullish / -bearish bands); [forecaster/structure_rules.py](../forecaster/structure_rules.py)
+  states the bands explicitly and reproduces all 274 stored annotations. On the 274 sessions: Bullish 99, Neutral 77, Bearish
+  55, Neutral-bullish 11, Neutral-bearish 4, unavailable 28 (19 without a daily ATR
+  in September 2025, 9 uncovered). Not a matcher input.
+- **Claude structure annotation** (`nq_structure_llm_v2`,
   [forecaster/structure_llm.py](../forecaster/structure_llm.py)), built and tested
   against a stand-in client; it runs once `ANTHROPIC_API_KEY` is in `.env`. The
-  system prompt [prompts/runtime/structure_annotation_v1.md](../prompts/runtime/structure_annotation_v1.md)
+  system prompt [prompts/runtime/structure_annotation_v2.md](../prompts/runtime/structure_annotation_v2.md)
   quotes Appendix A's A1 and P1 section 4 verbatim and adds the conventions and
   vocabularies; its hash is part of the registered protocol, so an edit needs a new
   version. The user message is the evidence bundle - references, the overnight 5m
   and 15m bars, the last 45 2m bars with the three lines, the confirmed swing
   points, every item with an id - and the answer must follow the
   structure_annotation JSON schema (structured outputs). `claude-opus-5-5`, effort
-  high. Claude annotates the ten descriptive fields; Event Risk, Event Notes and the
-  price location come from the same rules as the rule-based protocol. Validation:
+  high. Claude annotates the nine descriptive fields; Event Risk, Event Notes,
+  Higher-Timeframe Bias and the price location come from the same rules as the
+  rule-based protocol. Validation:
   allowed values, null exactly when unavailable (with a reason), every evidence id in
   the bundle. Every request is an attempt in `journal.annotation_attempts`, failures
   included; only a valid answer becomes an annotation. Live requests have the

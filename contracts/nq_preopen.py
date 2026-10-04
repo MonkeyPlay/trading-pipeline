@@ -11,6 +11,7 @@ API is in place.
                       Notion schema P1 points to (contracts/weekday_trades_schema.json)
   PRICE_LOCATION      P1 section 7's five Above / At / Below comparisons
   EVENT_RISK          EV-v1: P1 section 8 as a rule over the snapshot's events
+  HTB                 HTB-v1, the user's Higher-Timeframe Bias rule
   RULES               every threshold of the rule-based annotator
                       (forecaster/structure_rules.py), registered as
                       RULES_PROTOCOL_VERSION
@@ -121,10 +122,39 @@ EVENT_RISK = {
 
 
 # --------------------------------------------------------------------------
+# Higher-Timeframe Bias (HTB-v1, the user's rule)
+# --------------------------------------------------------------------------
+
+HTB_VERSION = "HTB-v1"
+HTB_SESSIONS = 5
+HTB = {
+    "version": HTB_VERSION,
+    "location": "the cutoff price against H5 and L5, the highest RTH high and lowest RTH low of the previous five "
+                "completed sessions on the snapshot contract (one price basis across a roll); position "
+                "p = (cutoff - L5) / (H5 - L5): upper third p >= 2/3, lower third p <= 1/3, middle third between; "
+                "H5 = L5 counts as the middle",
+    "momentum": "m = (cutoff price - the RTH open of the session five sessions back) / the frozen daily ATR A",
+    "rules": ["Unavailable: fewer than five verified prior sessions (every RTH minute bar on the contract), or "
+              "no cutoff price or A",
+              "Bullish: above H5, or m >= +0.5 in the upper third; Bearish: below L5, or m <= -0.5 in the lower "
+              "third",
+              "Neutral: the middle third, or |m| <= 0.15",
+              "Neutral-bullish: the upper third with 0 < m < +0.5; Neutral-bearish: the lower third with "
+              "-0.5 < m < 0",
+              "anything else - the upper third with m < -0.15 or the lower third with m > +0.15, where location "
+              "and momentum disagree - is unavailable as uncovered"],
+    "order": "the rules apply in the order listed: a breakout beats the neutral checks",
+    "arithmetic": "exact (decimal prices, the exact fraction A)",
+}
+
+
+# --------------------------------------------------------------------------
 # Rule-based structure annotation
 # --------------------------------------------------------------------------
 
-RULES_PROTOCOL_VERSION = "nq_structure_rules_v1"
+# nq_structure_rules_v1 (registered 2026-10-04) left Higher-Timeframe Bias uncovered;
+# v2 is v1 plus HTB-v1, every other rule unchanged.
+RULES_PROTOCOL_VERSION = "nq_structure_rules_v2"
 
 RULES = {
     "swings": {"timeframe": "5m", "left": 2, "right": 2,
@@ -186,7 +216,7 @@ RULES = {
                                         "0.70 of their own range) and at least 0.55 of the bars with wicks >= "
                                         "0.50 of their range",
                    "min_bars": 12},
-    "higher_timeframe_bias": "not covered by this protocol (not a matcher input)",
+    "higher_timeframe_bias": HTB_VERSION,
     "event_risk": EVENT_RISK_VERSION,
     "integrity": "a target-session bar ending after the cutoff, or an earnings row published after it, makes "
                  "the annotation contaminated: no classifications",
@@ -196,7 +226,9 @@ RULES = {
 def rules_record() -> Dict[str, Any]:
     return _record(RULES_PROTOCOL_VERSION, "annotation", {
         "annotator": "rules", "fields": FIELDS, "price_location": PRICE_LOCATION, "rules": RULES,
-        "event_risk": EVENT_RISK, "replaced_by": "a Claude structure annotation (Appendix A, A1) under its own "
+        "event_risk": EVENT_RISK, "higher_timeframe_bias": HTB,
+        "supersedes": "nq_structure_rules_v1: the same rules with Higher-Timeframe Bias not covered",
+        "replaced_by": "a Claude structure annotation (Appendix A, A1) under its own "
                                                  "protocol version, producing the same ANNOTATION_SCHEMA",
     })
 
@@ -280,17 +312,19 @@ def matcher_record() -> Dict[str, Any]:
 # Claude structure annotation (Appendix A, A1)
 # --------------------------------------------------------------------------
 
-LLM_PROTOCOL_VERSION = "nq_structure_llm_v1"
+# nq_structure_llm_v1 (registered 2026-10-04, never run) had Claude judge Higher-Timeframe
+# Bias from the overnight bars; v2 takes it from HTB-v1 like the rule-based protocol.
+LLM_PROTOCOL_VERSION = "nq_structure_llm_v2"
 LLM_MODEL = "claude-opus-5-5"
 LLM_EFFORT = "high"
 LLM_MAX_TOKENS = 16000
 LLM_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
-                          "structure_annotation_v1.md")
-# The fields Claude annotates; Event Risk, Event Notes and the price location come from the
-# application's own rules (EV-v1, P1 section 7), so both protocols carry them identically.
+                          "structure_annotation_v2.md")
+# The fields Claude annotates; Event Risk, Event Notes, Higher-Timeframe Bias and the price
+# location come from the application's own rules (EV-v1, HTB-v1, P1 section 7), so both
+# protocols carry them identically.
 LLM_FIELDS = ["Overnight Structure", "Premarket Pattern", "Short-Term Structure", "5-Minute Trend",
-              "15-Minute Trend", "Higher-Timeframe Bias", "Price vs Long MA", "Long MA Slope", "Fast MA Alignment",
-              "Chop Score"]
+              "15-Minute Trend", "Price vs Long MA", "Long MA Slope", "Fast MA Alignment", "Chop Score"]
 
 
 def llm_output_schema() -> Dict[str, Any]:
@@ -318,10 +352,11 @@ def llm_record() -> Dict[str, Any]:
         prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
     return _record(LLM_PROTOCOL_VERSION, "annotation", {
         "annotator": "llm", "model": LLM_MODEL, "effort": LLM_EFFORT, "max_tokens": LLM_MAX_TOKENS,
-        "prompt": {"path": "prompts/runtime/structure_annotation_v1.md", "sha256": prompt_sha256,
+        "prompt": {"path": "prompts/runtime/structure_annotation_v2.md", "sha256": prompt_sha256,
                    "sources": ["A (A1)", "P1 section 4", "P1 section 3 (trend timeframes)"]},
         "output_schema": llm_output_schema(), "fields": LLM_FIELDS,
         "from_the_application": {"Event Risk": EVENT_RISK_VERSION, "Event Notes": EVENT_RISK_VERSION,
+                                 "Higher-Timeframe Bias": HTB_VERSION,
                                  "price_location": "P1 section 7, At within one point"},
         "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
                     "the three moving averages, and the confirmed 2/2 swing points on 5m bars (ids inside the "

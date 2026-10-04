@@ -160,6 +160,14 @@ def test_research_snapshot_contents(market):
     assert p["thresholds"]["T"] == defs.threshold_t(p["atr"]["two_minute"]["exact"])
     assert p["atr"]["two_minute"]["last_bucket_end"] == "2026-06-12T13:28:00Z"
 
+    prior = p["prior_sessions"]
+    assert prior["contract_id"] == NQ_CID and [x["status"] for x in prior["sessions"]] == ["valid"] * 5
+    first = cal.sessions_before(DAY, 5)[0]
+    rth = nq[(nq["bar_start_at"] >= first.rth_open_at) & (nq["bar_start_at"] < first.scheduled_close_at)]
+    assert prior["sessions"][0]["session_date"] == first.session_date.isoformat()
+    assert prior["sessions"][0]["open"] == dec(rth["open"].iloc[0]) and prior["sessions"][0]["high"] == dec(rth["high"].max())
+    assert prior["sessions"][-1]["session_date"] == PREV
+
     assert p["events"]["covered_sources"] == ["bls"]
     assert p["events"]["events"][0]["time_et"] == "08:30" and p["events"]["events"][0]["before_cutoff"]
     assert p["intermarket"]["es"]["status"] == "valid" and p["intermarket"]["es"]["age_minutes"] == 0
@@ -170,7 +178,8 @@ def test_research_snapshot_contents(market):
 def test_operational_snapshot_is_a_different_version_with_earlier_bars(market):
     conn, _, _ = market
     snap = build_snapshot(conn, DAY, "operational_0927")
-    assert snap.snapshot_version == "nq_evidence_v2_o0927"
+    assert snap.snapshot_version == defs.PROFILES["operational_0927"].snapshot_version \
+        != defs.PROFILES["research_0929"].snapshot_version
     assert snap.payload["bars"]["1m"][-1][0] == "2026-06-12T13:26:00Z"
     assert snap.payload["bars"]["2m"][-1][0] == "2026-06-12T13:24:00Z"
 
@@ -281,7 +290,7 @@ def test_cli_backfill_and_show(market, capsys):
     assert main(["--db", DSN, "backfill", "--date", "2026-06-10"]) == 0
     assert main(["--db", DSN, "show", "--date", "2026-06-10"]) == 0
     printed = capsys.readouterr().out
-    assert "Realised First Move" in printed and "nq_evidence_v2_r0929" in printed
+    assert "Realised First Move" in printed and defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version in printed
     assert main(["--db", DSN, "show", "--date", "2026-06-10", "--profile", "operational_0927"]) == 1
 
 
@@ -502,5 +511,10 @@ def test_a_roll_day_takes_every_reference_from_the_new_contract(market):
             assert refs[name]["value"] == dec(value), name
         # earlier sessions' true ranges stay on the contract that was active on each of them
         assert {row[1] for row in snap.payload["daily_atr_inputs"]} == {NQ_CID}
+        # the five prior sessions stay on the snapshot contract: those it holds no bars for are incomplete
+        prior = snap.payload["prior_sessions"]
+        assert prior["contract_id"] == dec_cid
+        assert [x["status"] for x in prior["sessions"]] == ["incomplete", "incomplete", "valid", "valid", "valid"]
+        assert prior["sessions"][-1]["high"] == dec(prev_rth["high"].max())
     finally:
         set_active_contracts(conn, "NQ", {DAY: NQ_CID}, "test")
