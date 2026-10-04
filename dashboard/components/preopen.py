@@ -1,11 +1,10 @@
 # dashboard/components/preopen.py
 """
-The pre-open chart of one stored snapshot, for the Analogues and Forecast pages:
-the session's overnight on 2-minute bars from 18:00 to the cutoff,
-with the frozen references (previous RTH high / low / close, ON high / low) and the
-three moving averages computed as the structure annotation computes them
-(nq_conv_v2: on the 2m bars, seeded at 18:00). ``through_close`` extends it to the
-session's close - only where outcomes may be seen.
+The pre-open chart of one stored snapshot, for the Forecast page: the session's
+overnight on 2-minute bars from 18:00 to the cutoff, with the frozen references
+(previous RTH high / low / close, ON high / low) and the three moving averages
+computed as the structure annotation computes them (on the 2m bars, seeded at
+18:00). Also the names of P1's price-location levels, as the pages show them.
 """
 
 from __future__ import annotations
@@ -16,8 +15,6 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from dashboard.components.spec import build_chart_spec
-from dashboard.views.candles import _resample
-from database.queries import get_day_bars
 from features.calculations import calculate_moving_averages, enrich_candle_timezones
 
 _PREV_RTH = "#29b6f6"
@@ -31,31 +28,6 @@ def _ref(payload: Dict[str, Any], name: str) -> Optional[float]:
     ref = (payload.get("references") or {}).get(name) or {}
     value = ref.get("value") if ref.get("status") == "valid" else None
     return None if value is None else float(Decimal(str(value)))
-
-
-def preopen_spec(conn, snapshot: Dict[str, Any], through_close: bool = False) -> Dict[str, Any]:
-    p = snapshot["payload"]
-    rows = get_day_bars(conn, snapshot["contract_id"], str(snapshot["session_date"]), interval="1m")
-    if not rows:
-        return dict(_EMPTY)
-    df = enrich_candle_timezones(pd.DataFrame([dict(r) for r in rows]))
-    ts = pd.to_datetime(df["timestamp_utc"], utc=True)
-    start = pd.Timestamp(p["schedule"]["overnight_start_at"])
-    end = pd.Timestamp(p["schedule"]["scheduled_close_at"] if through_close else p["cutoff"]["input_cutoff_at"])
-    df = df[(ts >= start) & (ts < end)]
-    if df.empty:
-        return dict(_EMPTY)
-    bars = calculate_moving_averages(_resample(df, "2m"))
-    if not through_close:
-        # only 2m buckets complete by the cutoff, as the snapshot holds them
-        bars = bars[pd.to_datetime(bars["timestamp_ny"]) + pd.Timedelta(minutes=2) <= end.tz_convert("America/New_York")]
-    levels = {"previous_rth_close": _ref(p, "prev_rth_close"), "overnight_high": _ref(p, "on_high"),
-              "overnight_low": _ref(p, "on_low")}
-    extra = [{"key": "prev_rth_high", "label": "Prev RTH High", "value": _ref(p, "prev_rth_high"),
-              "color": _PREV_RTH, "dash": 2},
-             {"key": "prev_rth_low", "label": "Prev RTH Low", "value": _ref(p, "prev_rth_low"),
-              "color": _PREV_RTH, "dash": 2}]
-    return build_chart_spec(bars, levels=levels, extra_levels=extra, show_vwap=False, fit=True)
 
 
 def frozen_preopen_spec(snapshot: Dict[str, Any]) -> Dict[str, Any]:

@@ -30,7 +30,15 @@ class LightweightChart(
         show_volume: bool = True,
         show_candles: bool = True,
         spec: Optional[Dict[str, Any]] = None,
+        sync_group: Optional[str] = None,
+        sync_lead: bool = False,
     ) -> None:
+        """
+        ``sync_group``: charts sharing it show the same time of day - each spec's
+        ``anchor`` (its day at 00:00 on the chart's clock, see
+        dashboard/views/candles.SessionPane) lines sessions of different days up -
+        and a spec with ``follow`` takes the view of the group's ``sync_lead`` chart.
+        """
         super().__init__()
         self._props["height"] = height
         self._props["volume_ratio"] = volume_ratio
@@ -39,6 +47,8 @@ class LightweightChart(
         # Drawn when the browser mounts the chart, so a chart created inside an
         # event handler shows its data without waiting for a later apply().
         self._props["initial_spec"] = spec
+        self._props["sync_group"] = sync_group
+        self._props["sync_lead"] = sync_lead
         self.classes("w-full")
 
     def apply(self, spec: Dict[str, Any]) -> None:

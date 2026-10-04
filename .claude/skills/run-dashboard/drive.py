@@ -22,12 +22,42 @@ def chromium() -> str:
     return found[-1]
 
 
+# Each chart's visible range as clock times of its own day (the explorer's two charts are linked by them).
+CLOCKS = """() => [...document.querySelectorAll('.nq-chart-root')].map(el => {
+    const c = getElement(parseInt(el.id.slice(1)));
+    const k = c.ready && c.ready() ? c.clockRange() : null;
+    const hm = s => new Date(s * 1000).toISOString().slice(11, 19);
+    return k ? hm(k.from) + '-' + hm(k.to) : null;
+})"""
+
+
 def explorer(page, url, out):
+    """The session chart and the analogue beside it (linked by time of day), the comparison below them, the day
+    calendar, the previous session, then 5 minutes."""
     page.goto(url + "/", timeout=180000)
     page.wait_for_selector(".q-badge", timeout=180000)           # the session's bar count
     page.wait_for_timeout(2500)
     page.screenshot(path=f"{out}/explorer.png", full_page=True)
-    print("status:", page.locator(".q-badge").all_inner_texts())
+    day = page.get_by_label("Session day (NY trading day)")
+    print("day:", day.input_value(), "status:", page.locator(".q-badge").all_inner_texts())
+    print("beside it:", page.locator(".q-field", has_text="Analogue").first.inner_text().replace("\n", " "))
+    analogues = page.locator(".q-expansion-item__content").first.inner_text().split("\n")
+    print("analogues:", next((t for t in analogues if "analogue(s) from" in t or t.startswith(("No ", "Analogues are"))),
+                             analogues[:2]))
+    box = page.locator(".nq-chart-root").first.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 250)
+    page.mouse.wheel(0, -480)                                           # zoom the session: the analogue follows
+    page.wait_for_timeout(1000)
+    print("clock ranges (session, analogue):", page.evaluate(CLOCKS))
+    day.click()                                                         # the calendar: only days with bars
+    page.wait_for_selector(".q-date", timeout=10000)
+    page.wait_for_timeout(500)
+    page.screenshot(path=f"{out}/explorer_calendar.png", clip={"x": 0, "y": 0, "width": 900, "height": 560})
+    print("pickable this month:", page.locator(".q-date__calendar-item--in").all_inner_texts())
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Previous session").click()
+    page.wait_for_timeout(2500)
+    print("previous session:", day.input_value())
     page.get_by_role("button", name="5m", exact=True).click()           # the session at 5 minutes
     page.wait_for_timeout(2000)
     page.screenshot(path=f"{out}/explorer_5m.png")

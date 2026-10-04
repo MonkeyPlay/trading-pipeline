@@ -120,9 +120,6 @@ python -m dashboard.app
 
 Pages:
 
-- **Analogues** (`/analogues`, [dashboard/views/analogues.py](dashboard/views/analogues.py)) — a
-  session's structural analogues side by side (outcomes hidden until asked for); see
-  [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
   registered experiments (guideline stage 4): each manifest, its stored scorings (paired arm
   differences with intervals, every target, where the differences sit) and its frozen cases,
@@ -132,12 +129,15 @@ Pages:
   frozen bars, per-target distributions with their denominators, P1's 47 fields, and the realised
   outcome only when asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
-  around the first hour. Three selectors, in order: the **session day** (searchable, newest
-  first), the **instrument** with bars that day (ES, NQ, ...), and the **contract** holding it
-  (the one the collector made active that day first). It opens on NQ's newest session.
+  around the first hour. Three selectors, in order: the **session day** (a calendar, weeks
+  from Monday, on which only the days with stored bars can be picked; the arrows either side
+  step to the previous and the next of them), the **instrument** with bars that day (ES, NQ,
+  ...), and the **contract** holding it (the one the collector made active that day first).
+  It opens on NQ's newest session.
   - **Chart:** the day's regular session with **15 minutes either side** is loaded - 09:15 to
     16:15 ET, or to 13:15 on an early close - and a new day opens on **09:15-10:45**; **Fit**
-    shows the whole window, and a timeframe change keeps the window being looked at. The
+    shows the whole window (on both charts), and a timeframe change keeps the window being
+    looked at. The
     extra minutes are drawn grey (candles, volume, background). The previous session's RTH
     close and the overnight high and low are drawn as reference levels, with the session
     VWAP. The **opening range** (the first 15 minutes) is a grey box over its bars, then
@@ -156,6 +156,16 @@ Pages:
   stored day. Right of the weeks, the **last 10 trading days** are one dot each, coloured by
   the same rule for that day alone; hover a dot for its status and bar count
   ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
+  - **Analogue beside it:** the charts are split - on the right, one of the selected NQ
+    session's structural analogues, the most similar first (pick another in its **Analogue**
+    select, or by its date in the comparison below): that session on its own contract and
+    prices, drawn the same way - the same window, timeframe and indicators. The two charts are
+    linked by time of day: scrolling or zooming either moves the other.
+  - **Analogues** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
+    the session and its analogues side by side, feature by feature - their realised labels and
+    the outcome frequencies hidden until asked for - with P1's 47-field pre-open record; for the
+    days the journal holds a snapshot of. See
+    [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
 
 ### 2. Collector — pull fresh bars from IB
 
@@ -377,7 +387,7 @@ name contains `test`; they reset it).
 | [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract |
 | [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture |
 | [matching/](matching/) | The P1 structural analogue matcher |
-| [dashboard/](dashboard/) | NiceGUI app: Session Explorer, Analogues, Forecast, Evaluation; the Lightweight Charts component |
+| [dashboard/](dashboard/) | NiceGUI app: Session Explorer (with the analogues), Forecast, Evaluation; the Lightweight Charts component |
 | [scripts/](scripts/) | The journal CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
 | [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [reports](docs/reports/) |

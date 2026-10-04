@@ -57,6 +57,27 @@ _MOVING_AVERAGES = (
 )
 
 
+_RESAMPLE_FREQ = {"2m": "2min", "5m": "5min", "15m": "15min", "30m": "30min"}
+
+
+def resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Aggregates 1-minute bars (with ``timestamp_ny``) up to a display interval: 1m, 2m, 5m, 15m or 30m."""
+    if timeframe == "1m" or df is None or df.empty:
+        return df
+
+    agg_rules = {
+        "timestamp_utc": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+        "price_type": "first",
+    }
+    resampled = df.sort_values("timestamp_ny").set_index("timestamp_ny")
+    return resampled.resample(_RESAMPLE_FREQ[timeframe]).agg(agg_rules).dropna().reset_index()
+
+
 def to_epoch(timestamps) -> np.ndarray:
     """
     Converts timestamps to the integer seconds Lightweight Charts expects.

@@ -313,6 +313,52 @@ function shallowEqual(a, b) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Linked charts                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Charts sharing a `sync_group` show the same time of day. Each spec carries
+ * its `anchor` - the chart's own day at 00:00 on its wall clock - so sessions
+ * on different days line up by clock time, bar for bar where both have bars.
+ *
+ * The user moving any chart (drag, wheel, pinch) moves the others. Anything else
+ * that moves the group's lead chart (`sync_lead`: a new day, Fit, a resize) moves
+ * them too, and a follower that moves by itself (new data, a resize) returns to
+ * the lead's view. A chart the user is moving ignores the others, so two charts
+ * never pull against each other.
+ */
+const GROUPS = new Map();      // group name -> Set of mounted charts
+const USER_MS = 400;           // a range change this soon after the user's pointer or wheel is the user's
+
+/** The time at logical bar index `x` of time-sorted `points`, extrapolated beyond them. */
+export function timeAt(points, x) {
+  const n = points.length;
+  if (n === 1) return points[0].time + x * 60;
+  if (x <= 0) return points[0].time + x * (points[1].time - points[0].time);
+  if (x >= n - 1) return points[n - 1].time + (x - (n - 1)) * (points[n - 1].time - points[n - 2].time);
+  const i = Math.floor(x);
+  return points[i].time + (x - i) * (points[i + 1].time - points[i].time);
+}
+
+/** The logical bar index of time `t` in time-sorted `points`: the inverse of timeAt. */
+export function indexAt(points, t) {
+  const n = points.length;
+  if (n === 1) return (t - points[0].time) / 60;
+  if (t <= points[0].time) return (t - points[0].time) / (points[1].time - points[0].time);
+  if (t >= points[n - 1].time) {
+    return n - 1 + (t - points[n - 1].time) / (points[n - 1].time - points[n - 2].time);
+  }
+  let lo = 0;
+  let hi = n - 1;              // points[lo].time <= t < points[hi].time
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].time <= t) lo = mid;
+    else hi = mid;
+  }
+  return lo + (t - points[lo].time) / (points[hi].time - points[lo].time);
+}
+
+/* ------------------------------------------------------------------ */
 /* Component                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -344,6 +390,9 @@ export default {
     // not mounted yet when the server's first apply() would arrive, so that call
     // would be lost; the server keeps this prop equal to the last spec it applied.
     initial_spec: { type: Object, default: null },
+    // Charts with the same group show the same time of day (see "Linked charts").
+    sync_group: { type: String, default: null },
+    sync_lead: { type: Boolean, default: false },
   },
 
   data() {
@@ -413,6 +462,10 @@ export default {
     this.chart.subscribeCrosshairMove(this.onCrosshair);
     this.refitUntil = 0;
     this.pendingRange = null;
+    this.anchor = null;
+    this.userUntil = 0;
+    this.following = false;
+    if (this.sync_group) this.joinGroup();
     this.resizeObserver = new ResizeObserver(() => {
       if (performance.now() < this.refitUntil) {
         requestAnimationFrame(() => this.frame());
@@ -423,6 +476,7 @@ export default {
   },
 
   beforeUnmount() {
+    if (this.sync_group) this.leaveGroup();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     if (this.chart) {
       this.chart.remove();
@@ -490,11 +544,18 @@ export default {
 
       this.legendSpec = spec.legend || [];
       this.legend = this.legendSpec.map((item) => ({ ...item, value: null }));
+      this.anchor = spec.anchor == null ? null : spec.anchor;
 
-      // Frame the data: a requested time window, else the window being looked
-      // at, else everything the first time data arrives (or on request). Otherwise
-      // leave the user's viewport alone - the point of reconciling in place.
-      if (spec.visible_range) {
+      // Frame the data: the lead chart's time of day when asked to follow it, else
+      // a requested time window, else the window being looked at, else everything
+      // the first time data arrives (or on request). Otherwise leave the user's
+      // viewport alone - the point of reconciling in place.
+      const lead = spec.follow ? this.peers().find((chart) => chart.sync_lead) : null;
+      if (lead) {
+        this.pendingRange = null;
+        this.refitUntil = 0;
+        this.showClock(lead.clockRange());
+      } else if (spec.visible_range) {
         this.pendingRange = spec.visible_range;
         this.frame();
         this.refitUntil = performance.now() + 1500;
@@ -604,6 +665,74 @@ export default {
         band.primitive.setColor(spec.color);
         band.primitive.setPoints(points);
       }
+    },
+
+    joinGroup() {
+      if (!GROUPS.has(this.sync_group)) GROUPS.set(this.sync_group, new Set());
+      GROUPS.get(this.sync_group).add(this);
+      this.markUser = (event) => {
+        if (event.type === "pointermove" && !event.buttons) return;   // hovering moves only the crosshair
+        this.userUntil = performance.now() + USER_MS;
+      };
+      for (const type of ["pointerdown", "pointermove", "pointerup", "wheel", "touchstart", "touchmove", "touchend"]) {
+        this.$refs.chart.addEventListener(type, this.markUser, { passive: true, capture: true });
+      }
+      this.chart.timeScale().subscribeVisibleLogicalRangeChange(this.onRange);
+    },
+
+    leaveGroup() {
+      const group = GROUPS.get(this.sync_group);
+      if (!group) return;
+      group.delete(this);
+      if (!group.size) GROUPS.delete(this.sync_group);
+    },
+
+    /** The other charts of the group that have data to line up with. */
+    peers() {
+      const group = this.sync_group ? GROUPS.get(this.sync_group) : null;
+      return group ? [...group].filter((chart) => chart !== this && chart.ready()) : [];
+    },
+
+    ready() {
+      return !!(this.chart && this.anchor != null && this.candlePoints && this.candlePoints.length);
+    },
+
+    /** The visible range as seconds after this chart's own midnight. */
+    clockRange() {
+      const range = this.chart.timeScale().getVisibleLogicalRange();
+      if (!range) return null;
+      return {
+        from: timeAt(this.candlePoints, range.from) - this.anchor,
+        to: timeAt(this.candlePoints, range.to) - this.anchor,
+      };
+    },
+
+    /** Shows the clock range of another chart of the group - unless the user is moving this one. */
+    showClock(range) {
+      if (!range || !this.ready() || performance.now() < this.userUntil) return;
+      const from = indexAt(this.candlePoints, range.from + this.anchor);
+      const to = indexAt(this.candlePoints, range.to + this.anchor);
+      const shown = this.chart.timeScale().getVisibleLogicalRange();
+      if (shown && Math.abs(shown.from - from) < 1e-3 && Math.abs(shown.to - to) < 1e-3) return;
+      this.following = true;
+      try {
+        this.chart.timeScale().setVisibleLogicalRange({ from, to });
+      } finally {
+        this.following = false;
+      }
+    },
+
+    onRange() {
+      if (this.following || !this.ready()) return;
+      const now = performance.now();
+      if (now < this.userUntil || this.sync_lead) {
+        if (now < this.userUntil) this.userUntil = now + USER_MS;   // still moving: a drag, a kinetic scroll
+        const range = this.clockRange();
+        for (const peer of this.peers()) peer.showClock(range);
+        return;
+      }
+      const lead = this.peers().find((chart) => chart.sync_lead);
+      if (lead) this.showClock(lead.clockRange());        // a follower that moved by itself
     },
 
     onCrosshair(param) {

@@ -19,7 +19,6 @@ if _PROJECT_ROOT not in sys.path:
 from nicegui import app, ui
 
 from config import Config
-from dashboard.views.analogues import show_analogues_page
 from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
 from dashboard.views.forecast import show_forecast_page
@@ -68,8 +67,7 @@ def chrome(active: str, conn) -> None:
     ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
     with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
         ui.label("Trading Pipeline").classes("text-lg font-medium")
-        for label, target in (("Session Explorer", "/"), ("Analogues", "/analogues"), ("Forecast", "/forecast"),
-                              ("Evaluation", "/evaluation")):
+        for label, target in (("Session Explorer", "/"), ("Forecast", "/forecast"), ("Evaluation", "/evaluation")):
             button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
@@ -81,13 +79,6 @@ def index() -> None:
     conn = connection()
     chrome("Session Explorer", conn)
     show_candles_page(conn)
-
-
-@ui.page("/analogues")
-def analogues() -> None:
-    conn = connection()
-    chrome("Analogues", conn)
-    show_analogues_page(conn)
 
 
 @ui.page("/evaluation")

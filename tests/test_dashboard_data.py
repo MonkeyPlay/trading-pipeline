@@ -225,9 +225,9 @@ def test_moving_averages_follow_the_pine_script():
 
 def test_session_explorer_warms_the_moving_averages_up_on_earlier_days(market):
     conn, _, sessions = market
-    from dashboard.views.candles import SessionExplorer, day_contracts
-    view = SessionExplorer(conn)
-    view.date, view.symbol, view.timeframe = LAST_DAY, "NQ", "5m"
+    from dashboard.views.candles import SessionPane, day_contracts
+    view = SessionPane(conn)
+    view.date, view.timeframe = LAST_DAY, "5m"
     view.contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
     assert view._warmup_days() == 5                          # 1000 5-minute bars, plus a spare day
     assert str(view._history_start()) == sessions[-2].session_date.isoformat()
@@ -236,6 +236,31 @@ def test_session_explorer_warms_the_moving_averages_up_on_earlier_days(market):
     first = view.day_df.iloc[0]
     assert view.day_df[["tema", "ema_trend", "ema_trigger"]].notna().all().all()
     assert first["ema_trend"] != first["close"]              # earlier bars behind it, not seeded on the day
+
+
+class _Chart:
+    def apply(self, spec):
+        self.spec = spec
+
+
+def test_a_session_pane_anchors_its_chart_at_its_own_midnight(market):
+    """The explorer's two charts - the session and an analogue on another day - line up by clock time: each spec
+    carries its day's 00:00 on the chart's (New York wall) clock, and the analogue's asks to follow the session."""
+    conn, _, sessions = market
+    from dashboard.views.candles import SessionPane, day_contracts
+    contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
+    pane = SessionPane(conn)
+    pane.chart = _Chart()
+    for day in (LAST_DAY, sessions[0].session_date.isoformat()):
+        pane.show(contract, day, "1m", follow=True)
+        spec, midnight = pane.chart.spec, int(pd.Timestamp(day).value // 10 ** 9)
+        assert spec["anchor"] == midnight and spec["follow"] is True
+        assert spec["candles"][0]["time"] - midnight == (9 * 60 + 15) * 60      # 09:15 on either day
+        assert "visible_range" in spec                                            # used when there is no lead
+    pane.show(contract, LAST_DAY, "5m", keep_view=True)
+    assert pane.chart.spec["keep_view"] is True and pane.chart.spec["follow"] is False
+    pane.show(None, None, "1m")                                                   # no analogue: an empty chart
+    assert pane.chart.spec["candles"] == [] and not pane.has_bars
 
 
 def test_default_view_in_the_spec():

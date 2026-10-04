@@ -1,30 +1,29 @@
 # dashboard/views/analogues.py
 """
-Analogues (guideline stage 2D): a session's structural analogues - matcher
-nq_match_p1_v2 over the pre-open structure annotations (matching/structural.py) -
-side by side with it: every rubric feature of the session and of its up to five
-earlier analogues, each cell marked as a match, a mismatch or not comparable, with
-the similarity and the comparable weight of each analogue.
+The analogues of the Session Explorer (guideline stage 2D): the selected NQ
+session's structural analogues - matcher nq_match_p1_v2 over the pre-open structure
+annotations (matching/structural.py) - side by side with it: every rubric feature
+of the session and of its up to five earlier analogues, each cell marked as a
+match, a mismatch or not comparable, with the similarity and the comparable weight
+of each analogue. The explorer's day drives it; only the journal symbol (NQ) has
+analogues, and only for the days the journal holds a snapshot of.
 
-Outcomes are hidden at first, so the page serves the outcome-blind check the
-guideline asks for: can a person see why each analogue qualifies? "Show outcomes"
-adds each analogue's realised labels and the frequency table - raw counts over the
-analogues with a label, the denominator, the smoothed baseline and the prior.
-
-Clicking a session's date charts that session's own pre-open (its own contract and
-price basis, never rebased); with outcomes shown, through its close.
+The explorer charts one analogue beside the session - its regular hours on its own
+contract and prices, never rebased - the most similar first; clicking an
+analogue's date here charts that one. Its realised labels and the frequency table
+stay hidden until "Show outcomes": raw counts over the analogues with a label, the
+denominator, the smoothed baseline and the prior.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
-from dashboard.components.lightweight_chart import LightweightChart
-from dashboard.components.preopen import LEVEL_LABELS, preopen_spec
+from dashboard.components.preopen import LEVEL_LABELS
 from database import journal_store as store
 from forecaster.preopen_display import p1_record
 from matching.structural import features
@@ -36,6 +35,7 @@ _MATCH, _MISMATCH, _PARTIAL, _NONE = ("rgba(38,166,154,0.28)", "rgba(239,83,80,0
                                       "rgba(120,123,134,0.12)")
 _FEATURE_LABEL = {f: f"vs {LEVEL_LABELS[f[len('price:'):]]}" if f.startswith("price:") else f
                   for f in pre.MATCH_WEIGHTS}
+_CHOSEN = "bg-primary text-white"
 
 
 def _cell_style(component: Optional[Dict[str, Any]]) -> str:
@@ -45,64 +45,90 @@ def _cell_style(component: Optional[Dict[str, Any]]) -> str:
     return f"background:{_MATCH if score == 1 else _MISMATCH if score == 0 else _PARTIAL}"
 
 
-class AnaloguesPage:
-    def __init__(self, conn) -> None:
+class AnaloguesPanel:
+    """
+    Built inside the Session Explorer: ``show(day, symbol)`` follows its
+    selection and returns the day's analogues; ``on_pick(snapshot_id)`` is
+    called with the analogue whose date is clicked, and ``mark`` highlights the
+    one charted. Snapshots are read per day, never all at once.
+    """
+
+    def __init__(self, conn, on_pick: Optional[Callable[[str], Any]] = None) -> None:
         self.conn = conn
+        self.on_pick = on_pick
         self.version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
-        self.snaps = {str(s["session_date"]): s
-                      for s in store.list_snapshots(conn, "2000-01-01", "2100-01-01", self.version)}
-        self.days = sorted(self.snaps, reverse=True)
+        self.snaps: Dict[str, Dict[str, Any]] = {}          # the snapshots read so far, by session date
         self.day: Optional[str] = None
-        self.chart_day: Optional[str] = None
         self.aset: Optional[Dict[str, Any]] = None
+        self.reason: Optional[str] = None                   # why the day has no analogue to chart
+        self.chosen: Optional[str] = None                   # the snapshot id of the analogue charted
+        self.date_buttons: Dict[str, Any] = {}
         self.outcomes_shown = False
-        self.chart: Optional[LightweightChart] = None
+
+    def _snapshot(self, day: str) -> Optional[Dict[str, Any]]:
+        if day not in self.snaps:
+            found = store.list_snapshots(self.conn, day, day, self.version)
+            if found:
+                self.snaps[day] = found[0]
+        return self.snaps.get(day)
 
     # -- layout ---------------------------------------------------------------
 
     def build(self) -> None:
-        with ui.column().classes("w-full p-4 gap-3"):
-            ui.label("Analogues").classes("text-2xl font-medium")
-            if not self.days:
-                ui.label(f"No {self.version} snapshots yet. Run the collector, or: python scripts/nq_journal.py "
-                         f"catch-up").style(_MUTED)
-                return
+        """The panel's elements, in the caller's container: a note when the day has no analogues, else the body."""
+        self.note = ui.label().classes("text-sm").style(_MUTED)
+        with ui.column().classes("w-full gap-3") as self.body:
             ui.label(f"Earlier sessions most like the selected one by P1's rubric ({pre.MATCHER_VERSION}): price "
                      f"location against its own levels, structure, trends and moving averages, the final hour and "
-                     f"event risk. Outcomes stay hidden until you show them, so you can judge first why each "
-                     f"analogue qualifies.").classes("text-sm").style(_MUTED)
+                     f"event risk. The chart beside the session shows one of them; their realised labels and the "
+                     f"outcome frequencies stay hidden until you show them.").classes("text-sm").style(_MUTED)
             with ui.row().classes("w-full items-center gap-4"):
-                self.day_select = ui.select(self.days, value=self.days[0], label="Session", with_input=True,
-                                            on_change=lambda e: self.show(e.value)).classes("w-52")
                 ui.switch("Show outcomes", value=False, on_change=self.toggle_outcomes)
                 self.summary = ui.label().classes("text-sm").style(_MUTED)
             self.table = ui.column().classes("w-full gap-0 overflow-x-auto")
-            with ui.expansion("P1 pre-open record (47 fields)", icon="list_alt", value=False).classes("w-full").style(
-                    "background:#1c212e"):
+            with ui.expansion("P1 pre-open record (47 fields)", icon="list_alt", value=False).classes(
+                    "w-full").style("background:#1c212e"):
                 self.record = ui.column().classes("w-full gap-0")
             self.outcome_panel = ui.column().classes("w-full gap-1")
-            self.chart_title = ui.label().classes("text-sm")
-            self.chart = LightweightChart(height=480)
-        self.show(self.days[0])
 
     # -- data -----------------------------------------------------------------
 
-    def show(self, day: Optional[str]) -> None:
+    def show(self, day: Optional[str], symbol: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Shows the analogues of ``day`` - when ``symbol`` is the journal symbol and
+        the journal holds the day - and returns them, the most similar first;
+        none, ``reason`` says why.
+        """
         if not day:
-            return
-        self.day, self.chart_day = day, day
-        snap = self.snaps[day]
+            return []
+        self.day, self.aset, self.reason = day, None, None
+        snap = self._snapshot(day) if symbol == defs.SYMBOL else None
+        self.note.set_visibility(snap is None)
+        self.body.set_visibility(snap is not None)
+        if snap is None:
+            self.reason = (f"Analogues are kept for {defs.SYMBOL}, the journal symbol." if symbol != defs.SYMBOL
+                           else f"No {self.version} snapshot of {day}: the journal holds the sessions it has "
+                                f"caught up (python scripts/nq_journal.py catch-up).")
+            self.note.text = self.reason
+            return []
         self.aset = store.latest_analogue_set(self.conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
                                               pre.RULES_PROTOCOL_VERSION)
         self.render()
+        if self.aset is None:
+            self.reason = f"No analogue set for {day} yet: python scripts/nq_journal.py match"
+        elif not self.aset["members"]:
+            self.reason = f"No analogue for {day}: {self.aset['pool_size']} earlier session(s) scored."
+        return list(self.aset["members"]) if self.aset is not None else []
+
+    def mark(self, snapshot_id: Optional[str]) -> None:
+        """Highlights the date of the analogue charted beside the session."""
+        self.chosen = snapshot_id
+        for sid, button in self.date_buttons.items():
+            button.classes(add=_CHOSEN) if sid == snapshot_id else button.classes(remove=_CHOSEN)
 
     def toggle_outcomes(self, event) -> None:
         self.outcomes_shown = bool(event.value)
         self.render()
-
-    def select_chart(self, day: str) -> None:
-        self.chart_day = day
-        self._push_chart()
 
     def _labels(self, snapshot_id: str, revision: Optional[int]) -> Optional[Dict[str, Any]]:
         if revision is not None:
@@ -116,13 +142,13 @@ class AnaloguesPage:
     def render(self) -> None:
         self.table.clear()
         self.outcome_panel.clear()
+        self.date_buttons = {}
         self._render_record()
         aset = self.aset
         if aset is None:
             self.summary.text = ""
             with self.table:
                 ui.label(f"No analogue set for {self.day} yet: python scripts/nq_journal.py match").style(_MUTED)
-            self._push_chart()
             return
         members = aset["members"]
         excluded = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in aset["excluded"].items()) or "none"
@@ -135,9 +161,9 @@ class AnaloguesPage:
         with self.table:
             with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:#2a2e39"):
                 ui.label("").classes(_CELL).style("background:#1c212e")
-                self._date_button(self.day, "target")
+                ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:#1c212e")
                 for m in members:
-                    self._date_button(m["session_date"], f"#{m['rank']}")
+                    self.date_buttons[m["snapshot_id"]] = self._date_button(m)
                 ui.label("similarity / coverage").classes(_CELL).style(f"background:#1c212e;{_MUTED}")
                 ui.label("").classes(_CELL).style("background:#1c212e")
                 for m in members:
@@ -169,15 +195,16 @@ class AnaloguesPage:
                             ui.label(defs.display(t, lab) if labels else "no outcome").classes(_CELL).style(
                                 "background:#262b38")
             ui.label("Green: same value; red: different; yellow: partly similar (Chop Score); grey: not "
-                     "comparable. Click a date to chart that session.").classes("text-xs mt-1").style(_MUTED)
+                     "comparable. Click an analogue's date to chart it beside the session.").classes(
+                "text-xs mt-1").style(_MUTED)
         if self.outcomes_shown:
             self._render_frequencies(aset)
-        self._push_chart()
+        self.mark(self.chosen)
 
     def _render_record(self) -> None:
         """P1's 47 fields of the selected session (forecaster/preopen_display.py): pre-open only, no outcome."""
         self.record.clear()
-        snap = self.snaps[self.day]
+        snap = self._snapshot(self.day)
         annotation = store.latest_annotation(self.conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION)
         provenance, rows = p1_record(snap, annotation, self.aset)
         with self.record:
@@ -188,8 +215,10 @@ class AnaloguesPage:
                     ui.label(value).classes("text-xs" + (" opacity-60" if value == "Unavailable" else ""))
                     ui.label(basis).classes("text-[11px]").style(_MUTED)
 
-    def _date_button(self, day: str, caption: str) -> None:
-        ui.button(f"{caption} {day}", on_click=lambda d=day: self.select_chart(d)).props(
+    def _date_button(self, member: Dict[str, Any]) -> Any:
+        sid = member["snapshot_id"]
+        return ui.button(f"#{member['rank']} {member['session_date']}",
+                         on_click=lambda: self.on_pick and self.on_pick(sid)).props(
             "flat dense no-caps size=sm").classes("text-xs")
 
     def _render_frequencies(self, aset: Dict[str, Any]) -> None:
@@ -214,19 +243,3 @@ class AnaloguesPage:
                         f"{defs.display(t, c)} {float(v) * 100:.0f}% ({float(s['prior'][c]) * 100:.0f}%)"
                         for c, v in (s["smoothed"] or {}).items()) or "—"
                     ui.label(smoothed).classes(_WRAP).style("background:#1c212e")
-
-    def _push_chart(self) -> None:
-        if self.chart is None or self.chart_day is None:
-            return
-        snap = self.snaps.get(self.chart_day)
-        if snap is None:
-            self.chart.apply({"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []})
-            return
-        self.chart_title.text = (f"{self.chart_day} ({snap['payload']['identity'].get('local_symbol') or ''}): "
-                                 + ("overnight and the session" if self.outcomes_shown else
-                                    "overnight to the cutoff, 2-minute bars"))
-        self.chart.apply(preopen_spec(self.conn, snap, through_close=self.outcomes_shown))
-
-
-def show_analogues_page(conn) -> None:
-    AnaloguesPage(conn).build()

@@ -562,12 +562,17 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   shown for a Claude one.
   Historical sets are marked `historical_reconstruction`: their outcomes were
   computed after the fact.
-- **Dashboard:** **Analogues** (`/analogues`) puts a session and its analogues side
-  by side - each feature cell a match, a mismatch, partly similar or not comparable -
-  with the similarity and coverage of each; outcomes stay hidden until "Show
-  outcomes", so the page first serves the outcome-blind check of why each analogue
-  qualifies. Clicking a date charts that session's own pre-open (its own contract
-  and prices, never rebased). The outcome-blind review of the annotations
+- **Dashboard:** the **Session Explorer** (`/`) charts one of the selected NQ
+  session's analogues beside it - the analogue's regular hours on its own contract
+  and prices, never rebased, in the same window with the same indicators, the two
+  charts linked by time of day - the most similar first; its select, or a date in
+  the comparison, picks another. Below the charts the session and its analogues
+  stand side by side - each feature cell a match, a mismatch, partly similar or not
+  comparable - with the similarity and coverage of each; their realised labels and
+  the outcome frequencies stay hidden until "Show outcomes". The charts show both
+  sessions' outcomes, so an outcome-blind look at why an analogue qualifies is the
+  table alone. (Until 2026-10-04 an Analogues page charted each session's pre-open
+  instead.) The outcome-blind review of the annotations
   (`journal.annotation_review_*`: sets preopen_review_v1 and v2, 425 verdicts, all
   "agree" from a form that preselected it) had its own page until 2026-10-04.
 
@@ -595,7 +600,7 @@ export adapter Appendix B asks for: P1 section 9's 47 properties in order, each
 from the component Appendix B makes its owner, with a provenance line (versions,
 origin, target date, the actual cutoff and its price). It is kept apart from P2's
 40-field outcome record and never overwrites it. `nq_journal.py show` prints it and
-the Analogues page has it under "P1 pre-open record".
+the Session Explorer's analogues panel has it under "P1 pre-open record".
 
 | P1 fields | Owner here | Status |
 |---|---|---|
