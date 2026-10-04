@@ -15,8 +15,8 @@ services:
       # The image runs timescaledb-tune when the data volume is first created. Pin the
       # memory it tunes for instead of trusting detection, which sees the Docker VM
       # (often half the host on Docker Desktop) rather than the machine. Sized for a
-      # 64 GB host; leaves the OS page cache, IB Gateway and the pipeline plenty.
-      TS_TUNE_MEMORY: ${TS_TUNE_MEMORY:-64GB}
+      # 32 GB host; leaves the OS page cache, IB Gateway and the pipeline plenty.
+      TS_TUNE_MEMORY: ${TS_TUNE_MEMORY:-32GB}
       TIMESCALEDB_TELEMETRY: "off"
     ports:
       # Local-only by default. Set POSTGRES_BIND=0.0.0.0 when the pipeline runs on

@@ -87,15 +87,15 @@ migrated automatically on first use — there is no separate init step.
 |---|---|---|
 | `POSTGRES_PASSWORD` | `trading` | Password for the `trading` role — change it, and match `DATABASE_URL` |
 | `POSTGRES_BIND` | `127.0.0.1` | Interface the DB listens on; `0.0.0.0` if the pipeline runs on another machine (firewall it) |
-| `TS_TUNE_MEMORY` | `64GB` | RAM `timescaledb-tune` sizes Postgres for |
+| `TS_TUNE_MEMORY` | `32GB` | RAM `timescaledb-tune` sizes Postgres for |
 
-With 64 GB the tuner sets `shared_buffers=16GB`, `effective_cache_size=48GB`,
-`work_mem=128MB`, `maintenance_work_mem=2GB` and SSD-friendly planner costs. Tuning is
+With 32 GB (and 12 CPUs) the tuner sets `shared_buffers=8GB`, `effective_cache_size=24GB`,
+`work_mem=21845kB`, `maintenance_work_mem=2047MB` and SSD-friendly planner costs. Tuning is
 written **once, when the data volume is created**; after changing `TS_TUNE_MEMORY` on an
-existing volume, re-run it in place and restart:
+existing volume, re-run it in place and restart (`--dry-run` first shows what it changes):
 
 ```bash
-docker compose exec timescaledb timescaledb-tune --memory=64GB --yes --quiet \
+docker compose exec timescaledb timescaledb-tune --memory=32GB --yes --quiet \
     --conf-path=/var/lib/postgresql/data/postgresql.conf
 docker compose restart timescaledb
 ```
