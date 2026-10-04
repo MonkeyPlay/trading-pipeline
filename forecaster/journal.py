@@ -107,7 +107,8 @@ def _known_as_of(history: Dict[str, List[Dict[str, Any]]], target_snapshot: Dict
     return known
 
 
-def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RULES_PROTOCOL_VERSION) -> int:
+def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RULES_PROTOCOL_VERSION,
+          only: Optional[set] = None) -> int:
     """
     Stores the analogue set of every snapshot of the profile's version annotated under
     ``protocol``: its P1-rubric analogues among the earlier sessions, then their latest
@@ -116,6 +117,10 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
     """
     version = defs.PROFILES[profile].snapshot_version
     snaps = store.list_snapshots(conn, "2000-01-01", "2100-01-01", version)
+    for snapshot_id in sorted((only or set()) - {s["snapshot_id"] for s in snaps}):
+        extra = store.get_snapshot(conn, snapshot_id)      # a named target that is not its session's newest
+        if extra is not None and extra["snapshot_version"] == version:
+            snaps.append(extra)
     by_id = {s["snapshot_id"]: s for s in snaps}
     sessions = [ms.SessionRef(s["snapshot_id"], str(s["session_date"]), s["symbol"]) for s in snaps]
     history = store.outcome_history(conn, defs.LABEL_VERSION)
@@ -129,7 +134,7 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
                                  a["integrity_status"], ms.features(a)))
     created = 0
     for target in records:
-        if target.integrity_status != "ok":
+        if target.integrity_status != "ok" or (only is not None and target.snapshot_id not in only):
             continue
         tsnap = by_id[target.snapshot_id]
         known = _known_as_of(history, tsnap)

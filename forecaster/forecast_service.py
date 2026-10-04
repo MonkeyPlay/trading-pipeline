@@ -82,7 +82,8 @@ def _labels_at(history: Dict[str, List[Dict[str, Any]]], snapshot_id: str, revis
 
 def freeze_forecast_evidence(conn, snapshot: Dict[str, Any], annotation: Dict[str, Any],
                              analogue_set: Optional[Dict[str, Any]], profile: str, mode: str,
-                             history: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
+                             history: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                             algorithm: str = fc.BASELINE_VERSION) -> Dict[str, Any]:
     """
     The run's frozen evidence: the ids and hashes of the snapshot, annotation and analogue set, the analogues' labels
     at their frozen outcome revisions, the prior manifest's digest and per-target class counts, the thresholds,
@@ -105,7 +106,7 @@ def freeze_forecast_evidence(conn, snapshot: Dict[str, Any], annotation: Dict[st
                          if cp.get("status") == "valid" else None),
         "candidates": (p.get("first_level_candidates") or {}).get("levels"),
         "versions": {"label": defs.LABEL_VERSION, "convention": defs.CONVENTION_VERSION,
-                     "matcher": pre.MATCHER_VERSION, "algorithm": fc.BASELINE_VERSION,
+                     "matcher": pre.MATCHER_VERSION, "algorithm": algorithm,
                      "schema": fc.FORECAST_SCHEMA_VERSION, "issue_policy": fc.ISSUE_POLICIES[mode]},
         "analogue_set_id": None,
     }
@@ -157,34 +158,37 @@ def _canonical_id(value: Optional[str]) -> Optional[str]:
 
 
 def idempotency_key(snapshot: Dict[str, Any], annotation_id: str, set_id: Optional[str], profile: str,
-                    mode: str) -> str:
+                    mode: str, algorithm: str = fc.BASELINE_VERSION) -> str:
     """The official key of a run: session, profile, mode, evidence ids and versions - all known before any evidence
     is loaded, so a repeated invocation returns the stored run at once."""
     return _digest({"symbol": snapshot["symbol"], "session_date": str(snapshot["session_date"]), "profile": profile,
                     "snapshot_id": snapshot["snapshot_id"], "annotation_id": annotation_id, "analogue_set_id": set_id,
                     "mode": mode, "versions": {"label": defs.LABEL_VERSION, "convention": defs.CONVENTION_VERSION,
-                                               "matcher": pre.MATCHER_VERSION, "algorithm": fc.BASELINE_VERSION,
+                                               "matcher": pre.MATCHER_VERSION, "algorithm": algorithm,
                                                "schema": fc.FORECAST_SCHEMA_VERSION,
                                                "issue_policy": fc.ISSUE_POLICIES.get(mode)}})
 
 
 def run_forecast(conn, snapshot_id: str, annotation_id: str, set_id: Optional[str],
                  profile: str = defs.DEFAULT_PROFILE, mode: str = "historical_replay",
-                 history: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Tuple[Dict[str, Any], bool]:
+                 history: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                 algorithm: str = fc.BASELINE_VERSION) -> Tuple[Dict[str, Any], bool]:
     """
-    Issues the baseline forecast of explicit evidence ids and returns ``(run, created)``; an attempt that cannot
-    issue is stored with its status and reason. Raises ForecastInputError for ids that are malformed, unknown or
-    do not belong together - nothing is stored then.
+    Issues the forecast of explicit evidence ids under ``algorithm`` (contracts/nq_forecast.ALGORITHMS) and
+    returns ``(run, created)``; an attempt that cannot issue is stored with its status and reason. Raises
+    ForecastInputError for ids that are malformed, unknown or do not belong together - nothing is stored then.
     """
+    if algorithm not in fc.ALGORITHMS:
+        raise ForecastInputError(f"unknown forecast algorithm {algorithm!r}")
     started = datetime.now(timezone.utc)
     snapshot = load_snapshot(conn, snapshot_id)
-    key = idempotency_key(snapshot, _canonical_id(annotation_id), _canonical_id(set_id), profile, mode)
+    key = idempotency_key(snapshot, _canonical_id(annotation_id), _canonical_id(set_id), profile, mode, algorithm)
     stored = store.find_forecast_run(conn, key)
     if stored is not None:                       # its ids were checked when it was stored (and by the database)
         return store.get_forecast_run(conn, stored), False
     annotation = load_annotation(conn, annotation_id)
     aset = load_analogue_set(conn, set_id)
-    evidence = freeze_forecast_evidence(conn, snapshot, annotation, aset, profile, mode, history)
+    evidence = freeze_forecast_evidence(conn, snapshot, annotation, aset, profile, mode, history, algorithm)
 
     predictions: List[Dict[str, Any]] = []
     outputs: Dict[str, Any] = {}
@@ -195,7 +199,7 @@ def run_forecast(conn, snapshot_id: str, annotation_id: str, set_id: Optional[st
         status, reason = "unavailable", f"no analogue set for annotation {annotation['annotation_id']}"
     else:
         try:
-            forecast = validate_forecast(baseline_forecast(evidence), aset)
+            forecast = validate_forecast(baseline_forecast(evidence, algorithm), aset, algorithm)
             outputs = forecast["outputs"]
             predictions = [{"target": t, **forecast["predictions"][t]} for _, t in fc.FORECAST_TARGETS]
         except ForecastInvalid as e:
@@ -205,14 +209,14 @@ def run_forecast(conn, snapshot_id: str, annotation_id: str, set_id: Optional[st
             status, reason = "failed", f"{type(e).__name__}: {e}"
     if status in ("failed", "invalid"):
         key = f"{key}:attempt:{uuid.uuid4()}"            # an attempt never blocks the official run
-    previous = (store.current_forecast_run(conn, evidence["session_date"], profile, mode, fc.BASELINE_VERSION, key)
+    previous = (store.current_forecast_run(conn, evidence["session_date"], profile, mode, algorithm, key)
                 if status in ("issued", "unavailable") else None)
     day = snapshot["session_date"]
     run = {
         "idempotency_key": key, "symbol": snapshot["symbol"], "session_date": str(day),
         "contract_id": snapshot["contract_id"], "profile": profile, "snapshot_id": snapshot["snapshot_id"],
         "annotation_id": annotation["annotation_id"], "analogue_set_id": aset["set_id"] if aset else None,
-        "label_version": defs.LABEL_VERSION, "algorithm_version": fc.BASELINE_VERSION,
+        "label_version": defs.LABEL_VERSION, "algorithm_version": algorithm,
         "schema_version": fc.FORECAST_SCHEMA_VERSION, "issue_policy": fc.ISSUE_POLICIES[mode],
         "code_revision": code_revision(), "mode": mode, "input_cutoff_at": snapshot["cutoff_at"],
         "deadline_at": (cal.ny_instant(datetime.fromisoformat(str(day)).date(), fc.LIVE_DEADLINE_ET)
@@ -247,7 +251,8 @@ def timely(run: Dict[str, Any]) -> bool:
 
 def forecast_session(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
                      protocol: str = pre.RULES_PROTOCOL_VERSION, mode: str = "historical_replay",
-                     history: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[Tuple[Dict[str, Any], bool]]:
+                     history: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                     algorithm: str = fc.BASELINE_VERSION) -> Optional[Tuple[Dict[str, Any], bool]]:
     """
     Resolves one session's evidence ids explicitly - its profile snapshot, that snapshot's latest annotation under
     ``protocol``, and the newest analogue set of exactly that annotation - and runs the forecast on them. None when
@@ -263,19 +268,26 @@ def forecast_session(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
     if aset is not None and aset["target_annotation_id"] != annotation["annotation_id"]:
         aset = None                                    # the newest set is of another annotation: none for this one
     return run_forecast(conn, snaps[0]["snapshot_id"], annotation["annotation_id"],
-                        aset["set_id"] if aset else None, profile, mode, history)
+                        aset["set_id"] if aset else None, profile, mode, history, algorithm)
 
 
-def forecast_all(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION) -> int:
-    """Historical-replay forecasts of every annotated snapshot of the profile; returns how many runs are new."""
+def forecast_all(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION,
+                 algorithms=tuple(fc.ALGORITHMS)) -> int:
+    """Historical-replay forecasts of every annotated snapshot of the profile under every algorithm (stage 4's arms
+    A and B); returns how many runs are new."""
     history = store.outcome_history(conn, defs.LABEL_VERSION)
     created = 0
-    for snap in store.list_snapshots(conn, "2000-01-01", "2100-01-01", defs.PROFILES[profile].snapshot_version):
-        result = forecast_session(conn, str(snap["session_date"]), profile, protocol, history=history)
-        if result is not None:
-            run, new = result
-            created += new
-            if new and run["lifecycle_status"] not in ("issued", "unavailable"):
-                logger.warning(f"Forecast {snap['session_date']}: {run['lifecycle_status']} - {run['failure_reason']}")
-    logger.info(f"Forecasts ({fc.BASELINE_VERSION}, historical replay, {protocol}): {created} new run(s).")
+    for algorithm in algorithms:
+        new_runs = 0
+        for snap in store.list_snapshots(conn, "2000-01-01", "2100-01-01", defs.PROFILES[profile].snapshot_version):
+            result = forecast_session(conn, str(snap["session_date"]), profile, protocol, history=history,
+                                      algorithm=algorithm)
+            if result is not None:
+                run, new = result
+                new_runs += new
+                if new and run["lifecycle_status"] not in ("issued", "unavailable"):
+                    logger.warning(f"Forecast {snap['session_date']} ({algorithm}): {run['lifecycle_status']} - "
+                                   f"{run['failure_reason']}")
+        logger.info(f"Forecasts ({algorithm}, historical replay, {protocol}): {new_runs} new run(s).")
+        created += new_runs
     return created

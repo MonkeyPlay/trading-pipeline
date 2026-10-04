@@ -21,6 +21,7 @@ from nicegui import app, ui
 from config import Config
 from dashboard.views.analogues import show_analogues_page
 from dashboard.views.candles import show_candles_page
+from dashboard.views.evaluation import show_evaluation_page
 from dashboard.views.forecast import show_forecast_page
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
@@ -67,7 +68,8 @@ def chrome(active: str, conn) -> None:
     ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
     with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
         ui.label("Trading Pipeline").classes("text-lg font-medium")
-        for label, target in (("Session Explorer", "/"), ("Analogues", "/analogues"), ("Forecast", "/forecast")):
+        for label, target in (("Session Explorer", "/"), ("Analogues", "/analogues"), ("Forecast", "/forecast"),
+                              ("Evaluation", "/evaluation")):
             button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
@@ -86,6 +88,13 @@ def analogues() -> None:
     conn = connection()
     chrome("Analogues", conn)
     show_analogues_page(conn)
+
+
+@ui.page("/evaluation")
+def evaluation() -> None:
+    conn = connection()
+    chrome("Evaluation", conn)
+    show_evaluation_page(conn)
 
 
 @ui.page("/forecast")

@@ -10,8 +10,10 @@ nq_baseline_p1_v1): pure functions on a run's frozen evidence
                                           an exact tie (never resolved to a neutral one)
   reference_targets(evidence)             the frozen candidates above / below the
                                           cutoff price, nearest first
-  baseline_forecast(evidence)             every P1 target's prediction and the
-                                          run-level outputs
+  baseline_forecast(evidence, algorithm)  every P1 target's prediction and the
+                                          run-level outputs, under the baseline
+                                          (nq_baseline_p1_v1, arm B) or the prior
+                                          alone (nq_prior_p1_v1, arm A)
 
 Every estimate is conditional on classifiable outcomes: the analogues and prior
 sessions without a label for a target are counted beside its distribution, not
@@ -109,11 +111,15 @@ def _eligibility(target: str, evidence: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def baseline_forecast(evidence: Dict[str, Any]) -> Dict[str, Any]:
-    """Every P1 target's baseline prediction from the frozen evidence, and the run-level outputs."""
+def baseline_forecast(evidence: Dict[str, Any], algorithm: str = fc.BASELINE_VERSION) -> Dict[str, Any]:
+    """Every P1 target's prediction from the frozen evidence under ``algorithm`` (the smoothed analogue baseline,
+    or the earlier-session prior alone, which ignores the analogues), and the run-level outputs."""
+    if algorithm not in fc.ALGORITHMS:
+        raise ValueError(f"unknown forecast algorithm {algorithm!r}")
+    members = evidence["members"] if algorithm == fc.BASELINE_VERSION else []
     predictions = {}
     for _, target in fc.FORECAST_TARGETS:
-        est = distribution(target, [m["labels"].get(target) for m in evidence["members"]],
+        est = distribution(target, [m["labels"].get(target) for m in members],
                            evidence["prior"]["counts"][target], evidence["prior"]["without_label"][target])
         dist = est.pop("distribution")
         why = _eligibility(target, evidence)

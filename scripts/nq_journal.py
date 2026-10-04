@@ -22,6 +22,11 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02   # baseline forecasts (replay)
     python scripts/nq_journal.py forecast --snapshot-id S --annotation-id A --set-id X   # explicit evidence
     python scripts/nq_journal.py show-forecast --run-id R                   # one stored forecast run
+    python scripts/nq_journal.py experiment-register --name hist_dev_v1 --start 2025-09-02 --end 2026-10-02
+    python scripts/nq_journal.py experiment-score --name hist_dev_v1        # freeze cases, score, report
+    python scripts/nq_journal.py experiment-list
+    python scripts/nq_journal.py live                                       # the pre-open live capture (3D)
+    python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
 
@@ -39,6 +44,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -388,6 +394,97 @@ def cmd_show_forecast(conn, args):
     return 0
 
 
+def cmd_experiment_register(conn, args):
+    """Registers an experiment's manifest (forecaster/experiments.py) - before any score exists."""
+    from forecaster import experiments as ex
+    try:
+        manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
+                                          args.official_run)
+        new = ex.register_experiment(conn, manifest)
+    except (ValueError, store.VersionConflict) as e:
+        print(f"Not registered: {e}")
+        return 1
+    print(f"{args.name}: {'registered' if new else 'already registered, identical'} - sessions "
+          f"{args.start} to {args.end}, {args.profile}, {args.purpose}, official run '{args.official_run}', arms "
+          + ", ".join(f"{k} {v['algorithm']}" for k, v in manifest["arms"].items())
+          + f"; primary {manifest['primary']['target']} log loss. No score has been computed.")
+    return 0
+
+
+def cmd_experiment_score(conn, args):
+    """Freezes an experiment's cases (once), scores them, stores the result and writes the report."""
+    from forecaster import experiments as ex
+    try:
+        manifest = ex.load_manifest(conn, args.name)
+    except ValueError as e:
+        print(e)
+        return 1
+    results = ex.score_experiment(conn, args.name)
+    result_id = ex.store_results(conn, args.name, results)
+    path = ex.write_report(manifest, results, args.report_dir, result_id)
+    for key, p in results["primary"]["paired"].items():
+        ll = p["log_loss"]
+        print(f"{args.name} ({manifest['purpose']}): {results['primary']['target']} {key} on {p['common']} common "
+              f"sessions - log loss diff {ex._f(ll['diff'])} {ex._ci(ll['interval'])} over {ll['both_finite']} "
+              f"finite pairs, Brier diff {ex._f(p['brier']['diff'])} {ex._ci(p['brier']['interval'])}")
+    print(f"result {result_id}; report {path}")
+    return 0
+
+
+def cmd_experiment_list(conn, args):
+    for rec in store.list_versions(conn, "experiment"):
+        m, results = rec["definition"], store.experiment_results(conn, rec["version"])
+        print(f"{rec['version']}: {m['sessions']['from']} to {m['sessions']['to']}, {m['purpose']}, registered "
+              f"{str(rec['registered_at'])[:16]}; {len(results)} scoring(s)"
+              + (f", latest {str(results[0]['computed_at'])[:16]}" if results else ""))
+    return 0
+
+
+def cmd_live(conn, args):
+    """The live capture of one session (forecaster/live_capture.py): bars at the cutoff, live snapshot, both arms."""
+    from forecaster import live_capture as live
+    day = args.date or datetime.now(cal.NY_TZ).date().isoformat()
+    try:
+        session = cal.session(day)
+    except Exception as e:
+        print(f"{day}: {e}")
+        return 1
+    if not session.is_open:
+        print(f"{day} is not a scheduled session; nothing to capture.")
+        return 0
+    try:
+        app = live.connect_ib(Config.IB_HOST, Config.IB_PORT, Config.IB_CLIENT_ID + 1)
+    except live.LiveCaptureError as e:
+        print(e)
+        return 1
+    try:
+        result = live.capture(conn, app, day, args.profile)
+    except live.LiveCaptureError as e:
+        print(e)
+        return 1
+    finally:
+        app.disconnect()
+    for c in store.live_captures(conn, day, day):
+        if c["capture_id"] == result["capture_id"]:
+            print(f"{day} {args.profile}: capture {c['capture_id']} - {result['status']}")
+            for line in live.timing(conn, c):
+                print(f"  {line}")
+    return 0 if result["status"] == "issued" else 1
+
+
+def cmd_live_report(conn, args):
+    """Every live capture of a date range with its steps as seconds after the cutoff (database clock)."""
+    from forecaster import live_capture as live
+    captures = store.live_captures(conn, args.start, args.end)
+    if not captures:
+        print("No live captures in the range.")
+    for c in captures:
+        print(f"{c['session_date']} {c['profile']}: capture {c['capture_id'][:8]} (code {c['code_revision'][:12]})")
+        for line in live.timing(conn, c):
+            print(f"  {line}")
+    return 0
+
+
 def cmd_review_set(conn, args):
     """Chooses and stores a review set from the current label version's outcomes (forecaster/review_set.py)."""
     version = defs.PROFILES[args.profile].snapshot_version
@@ -487,6 +584,23 @@ def main(argv=None):
     p.add_argument("--snapshot-id", help="Explicit evidence: snapshot id (with --annotation-id, --set-id)")
     p.add_argument("--annotation-id", help="Explicit evidence: annotation id")
     p.add_argument("--set-id", help="Explicit evidence: analogue set id (omit: no analogue set)")
+    p = sub.add_parser("experiment-register", help="Register a forecast experiment's manifest (stage 4)")
+    p.add_argument("--name", required=True)
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
+    p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p.add_argument("--purpose", default="development", choices=("development", "test"))
+    p.add_argument("--official-run", default="first", choices=("first", "latest", "first_timely"))
+    p = sub.add_parser("experiment-score", help="Freeze, score and report a registered experiment")
+    p.add_argument("--name", required=True)
+    p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
+    sub.add_parser("experiment-list", help="Registered experiments and their scorings")
+    p = sub.add_parser("live", help="Capture, freeze and issue today's session live (run before the open)")
+    p.add_argument("--date", help="Session date (default: today in New York)")
+    p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p = sub.add_parser("live-report", help="Live captures and their timing")
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
     p = sub.add_parser("show-forecast", help="Print one stored forecast run")
     p.add_argument("--run-id", required=True)
     p = sub.add_parser("show", help="Print one session's snapshot and latest outcome")
@@ -523,6 +637,8 @@ def main(argv=None):
                    "annotation-review-set": cmd_annotation_review_set,
                    "annotation-review-report": cmd_annotation_review_report, "show": cmd_show, "review-set": cmd_review_set,
                    "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
+                   "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
+                   "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

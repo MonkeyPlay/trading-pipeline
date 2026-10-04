@@ -3,6 +3,7 @@
 | Report | What | Script |
 |---|---|---|
 | `label_disagreement_impl3_vs_impl5.md` / `.csv` | The recorded `nq_prompt_v2_1_impl3` outcomes against impl5 on snapshots built today under `nq_conv_v5` (strict completeness), and the stored rule-based structure annotation against `nq_structure_rules_v4`; every difference walked one change at a time (bars revised, snapshot, rules) to its cause | `scripts/label_revision_report.py` |
+| `experiment_<name>.md` / `.csv` | A registered forecast experiment (guideline stage 4): coverage, the primary paired difference with its bootstrap interval, every target per arm, where the differences sit (class, month, volatility), reliability; per case and target in the CSV | `scripts/nq_journal.py experiment-score --name <name>` |
 | `label_disagreement_v5_vs_nq_v2.md` / `.csv` | The old v5 labels (`nq_labels_v5_candidate`) against the NQ-v2 labels, session by session, with the definition behind every difference (guideline stage 1E) | `scripts/label_disagreement_report.py` |
 
 ## Regenerating the disagreement report

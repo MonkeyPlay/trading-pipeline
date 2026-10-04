@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -499,8 +499,80 @@ def _intermarket(conn, session: cal.Session, cutoff: datetime, symbol: str) -> D
 # The snapshot
 # --------------------------------------------------------------------------
 
-def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symbol: str = defs.SYMBOL) -> Snapshot:
-    """Freezes ``symbol``'s evidence for ``session_date`` at ``profile``'s cutoff (see the module docstring)."""
+def _db_time(value) -> Optional[datetime]:
+    """A TIMESTAMPTZ as the journal connection reads it (UTC text) - or a datetime - as an aware datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    t = datetime.fromisoformat(str(value).replace(" ", "T"))
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def _availability(conn, capture_id: str, cid: int, session: cal.Session, cutoff: datetime, overnight: Sequence[Bar],
+                  prev_archive: Dict[str, Any], prior: Dict[str, Any], daily_inputs: list,
+                  events: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Point-in-time evidence of a live snapshot (issue policy nq_issue_live_v2): every overnight bar equal to a
+    receipt of the capture received before the freeze, every earlier session it reads stored before the cutoff,
+    every event and coverage row recorded before it. ``verified`` only when all of them hold.
+    """
+    frozen_at = _db_time(conn.execute("SELECT clock_timestamp();").fetchone()[0])
+    receipts = {}
+    for r in conn.execute("SELECT bar_start_at, open, high, low, close, volume, received_at FROM journal.bar_receipts "
+                          "WHERE capture_id = %s AND contract_id = %s ORDER BY receipt_id;", (capture_id, cid)).fetchall():
+        receipts[_db_time(r[0])] = (float(r[1]), float(r[2]), float(r[3]), float(r[4]), int(r[5]), _db_time(r[6]))
+    missing, differing, late = [], [], []
+    for start, o, h, low, c, v in overnight:
+        r = receipts.get(start)
+        if r is None:
+            missing.append(iso(start))
+        elif r[:5] != (o, h, low, c, v):
+            differing.append(iso(start))
+        elif r[5] > frozen_at:
+            late.append(iso(start))
+    last = max((r for r in receipts.items() if r[0] < cutoff), key=lambda kv: kv[0], default=None)
+
+    days = set()
+    if prev_archive.get("session_date"):
+        days.add((cid, prev_archive["session_date"]))
+    for x in (prior or {}).get("sessions") or []:
+        days.add((int(prior["contract_id"]), x["session_date"]))
+    for row in daily_inputs:
+        days.add((int(row[1]), row[0]))
+    if daily_inputs:
+        days.add((int(daily_inputs[0][1]), cal.previous_session(date.fromisoformat(daily_inputs[0][0]))
+                  .session_date.isoformat()))
+    stored = {}
+    if days:
+        for r in conn.execute("SELECT contract_id, trading_day, fetched_at FROM session_days WHERE interval = '1m' "
+                              "AND price_type = 'TRADES' AND (contract_id, trading_day) IN "
+                              "(SELECT * FROM unnest(%s::bigint[], %s::date[]));",
+                              ([c for c, _ in days], [d for _, d in days])).fetchall():
+            stored[(int(r[0]), str(r[1]))] = _db_time(r[2])
+    sessions_late = sorted(f"{d} ({c})" for c, d in days if stored.get((c, d)) is None or stored[(c, d)] > cutoff)
+
+    rows = list(events.get("events") or []) + list(events.get("coverage") or [])
+    events_late = sorted(f"{e.get('source')}:{e.get('event_key') or e.get('covered_from')}" for e in rows
+                         if _db_time(e.get("recorded_at")) is None or _db_time(e["recorded_at"]) > cutoff)
+    verified = bool(overnight) and not (missing or differing or late or sessions_late or events_late)
+    return {
+        "capture_id": capture_id, "frozen_at": iso(frozen_at), "verified": verified,
+        "overnight_bars": {"used": len(overnight), "received": len(overnight) - len(missing) - len(differing)
+                           - len(late), "missing": missing[:5], "differing": differing[:5],
+                           "received_after_freeze": late[:5]},
+        "sessions": {"read": len(days), "stored_after_cutoff_or_unknown": sessions_late[:5]},
+        "events": {"rows": len(rows), "recorded_after_cutoff_or_unknown": events_late[:5]},
+        "last_received_bar": None if last is None else {"bar_start_at": iso(last[0]), "received_at": iso(last[1][5])},
+        "rule": "nq_issue_live_v2 verification: overnight bars equal to a receipt of the capture received before the "
+                "freeze; earlier sessions stored and events recorded before the cutoff",
+    }
+
+
+def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symbol: str = defs.SYMBOL,
+                   live_capture_id: Optional[str] = None) -> Snapshot:
+    """Freezes ``symbol``'s evidence for ``session_date`` at ``profile``'s cutoff (see the module docstring); with
+    ``live_capture_id`` a live capture, its point-in-time evidence in the cutoff section."""
     p = defs.PROFILES[profile]
     try:
         session = cal.session(session_date)
@@ -529,6 +601,9 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         daily, daily_inputs = _daily_atr(conn, symbol, session, cid)
         events = _events(conn, session, cutoff)
         intermarket = _intermarket(conn, session, cutoff, symbol)
+        availability = (None if live_capture_id is None else
+                        _availability(conn, live_capture_id, cid, session, cutoff, overnight, prev_archive,
+                                      prior_sessions, daily_inputs, events))
 
     buckets = {m: aggregate(overnight, m, cutoff) for m in (2, 5, 15)}
     two_minute = _two_minute_atr(buckets[2], cutoff)
@@ -536,6 +611,8 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
     t, b = defs.threshold_t(two_minute.get("exact")), defs.threshold_b(daily.get("exact"))
     last = overnight[-1][0] if overnight else None
     data_mode, pit = "historical_reconstruction", "unverified_historical"
+    if availability is not None:
+        data_mode, pit = "live_capture", "verified" if availability["verified"] else "unverified_historical"
 
     payload = {
         "identity": {"symbol": symbol, "session_date": day, "weekday": session.session_date.strftime("%A"),
@@ -547,10 +624,12 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         "cutoff": {"profile": p.name, "cutoff_et": p.cutoff.strftime("%H:%M"), "input_cutoff_at": iso(cutoff),
                    "last_completed_bar": None if last is None else
                    {"bar_start_at": iso(last), "bar_end_at": iso(last + MINUTE)},
-                   "last_received_bar": None,
-                   "last_received_note": "no receipt records: a historical reconstruction cannot show when a "
-                                         "bar was received",
-                   "data_mode": data_mode, "pit_availability_status": pit},
+                   "last_received_bar": None if availability is None else availability["last_received_bar"],
+                   "last_received_note": ("no receipt records: a historical reconstruction cannot show when a "
+                                          "bar was received") if availability is None else
+                   f"receipts of live capture {live_capture_id} (journal.bar_receipts)",
+                   "data_mode": data_mode, "pit_availability_status": pit,
+                   **({} if availability is None else {"availability": availability})},
         "references": refs,
         "atr": {"daily": daily, "two_minute": two_minute},
         "thresholds": {"T": t, "B": b, "A": daily.get("exact")},

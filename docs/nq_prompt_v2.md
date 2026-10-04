@@ -3,9 +3,9 @@
 Stage 1 of the *Nasdaq 100 Forecast Implementation Guideline* (28 September 2026),
 built fresh on the codebase after the earlier forecasting code was removed. It
 makes a pre-open snapshot and its realised outcome refer to exactly the same
-question. Stage 2 (structure and analogues) and stage 3's deterministic baseline
-forecast build on it; guideline revision 2 (4 October 2026) is the current text -
-see "Stage 3" below for the forecasts and "Not built yet" for what remains.
+question. Stage 2 (structure and analogues), stage 3 (deterministic forecasts and
+live capture) and stage 4 (registered experiments) build on it; guideline revision 2
+(4 October 2026) is the current text - see "Stage 3", "Stage 4" and "Not built yet".
 
 ## Sources
 
@@ -40,6 +40,8 @@ version identifier.
 | Forecast ledger (runs, evidence, predictions, events) | [database/migrations/0014_forecast_ledger.sql](../database/migrations/0014_forecast_ledger.sql), [database/journal_store.py](../database/journal_store.py) | 3C, 3D |
 | Forecast page | [dashboard/views/forecast.py](../dashboard/views/forecast.py), [dashboard/components/preopen.py](../dashboard/components/preopen.py) (`frozen_preopen_spec`) | 3F |
 | Forecast tests | [tests/test_forecast.py](../tests/test_forecast.py), [tests/test_nq_journal.py](../tests/test_nq_journal.py) | 3 acceptance |
+| Live capture: receipts, capture events, the pre-open job | [database/migrations/0016_live_capture.sql](../database/migrations/0016_live_capture.sql), [forecaster/live_capture.py](../forecaster/live_capture.py), [tests/test_live_capture.py](../tests/test_live_capture.py) | 3D |
+| Experiments: manifest, frozen cases, scores, report, Evaluation page | [database/migrations/0015_experiments.sql](../database/migrations/0015_experiments.sql), [forecaster/experiments.py](../forecaster/experiments.py), [dashboard/views/evaluation.py](../dashboard/views/evaluation.py), [tests/test_experiments.py](../tests/test_experiments.py) | 4A-4D |
 
 ### Versions
 
@@ -71,9 +73,11 @@ version identifier.
 | `nq_match_p1_v2` | matcher | P1 section 7's analogue rubric (stage 2B / 2C); each session counts once; the prior from every snapshot (annotated or not), known as of the target, its manifest archived and hashed - current |
 | `nq_match_p1_v1` | matcher | the same rubric; a session with several records could count more than once, and a set recorded only its analogues' outcome revisions, not the prior's (its 274 impl5 sets stay as they are) |
 | `nq_forecast_schema_v1` | forecast_schema | P1's 47 properties as local specs (key, type, unit, vocabulary, owner, window, version, missing policy), prediction and lifecycle statuses, probability units - current |
-| `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
+| `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A, stage 4 arm B): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
+| `nq_prior_p1_v1` | forecast_algorithm | the earlier-session prior alone (stage 4 arm A): the same prior manifest, no structure, no analogues - current |
 | `nq_issue_replay_v1` | issue_policy | historical replay: research on reconstructed evidence, issued at the database clock, never timely live |
-| `nq_issue_live_v1` | issue_policy | live: a live_capture snapshot issued by 09:29:50 ET by the database clock, acknowledged after commit - registered; no live capture exists yet |
+| `nq_issue_live_v2` | issue_policy | live (3D): v1 plus the capture rules - bars requested after the cutoff until the bar ending at it arrives (at most 20 s), receipts with the database time, age-0 freshness, point-in-time verification, restart on the frozen snapshot, both arms - current |
+| `nq_issue_live_v1` | issue_policy | live: a live_capture snapshot issued by 09:29:50 ET by the database clock, acknowledged after commit; registered, never used |
 
 Each label version keeps every rule of the one before unchanged (checked on the
 stored sessions) and adds targets; the earlier versions stay with the outcomes
@@ -147,8 +151,8 @@ the last completed bar and the source payload hash.
 
 Without real-time receipts a snapshot is a `historical_reconstruction` with
 point-in-time status `unverified_historical`; the database allows `verified` only
-for a `live_capture`, and a live capture only before 09:30. The real-time streamer
-was removed; live capture (stage 3D) needs a real-time feed again and is not built.
+for a `live_capture`, and a live capture only before 09:30. A live capture comes
+from the scheduled live job (see "Live capture (3D)" below), with receipts.
 
 ### Outcomes
 
@@ -291,6 +295,10 @@ python scripts/nq_journal.py catch-up                                       # ev
 python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02    # baseline forecasts (historical replay), once each
 python scripts/nq_journal.py forecast --snapshot-id S --annotation-id A --set-id X   # explicit evidence ids
 python scripts/nq_journal.py show-forecast --run-id R                       # one stored run: provenance, P1 fields, per target
+python scripts/nq_journal.py experiment-register --name hist_dev_v1 --start 2025-09-02 --end 2026-10-02
+python scripts/nq_journal.py experiment-score --name hist_dev_v1            # freeze cases, score, report
+python scripts/nq_journal.py live                                           # the pre-open live capture (scheduled)
+python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09  # its timing, database clock
 ```
 
 **The collector keeps the journal current.** After every full collection
@@ -660,9 +668,10 @@ then the stored run.
   a new run that names the one it supersedes, whose predictions and evidence never
   change. A failed or invalid attempt is kept under its own key, so it never blocks
   the official run.
-- **Automation:** catch-up (the collector's journal step) issues a historical-replay
-  run for every annotated snapshot after matching - research on reconstructed
-  evidence, never counted as a timely live forecast.
+- **Automation:** catch-up (the collector's journal step) issues historical-replay
+  runs of both algorithms (stage 4's arms A and B) for every annotated snapshot after
+  matching - research on reconstructed evidence, never counted as a timely live
+  forecast. Live runs come from the live job.
 - **Display:** `p1_record` fills fields 25-36 and 42-45 from one stored run, and
   refuses a run issued on other evidence than the annotation and set shown. The
   **Forecast** page (`/forecast`, `/forecast?run=<id>`) shows a run by its id with its
@@ -671,15 +680,109 @@ then the stored run.
   47-field record, and - only when asked - the realised outcome beside it (a view,
   not a score).
 
+### Live capture (3D)
+
+[forecaster/live_capture.py](../forecaster/live_capture.py), issue policy
+`nq_issue_live_v2`, migration 0016. `python scripts/nq_journal.py live`, scheduled
+before the open on trading days, does for today's session:
+
+1. a capture row (`journal.live_captures`); every step after it is an event stamped
+   by the database clock (`journal.live_capture_events`), so `live-report` shows the
+   end-to-end timing measured on the server - the measurement the guideline wants
+   before a production profile is chosen;
+2. restart: a session that already has a live snapshot reuses it (never a new one
+   from later bars) and carries on; after the open the database refuses any new
+   live snapshot (`built_at < rth_open_at`);
+3. one second after the cutoff it asks IB for the session's 1m bars from the
+   overnight start, every 2 seconds until the bar ending at the cutoff is among them,
+   at most 20 seconds after it - age-0 freshness, not the 5-minute allowance of a
+   historical snapshot; without it the capture is `stale` and nothing is frozen;
+4. it stores the day's bars through the collector's write path (the last minutes not
+   completed, so the regular collector settles the day later) and a receipt per bar
+   complete when received (`journal.bar_receipts`, database time);
+5. it freezes the live snapshot - the same snapshot version as the historical pool,
+   so its analogues come from the stored sessions - with data mode `live_capture`.
+   It is point-in-time `verified` only when every overnight bar it uses equals a
+   receipt received before the freeze, every earlier session it reads was stored
+   before the cutoff (`session_days.fetched_at`) and every event and coverage row was
+   recorded before the cutoff; otherwise it stays `unverified_historical`, the
+   reasons in its `cutoff.availability`;
+6. it annotates the snapshot, matches it (prior and analogue outcomes known as of the
+   cutoff) and issues both arms in mode `live`: the database stamps the issue time and
+   makes a run after 09:29:50 ET `late`; an issued run is acknowledged after commit,
+   and only an issued and acknowledged run counts as timely.
+
+It uses its own IB client id (`IB_CLIENT_ID + 1`), so the collector can run beside
+it; IB Gateway must be up and the session's NQ contract stored (the regular
+collector's chain). Schedule it in New York time - a systemd timer handles the US/UK
+daylight-saving mismatch that a fixed local cron time does not:
+
+```ini
+# ~/.config/systemd/user/nq-live.timer
+[Timer]
+OnCalendar=Mon..Fri 09:25 America/New_York
+Persistent=false
+[Install]
+WantedBy=timers.target
+# ~/.config/systemd/user/nq-live.service
+[Service]
+WorkingDirectory=/home/monkeyplay/trading_pipeline
+ExecStart=/home/monkeyplay/trading_pipeline/.venv/bin/python scripts/nq_journal.py live
+```
+
+Tested with a fake IB and clock - waiting for the cutoff, retries, the freshness
+budget, receipts, verification, the refused snapshot after the open, restart on a
+frozen snapshot, late issuance - not yet against IB on a trading day: unit coverage
+is not live operation (guideline 4E: a shadow period comes first).
+
+## Stage 4: registered experiments (guideline revision 2)
+
+[forecaster/experiments.py](../forecaster/experiments.py), migration 0015, the
+**Evaluation** page (`/evaluation`).
+
+- **Arms (4B):** A `nq_prior_p1_v1`, the earlier-session prior alone; B
+  `nq_baseline_p1_v1`, rules-only structure, the P1 matcher and the smoothed analogue
+  forecast. Both are issued from the same snapshot, annotation and analogue set (the
+  catch-up issues both). C (a restricted LLM) and D (synthesis) are not built.
+- **Manifest (4A):** `experiment-register` stores the manifest as a definition of kind
+  `experiment` before any score exists - session range, profile, every version, the
+  arms, the official-run rule (`first` issued run, `latest` at freezing, or
+  `first_timely` for live runs), outcome revisions, the primary target
+  (direction_15m, multiclass log loss) and companions, eligibility, the
+  zero-probability policy, calibration (none), the uncertainty method and the
+  breakdowns. A changed manifest needs a new name.
+- **Cases:** `experiment-score` freezes, per scheduled session and arm, the official
+  run and the outcome revision it is scored against (`journal.experiment_cases`,
+  once), then scores them and stores the result with its code revision
+  (`journal.experiment_results`) and writes `docs/reports/experiment_<name>.md` /
+  `.csv`.
+- **Scores (4D):** log loss (natural log) and the unhalved multiclass Brier sum,
+  computed in code; accuracy of the issued class, ambiguous predictions counted apart.
+  No floor or clipping: a realised class issued with probability 0 has infinite log
+  loss - counted and reported, the mean taken over the finite cases (the baseline's
+  prior can hold zero classes; a floored prior would be a new registered version). A
+  case counts for a target when its realised label is not null and the arm issued a
+  distribution; unlabelled cases are counted by reason. Arms are compared on the
+  sessions both cover: paired differences with a moving-block bootstrap interval
+  (blocks of 5 sessions, 2,000 resamples, fixed seed; none with fewer than two
+  blocks), by realised class, month and daily-ATR tercile, with reliability bins.
+- **Honesty (4C):** the historical sessions are development data - the structure
+  rules were calibrated and the label disagreements inspected on them - so a
+  historical experiment finds clear failures and a modest candidate; the decisive
+  test is prospective (live captures, `--purpose test`, `--official-run
+  first_timely`). Directional accuracy says nothing about profitability.
+
+```bash
+python scripts/nq_journal.py experiment-register --name hist_dev_v1 --start 2025-09-02 --end 2026-10-02
+python scripts/nq_journal.py experiment-score --name hist_dev_v1
+python scripts/nq_journal.py experiment-list
+```
+
 ## Not built yet
 
-- **Live capture (3D):** a scheduled pre-open job with receipt provenance for bars
-  and events, a bar-freshness policy and restart recovery. It needs a real-time
-  feed again; until then the live issue policy and the database deadline gate are
-  built and tested, but no live forecast can be issued.
-- **Stage 4:** registered experiment manifests, the official-run rule, log loss and
-  Brier scores, paired comparisons (arms A prior, B rules + matcher, C restricted
-  LLM), reliability.
+- **Shadow operation:** the live job scheduled and run on trading days, then a
+  prospective experiment (`--purpose test --official-run first_timely`) over sessions
+  after it starts.
 - **Optional restricted LLM (sequence item 6):** a new protocol owning only
   Overnight Structure and Premarket Pattern, with date-blinded requests; running
   any Claude protocol needs `ANTHROPIC_API_KEY`.

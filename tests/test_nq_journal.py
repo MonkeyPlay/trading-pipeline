@@ -546,6 +546,55 @@ def test_a_revised_outcome_is_a_new_run_and_the_issued_one_stays(market):
         (old["predictions"], old["evidence"], old["issued_at"])
 
 
+@needs_db
+def test_a_registered_experiment_is_frozen_scored_and_immutable(market, tmp_path):
+    """Stage 4: the manifest is registered before any score, cases freeze once, both arms are scored on the
+    sessions they share, results and the report are stored, and nothing can be rewritten."""
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    from forecaster import experiments as ex
+    from forecaster.forecast_service import forecast_all
+    from scripts.nq_journal import main
+    conn = market[0]
+    forecast_all(conn)
+    prior_runs = store.issued_runs(conn, "2026-06-01", DAY, defs.DEFAULT_PROFILE, "historical_replay",
+                                   fc.PRIOR_VERSION, defs.LABEL_VERSION)
+    assert prior_runs and all(r["algorithm_version"] == fc.PRIOR_VERSION for r in prior_runs)
+
+    manifest = ex.experiment_manifest("t_exp", "2026-06-01", DAY)
+    assert ex.register_experiment(conn, manifest) and not ex.register_experiment(conn, manifest)
+    with pytest.raises(store.VersionConflict):                                   # a manifest never changes
+        ex.register_experiment(conn, ex.experiment_manifest("t_exp", "2026-06-02", DAY))
+    results = ex.score_experiment(conn, "t_exp")
+    cases = store.experiment_cases(conn, "t_exp")
+    sessions = cal.sessions_between("2026-06-01", DAY)
+    assert len(cases) == 2 * len(sessions) and {c["arm"] for c in cases} == {"A", "B"}
+    assert all(c["status"] == "case" and c["outcome_revision"] >= 1 for c in cases)
+    assert ex.freeze_cases(conn, "t_exp") == (len(cases), False)                 # frozen once
+
+    first = next(c for c in cases if c["arm"] == "A" and c["session_date"] == sessions[1].session_date.isoformat())
+    run = store.get_forecast_run(conn, first["run_id"])
+    aset = store.get_analogue_set(conn, run["analogue_set_id"])
+    prior = aset["outcome_summary"]["targets"]["direction_15m"]["prior"]
+    assert {c: float(Fraction(v)) for c, v in run["predictions"]["direction_15m"]["distribution"].items()} == \
+        pytest.approx({c: float(v) for c, v in prior.items()}, abs=1e-6)          # arm A is the prior
+
+    paired = results["primary"]["paired"]["B-A"]
+    assert results["primary"]["target"] == "direction_15m" and paired["common"] > 0
+    assert set(results["targets"]) == {t for _, t in fc.FORECAST_TARGETS}
+    result_id = ex.store_results(conn, "t_exp", results)
+    path = ex.write_report(manifest, results, str(tmp_path), result_id)
+    report = open(path).read()
+    assert "# Experiment t_exp" in report and "development data" in report and "Profitability" in report
+    assert os.path.exists(tmp_path / "experiment_t_exp.csv")
+    stored = store.experiment_results(conn, "t_exp")[0]
+    assert stored["result_id"] == result_id and stored["results"]["manifest_hash"] == results["manifest_hash"]
+    assert main(["--db", DSN, "experiment-list"]) == 0
+    for sql in ("DELETE FROM journal.experiment_cases", "UPDATE journal.experiment_results SET code_revision = 'x'"):
+        with pytest.raises(psycopg.Error, match="append-only"):
+            conn.execute(sql)
+
+
 class _Usage:
     def to_json(self):
         return '{"input_tokens": 1000, "output_tokens": 500}'
@@ -845,3 +894,108 @@ def test_a_live_forecast_is_issued_only_by_the_database_clock(market):
     # a live run on a historical reconstruction is refused by the database itself
     with pytest.raises(psycopg.Error, match="live_capture"):
         issue(source["snapshot_id"], DAY)
+
+
+class _Clock:
+    def __init__(self, t):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += timedelta(seconds=seconds)
+
+
+class _LiveIB:
+    """IB in the test: the stored bars of the session that started before the request (the current minute in
+    progress, as IB serves it); ``drop`` leaves the bar ending at the cutoff out, as if it had not arrived."""
+    def __init__(self, conn, day, drop=False):
+        from database.queries import get_day_bars
+        from tests.synthetic import NQ_CID
+        self.rows = [dict(zip(r.keys(), r)) for r in get_day_bars(conn, NQ_CID, day)]
+        self.cutoff_bar = (cal.ny_instant(date.fromisoformat(day), time(9, 28))).strftime("%Y-%m-%d %H:%M:%S")
+        self.drop, self.calls = drop, 0
+
+    def fetch_historical_bars(self, contract, end, duration, what_to_show=None):
+        self.calls += 1
+        out = []
+        for r in self.rows:
+            stamp = str(r["timestamp_utc"])[:19]
+            if datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC) >= end:
+                continue
+            if self.drop and stamp == self.cutoff_bar:
+                continue
+            out.append({"timestamp_utc": stamp, "trading_day": str(r["trading_day"]), "open": r["open"],
+                        "high": r["high"], "low": r["low"], "close": r["close"], "volume": r["volume"],
+                        "wap": r.get("wap"), "bar_count": r.get("bar_count"), "session_scope": r["session_scope"]})
+        return out
+
+
+@needs_db
+def test_a_restarted_live_capture_reuses_its_snapshot_and_a_passed_deadline_is_late(market):
+    """Restart recovery (3D): the live snapshot frozen for DAY by the previous test is reused, never rebuilt; the
+    capture annotates, matches and issues both arms live - after the deadline, so the database makes them late."""
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    from forecaster import live_capture as live
+    conn = market[0]
+    clock = _Clock(cal.ny_instant(date.fromisoformat(DAY), time(9, 29, 5)))
+    ib = _LiveIB(conn, DAY)
+    result = live.capture(conn, ib, DAY, clock=clock, sleep=clock.sleep)
+    events = [e["event"] for e in store.capture_events(conn, result["capture_id"])]
+    assert ib.calls == 0 and events[:4] == ["snapshot_reused", "annotated", "matched", "forecast"]
+    assert [(r["algorithm"], r["status"], r["timely"]) for r in result["runs"]] == \
+        [(fc.BASELINE_VERSION, "late", False), (fc.PRIOR_VERSION, "late", False)]
+    assert result["status"] == "not timely"
+    snap = store.get_snapshot(conn, result["snapshot_id"])
+    assert snap["data_mode"] == "live_capture"
+    capture = store.live_captures(conn, DAY, DAY)[-1]
+    assert any("forecast" in line and "late" in line for line in live.timing(conn, capture))
+
+
+@needs_db
+def test_a_live_capture_keeps_receipts_and_verifies_what_was_known(market):
+    """The fresh path (3D) on PREV: bars requested after the cutoff, stored with a receipt each; the snapshot built
+    from them is verified only when every input was known; the database refuses to store a live snapshot after the
+    open; without the bar ending at the cutoff the capture is stale. PREV's bars are restored afterwards."""
+    from database import journal_store as store
+    from database.queries import get_day_bars, save_trading_day
+    from forecaster import live_capture as live
+    from tests.synthetic import NQ_CID
+    conn = market[0]
+    original = [dict(zip(r.keys(), r)) for r in get_day_bars(conn, NQ_CID, PREV)]
+    try:
+        clock = _Clock(cal.ny_instant(date.fromisoformat(PREV), time(9, 28, 50)))
+        result = live.capture(conn, _LiveIB(conn, PREV), PREV, clock=clock, sleep=clock.sleep)
+        events = [e["event"] for e in store.capture_events(conn, result["capture_id"])]
+        assert events == ["bars_requested", "bars_received", "failed"] and result["status"] == "failed"
+        assert "CheckViolation" in result["reason"]             # built now, after PREV's open: refused
+        receipts = store.capture_receipts(conn, result["capture_id"])
+        cutoff_bar = cal.ny_instant(date.fromisoformat(PREV), time(9, 28)).strftime("%Y-%m-%d %H:%M:%S")
+        in_progress = cal.ny_instant(date.fromisoformat(PREV), time(9, 29)).strftime("%Y-%m-%d %H:%M:%S")
+        assert cutoff_bar in receipts and in_progress not in receipts   # only bars complete when received
+
+        snap = build_snapshot(conn, PREV, live_capture_id=result["capture_id"])
+        available = snap.payload["cutoff"]["availability"]
+        assert snap.data_mode == "live_capture" and snap.payload["cutoff"]["last_received_bar"]["bar_start_at"] == \
+            cutoff_bar.replace(" ", "T") + "Z"
+        assert available["overnight_bars"]["received"] == available["overnight_bars"]["used"] > 0
+        assert not available["verified"] and snap.pit_availability_status == "unverified_historical"
+        assert available["sessions"]["stored_after_cutoff_or_unknown"]   # this test stored them after the cutoff
+        with conn:                                                       # as if collected before the cutoff
+            conn.execute("UPDATE session_days SET fetched_at = '2026-01-01 00:00:00+00';")
+            conn.execute("UPDATE economic_events SET recorded_at = '2026-01-01 00:00:00+00';")
+            conn.execute("UPDATE economic_event_coverage SET recorded_at = '2026-01-01 00:00:00+00';")
+        snap = build_snapshot(conn, PREV, live_capture_id=result["capture_id"])
+        assert snap.pit_availability_status == "verified" and snap.payload["cutoff"]["availability"]["verified"]
+
+        stale_clock = _Clock(cal.ny_instant(date.fromisoformat(PREV), time(9, 28, 50)))
+        stale = live.capture(conn, _LiveIB(conn, PREV, drop=True), PREV, clock=stale_clock, sleep=stale_clock.sleep)
+        stale_events = [e["event"] for e in store.capture_events(conn, stale["capture_id"])]
+        assert stale["status"] == "stale" and stale_events[-1] == "stale" and "bars_received" not in stale_events
+        for sql in ("DELETE FROM journal.bar_receipts", "UPDATE journal.live_capture_events SET event = 'failed'"):
+            with pytest.raises(psycopg.Error, match="append-only"):
+                conn.execute(sql)
+    finally:
+        save_trading_day(conn, NQ_CID, PREV, original)

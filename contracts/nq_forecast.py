@@ -14,6 +14,9 @@ definition stops the run.
   BASELINE              nq_baseline_p1_v1: per P1 target the matcher's smoothed
                         analogue distribution, recomputed exactly from the frozen
                         analogue outcome revisions and prior manifest; no LLM
+                        (stage 4 arm B)
+  PRIOR                 nq_prior_p1_v1: the earlier-session prior alone - the same
+                        prior manifest, no structure, no analogues (stage 4 arm A)
   ISSUE_POLICIES        historical replay (research, never timely live) and live
                         (a live capture issued by 09:29:50 ET, checked by the
                         database clock)
@@ -34,8 +37,13 @@ from contracts import nq_prompt_v2 as defs
 
 FORECAST_SCHEMA_VERSION = "nq_forecast_schema_v1"
 BASELINE_VERSION = "nq_baseline_p1_v1"
-ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v1"}
+PRIOR_VERSION = "nq_prior_p1_v1"
+# nq_issue_live_v1 (registered 2026-10-04) never issued a run; v2 adds the capture rules of 3D.
+ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v2"}
 LIVE_DEADLINE_ET = time(9, 29, 50)
+LIVE_FIRST_REQUEST_S = 1          # the first bar request this many seconds after the cutoff
+LIVE_RETRY_S = 2                  # then every this many seconds
+LIVE_FRESHNESS_BUDGET_S = 20      # until the bar ending at the cutoff arrives, at most this long after it
 
 LIFECYCLE_STATUSES = ("issued", "unavailable", "late", "failed", "invalid")
 PREDICTION_STATUSES = ("predicted", "ambiguous_prediction", "unavailable")
@@ -186,6 +194,25 @@ BASELINE = {
     "first_level_precedence": list(defs.FIRST_LEVEL_PRECEDENCE),
 }
 
+PRIOR = {
+    "name": "earlier-session prior (guideline revision 2, 4B arm A): no structure annotation, no analogues",
+    "inputs": "the same explicit evidence as the baseline; only the analogue set's prior manifest is used",
+    "targets": [t for _, t in FORECAST_TARGETS],
+    "distribution": "per target over its label vocabulary: the class frequencies of the earlier sessions with a "
+                    "label (the analogue set's prior manifest, known as of the target), exact fractions; they must "
+                    "equal the set's stored prior",
+    "conditional": BASELINE["conditional"],
+    "status": "prior_only when an earlier session has a label, none (unavailable) otherwise",
+    "class": BASELINE["class"],
+    "eligibility": BASELINE["eligibility"],
+    "first_level": BASELINE["first_level"],
+    "probabilities": BASELINE["probabilities"],
+    "reference_targets": BASELINE["reference_targets"],
+    "confidence": BASELINE["confidence"],
+    "first_level_precedence": list(defs.FIRST_LEVEL_PRECEDENCE),
+}
+ALGORITHMS = {BASELINE_VERSION: BASELINE, PRIOR_VERSION: PRIOR}
+
 ISSUE_POLICY_DEFINITIONS = {
     "historical_replay": {
         "mode": "historical_replay",
@@ -199,6 +226,23 @@ ISSUE_POLICY_DEFINITIONS = {
         "mode": "live",
         "snapshot": "a live_capture snapshot only",
         "deadline_et": LIVE_DEADLINE_ET.strftime("%H:%M:%S"),
+        "capture": f"a scheduled job (forecaster/live_capture.py) requests the session's 1m bars from the overnight "
+                   f"start to the cutoff from IB {LIVE_FIRST_REQUEST_S} s after the cutoff and every {LIVE_RETRY_S} s "
+                   f"until the bar ending at the cutoff is among them, at most {LIVE_FRESHNESS_BUDGET_S} s after the "
+                   f"cutoff; every bar is stored as received with the database time (journal.bar_receipts)",
+        "freshness": "the bar ending at the cutoff must have been received (age 0 - not the 5-minute allowance of "
+                     "a historical snapshot); otherwise no live snapshot is frozen, never from older or "
+                     "later-arriving bars",
+        "verification": "the live snapshot is point-in-time verified when every overnight bar it uses equals a "
+                        "receipt of the capture received before it was frozen, every earlier session it reads was "
+                        "stored before the cutoff (session_days.fetched_at) and every event and coverage row it "
+                        "holds was recorded before the cutoff; otherwise it is a live capture marked "
+                        "unverified_historical, with the reasons in its cutoff section",
+        "restart": "a capture of a session that already has a live snapshot reuses it and carries on "
+                   "(annotation, analogues, forecasts are idempotent); after the open no live snapshot can be "
+                   "frozen (the database refuses)",
+        "arms": "both registered algorithms are issued from the same evidence, the baseline first",
+        "timing": "every capture step is an event stamped by the database clock (journal.live_capture_events)",
         "issued": "only when the database server clock at insertion is at or before the deadline; a later "
                   "insertion is recorded as late, with no issued_at - a client timestamp cannot change either",
         "acknowledgement": "an 'acknowledged' event inserted after the commit, at server time; a timely live "
@@ -226,9 +270,13 @@ def baseline_record() -> Dict[str, Any]:
     return defs._record(BASELINE_VERSION, "forecast_algorithm", BASELINE)
 
 
+def algorithm_records() -> List[Dict[str, Any]]:
+    return [defs._record(v, "forecast_algorithm", d) for v, d in ALGORITHMS.items()]
+
+
 def issue_policy_records() -> List[Dict[str, Any]]:
     return [defs._record(ISSUE_POLICIES[mode], "issue_policy", d) for mode, d in ISSUE_POLICY_DEFINITIONS.items()]
 
 
 def all_records() -> List[Dict[str, Any]]:
-    return [forecast_schema_record(), baseline_record()] + issue_policy_records()
+    return [forecast_schema_record()] + algorithm_records() + issue_policy_records()

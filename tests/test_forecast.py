@@ -52,7 +52,10 @@ def test_the_contract_is_p1s_47_properties_with_explicit_units():
     assert "never" in by_name["Predicted Opening Bias"].missing_policy
     kinds = {r["version"]: r["kind"] for r in fc.all_records()}
     assert kinds == {fc.FORECAST_SCHEMA_VERSION: "forecast_schema", fc.BASELINE_VERSION: "forecast_algorithm",
-                     "nq_issue_replay_v1": "issue_policy", "nq_issue_live_v1": "issue_policy"}
+                     fc.PRIOR_VERSION: "forecast_algorithm", "nq_issue_replay_v1": "issue_policy",
+                     "nq_issue_live_v2": "issue_policy"}
+    live = fc.ISSUE_POLICY_DEFINITIONS["live"]
+    assert live["deadline_et"] == "09:29:50" and "age 0" in live["freshness"] and "verified" in live["verification"]
 
 
 def test_the_distribution_is_the_exact_smoothed_baseline():
@@ -132,6 +135,23 @@ def test_validation_holds_the_baseline_to_the_matchers_summary():
     broken(lambda p: p["direction_15m"].update(predicted_label="sideways"))
     broken(lambda p: p["direction_15m"].update(eligible=5))                         # denominators differ
     broken(lambda p: p.pop("first_move_5m"))
+
+
+def test_arm_a_is_the_prior_alone_and_must_equal_the_sets_prior():
+    members = [labels(direction_15m="bullish")] * 3
+    prior = [labels(direction_15m=d) for d in ["bearish"] * 6 + ["bullish"] * 2 + ["neutral_band"] * 2]
+    aset = aset_for(members, prior)
+    a = fb.baseline_forecast(evidence(members, prior), fc.PRIOR_VERSION)
+    d = a["predictions"]["direction_15m"]
+    assert (d["estimation_status"], d["eligible"], d["predicted_label"]) == ("prior_only", 0, "bearish")
+    assert d["distribution"] == {"bullish": "1/5", "bearish": "3/5", "neutral_band": "1/5"}   # the analogues ignored
+    assert validate_forecast(a, aset, fc.PRIOR_VERSION) is a
+    b = fb.baseline_forecast(evidence(members, prior))                     # arm B: (3 + 5 x 1/5) / (3 + 5)
+    assert b["predictions"]["direction_15m"]["distribution"]["bullish"] == "1/2"
+    with pytest.raises(ForecastInvalid):
+        validate_forecast(a, aset)                                         # arm A is not the smoothed baseline
+    with pytest.raises(ValueError):
+        fb.baseline_forecast(evidence(members, prior), "nq_magic_v1")
 
 
 def snapshot(**over):

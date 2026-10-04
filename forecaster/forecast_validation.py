@@ -86,9 +86,12 @@ def _close(stored: Optional[str], value: Fraction) -> bool:
         <= Decimal("0.0000005")
 
 
-def validate_forecast(forecast: Dict[str, Any], analogue_set: Dict[str, Any]) -> Dict[str, Any]:
-    """Returns the forecast unchanged, or raises ForecastInvalid with the first problem."""
+def validate_forecast(forecast: Dict[str, Any], analogue_set: Dict[str, Any],
+                      algorithm: str = fc.BASELINE_VERSION) -> Dict[str, Any]:
+    """Returns the forecast unchanged, or raises ForecastInvalid with the first problem. The baseline must equal the
+    set's smoothed summary and denominators, the prior alone the set's prior."""
     summary = analogue_set["outcome_summary"]["targets"]
+    prior_only = algorithm == fc.PRIOR_VERSION
     predictions = forecast["predictions"]
     if set(predictions) != {t for _, t in fc.FORECAST_TARGETS}:
         raise ForecastInvalid(f"targets {sorted(predictions)} are not the forecast schema's")
@@ -101,8 +104,9 @@ def validate_forecast(forecast: Dict[str, Any], analogue_set: Dict[str, Any]) ->
         if p["predicted_label"] is not None and p["predicted_label"] not in vocab:
             raise ForecastInvalid(f"{target}: {p['predicted_label']!r} is not in the vocabulary")
         s = summary[target]
-        if (p["eligible"], p["without_label"], p["prior_sessions"]) != (s["eligible"], s["without_label"],
-                                                                         s["prior_sessions"]):
+        expected = ((0, 0, s["prior_sessions"]) if prior_only
+                    else (s["eligible"], s["without_label"], s["prior_sessions"]))
+        if (p["eligible"], p["without_label"], p["prior_sessions"]) != expected:
             raise ForecastInvalid(f"{target}: denominators differ from the analogue set's summary")
         if p["distribution"] is None:
             continue
@@ -111,6 +115,8 @@ def validate_forecast(forecast: Dict[str, Any], analogue_set: Dict[str, Any]) ->
             raise ForecastInvalid(f"{target}: the distribution is not a probability over the vocabulary")
         if p["status"] == "predicted" and dist[p["predicted_label"]] != max(dist.values()):
             raise ForecastInvalid(f"{target}: {p['predicted_label']} is not the most probable class")
-        if not all(_close((s.get("smoothed") or {}).get(c), dist[c]) for c in vocab):
-            raise ForecastInvalid(f"{target}: the distribution differs from the analogue set's smoothed summary")
+        stored = s.get("prior") if prior_only else s.get("smoothed")
+        if not all(_close((stored or {}).get(c), dist[c]) for c in vocab):
+            raise ForecastInvalid(f"{target}: the distribution differs from the analogue set's "
+                                  f"{'prior' if prior_only else 'smoothed summary'}")
     return forecast

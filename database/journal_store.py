@@ -64,6 +64,23 @@ def register_version(conn: Database, rec: Dict[str, Any]) -> bool:
     return True
 
 
+def get_version(conn: Database, version: str) -> Optional[Dict[str, Any]]:
+    """One registered definition ({'version', 'kind', 'definition', 'definition_hash', 'registered_at'})."""
+    row = conn.execute("SELECT * FROM journal.definition_versions WHERE version = %s;", (version,)).fetchone()
+    if row is None:
+        return None
+    d = dict(zip(row.keys(), row))
+    d["definition"] = _load(d["definition"])
+    return d
+
+
+def list_versions(conn: Database, kind: str) -> List[Dict[str, Any]]:
+    """The registered definitions of one kind, oldest first."""
+    rows = conn.execute("SELECT * FROM journal.definition_versions WHERE kind = %s ORDER BY registered_at;",
+                        (kind,)).fetchall()
+    return [dict(zip(r.keys(), r), definition=_load(r["definition"])) for r in rows]
+
+
 # --------------------------------------------------------------------------
 # Snapshots
 # --------------------------------------------------------------------------
@@ -625,3 +642,149 @@ def current_forecast_run(conn: Database, session_date: str, profile: str, mode: 
         "AND idempotency_key IS DISTINCT FROM %s ORDER BY created_at DESC LIMIT 1;",
         (session_date, profile, mode, algorithm_version, exclude_key)).fetchone()
     return None if row is None else _run(row)
+
+
+# --------------------------------------------------------------------------
+# Experiments (migration 0015)
+# --------------------------------------------------------------------------
+
+_CASE_COLUMNS = ("session_date", "arm", "run_id", "snapshot_id", "outcome_revision", "status", "detail")
+
+
+def issued_runs(conn: Database, start: str, end: str, profile: str, mode: str, algorithm_version: str,
+                label_version: str) -> List[Dict[str, Any]]:
+    """The issued runs of sessions in [start, end] under one profile, mode, algorithm and label version, with their
+    events - the candidates an experiment's official-run rule chooses from - oldest issue first."""
+    rows = conn.execute(
+        "SELECT * FROM journal.forecast_runs WHERE session_date BETWEEN %s AND %s AND profile = %s AND mode = %s "
+        "AND algorithm_version = %s AND label_version = %s AND lifecycle_status = 'issued' "
+        "ORDER BY session_date, issued_at, run_id;",
+        (start, end, profile, mode, algorithm_version, label_version)).fetchall()
+    runs = [_run(r) for r in rows]
+    events: Dict[str, List[Dict[str, Any]]] = {}
+    if runs:
+        for e in conn.execute("SELECT run_id, event, at, detail FROM journal.forecast_run_events "
+                              "WHERE run_id = ANY(%s::uuid[]) ORDER BY event_id;",
+                              ([r["run_id"] for r in runs],)).fetchall():
+            events.setdefault(str(e["run_id"]), []).append(dict(zip(e.keys(), e)))
+    for r in runs:
+        r["events"] = events.get(r["run_id"], [])
+    return runs
+
+
+def experiment_cases(conn: Database, experiment: str) -> List[Dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM journal.experiment_cases WHERE experiment = %s ORDER BY session_date, arm;",
+                        (experiment,)).fetchall()
+    return [dict(zip(r.keys(), r), session_date=str(r["session_date"]),
+                 run_id=None if r["run_id"] is None else str(r["run_id"]),
+                 snapshot_id=None if r["snapshot_id"] is None else str(r["snapshot_id"])) for r in rows]
+
+
+def freeze_experiment_cases(conn: Database, experiment: str, cases: List[Dict[str, Any]]) -> Tuple[int, bool]:
+    """Stores an experiment's cases once: ``(count, created)``; cases already frozen are kept as they are."""
+    with conn:
+        _lock(conn, "journal.experiment_cases", experiment)
+        n = conn.execute("SELECT count(*) FROM journal.experiment_cases WHERE experiment = %s;",
+                         (experiment,)).fetchone()[0]
+        if n:
+            return int(n), False
+        conn.executemany(
+            f"INSERT INTO journal.experiment_cases (experiment, {', '.join(_CASE_COLUMNS)}) "
+            f"VALUES (%s, {', '.join(['%s'] * len(_CASE_COLUMNS))});",
+            [(experiment, *[c[k] for k in _CASE_COLUMNS]) for c in cases])
+    return len(cases), True
+
+
+def save_experiment_result(conn: Database, experiment: str, results: Dict[str, Any], code_revision: str) -> str:
+    result_id = str(uuid.uuid4())
+    body = canonical_json(results)
+    with conn:
+        conn.execute("INSERT INTO journal.experiment_results (result_id, experiment, results, results_hash, "
+                     "code_revision) VALUES (%s, %s, %s, %s, %s);",
+                     (result_id, experiment, body, hashlib.sha256(body.encode()).hexdigest(), code_revision))
+    return result_id
+
+
+def experiment_results(conn: Database, experiment: str) -> List[Dict[str, Any]]:
+    """Every scoring of an experiment, newest first."""
+    rows = conn.execute("SELECT * FROM journal.experiment_results WHERE experiment = %s ORDER BY computed_at DESC;",
+                        (experiment,)).fetchall()
+    return [dict(zip(r.keys(), r), result_id=str(r["result_id"]), results=_load(r["results"])) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# Live capture (migration 0016)
+# --------------------------------------------------------------------------
+
+def start_live_capture(conn: Database, session_date: str, profile: str, contract_id: Optional[int],
+                       code_revision: str) -> str:
+    capture_id = str(uuid.uuid4())
+    with conn:
+        conn.execute("INSERT INTO journal.live_captures (capture_id, session_date, profile, contract_id, code_revision) "
+                     "VALUES (%s, %s, %s, %s, %s);", (capture_id, session_date, profile, contract_id, code_revision))
+    return capture_id
+
+
+def add_capture_event(conn: Database, capture_id: str, event: str, detail: Optional[Dict[str, Any]] = None) -> str:
+    """Appends a capture step; returns its database time."""
+    with conn:
+        row = conn.execute("INSERT INTO journal.live_capture_events (capture_id, event, detail) VALUES (%s, %s, %s) "
+                           "RETURNING at;", (capture_id, event, None if detail is None else canonical_json(detail))
+                           ).fetchone()
+    return row[0]
+
+
+def save_bar_receipts(conn: Database, capture_id: str, contract_id: int, bars: List[tuple],
+                      interval: str = "1m", price_type: str = "TRADES") -> int:
+    """Records the bars a capture received ((start, open, high, low, close, volume) each), stamped by the database."""
+    with conn:
+        conn.executemany(
+            "INSERT INTO journal.bar_receipts (capture_id, contract_id, interval, price_type, bar_start_at, open, high, "
+            "low, close, volume) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            [(capture_id, contract_id, interval, price_type, *b) for b in bars])
+    return len(bars)
+
+
+def capture_receipts(conn: Database, capture_id: str) -> Dict[str, Dict[str, Any]]:
+    """A capture's receipts by bar start ('YYYY-MM-DD HH:MM:SS' UTC), the last receipt of a bar winning."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in conn.execute("SELECT * FROM journal.bar_receipts WHERE capture_id = %s ORDER BY receipt_id;",
+                          (capture_id,)).fetchall():
+        d = dict(zip(r.keys(), r))
+        out[str(d["bar_start_at"])[:19]] = d
+    return out
+
+
+def capture_events(conn: Database, capture_id: str) -> List[Dict[str, Any]]:
+    return [dict(zip(r.keys(), r), detail=_load(r["detail"])) for r in conn.execute(
+        "SELECT event, at, detail FROM journal.live_capture_events WHERE capture_id = %s ORDER BY event_id;",
+        (capture_id,)).fetchall()]
+
+
+def live_captures(conn: Database, start: str, end: str) -> List[Dict[str, Any]]:
+    """Captures of sessions in [start, end], oldest first, each with its events."""
+    rows = conn.execute("SELECT * FROM journal.live_captures WHERE session_date BETWEEN %s AND %s "
+                        "ORDER BY started_at;", (start, end)).fetchall()
+    return [dict(zip(r.keys(), r), capture_id=str(r["capture_id"]), session_date=str(r["session_date"]),
+                 events=capture_events(conn, str(r["capture_id"]))) for r in rows]
+
+
+def live_snapshot(conn: Database, session_date: str, snapshot_version: str) -> Optional[Dict[str, Any]]:
+    """The session's live-capture snapshot of a version, if one was frozen (the oldest: a live snapshot is frozen
+    once)."""
+    row = conn.execute("SELECT * FROM journal.snapshots WHERE session_date = %s AND snapshot_version = %s "
+                       "AND data_mode = 'live_capture' ORDER BY built_at LIMIT 1;",
+                       (session_date, snapshot_version)).fetchone()
+    return None if row is None else _snapshot_dict(row)
+
+
+def fetched_at(conn: Database, days: List[tuple]) -> Dict[tuple, Optional[Any]]:
+    """When each (contract_id, trading_day) was last stored by the collector (session_days.fetched_at)."""
+    out: Dict[tuple, Optional[Any]] = {d: None for d in days}
+    if days:
+        for r in conn.execute("SELECT contract_id, trading_day, fetched_at FROM session_days WHERE interval = '1m' "
+                              "AND price_type = 'TRADES' AND (contract_id, trading_day) IN "
+                              "(SELECT * FROM unnest(%s::bigint[], %s::date[]));",
+                              ([int(c) for c, _ in days], [str(d) for _, d in days])).fetchall():
+            out[(int(r[0]), str(r[1]))] = r[2]
+    return out

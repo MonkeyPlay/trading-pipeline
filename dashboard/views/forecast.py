@@ -64,10 +64,11 @@ class ForecastPage:
                 ui.label("No forecast runs yet. They are issued by catch-up (the collector's journal step), or: "
                          "python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02").style(_MUTED)
                 return
-            ui.label(f"The deterministic baseline ({fc.BASELINE_VERSION}): per P1 target the smoothed distribution "
-                     f"of the selected analogues and the earlier sessions, from the run's frozen evidence. A "
-                     f"historical replay is research on reconstructed evidence, never a timely live forecast. The "
-                     f"realised outcome stays hidden until you show it.").classes("text-sm").style(_MUTED)
+            ui.label(f"Deterministic forecasts from the run's frozen evidence: the baseline ({fc.BASELINE_VERSION}, "
+                     f"stage 4 arm B) smooths the selected analogues with the earlier sessions; the prior "
+                     f"({fc.PRIOR_VERSION}, arm A) is the earlier sessions alone. A historical replay is research on "
+                     f"reconstructed evidence, never a timely live forecast. The realised outcome stays hidden "
+                     f"until you show it.").classes("text-sm").style(_MUTED)
             first = self.requested["session_date"] if self.requested else self.days[0]
             with ui.row().classes("w-full items-center gap-4"):
                 self.day_select = ui.select(self.days, value=first, label="Session", with_input=True,
@@ -87,7 +88,9 @@ class ForecastPage:
         self.pick_day(first, self.requested["run_id"] if self.requested else None)
 
     def _run_label(self, r: Dict[str, Any]) -> str:
-        return (f"{r['run_id'][:8]} · {r['lifecycle_status']} · {r['mode'].replace('_', ' ')} · "
+        arm = {fc.PRIOR_VERSION: "prior (arm A)", fc.BASELINE_VERSION: "baseline (arm B)"}.get(
+            r["algorithm_version"], r["algorithm_version"])
+        return (f"{r['run_id'][:8]} · {arm} · {r['lifecycle_status']} · {r['mode'].replace('_', ' ')} · "
                 f"{str(r['created_at'])[:16]} UTC")
 
     def pick_day(self, day: Optional[str], run_id: Optional[str] = None) -> None:

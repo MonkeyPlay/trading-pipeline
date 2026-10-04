@@ -37,12 +37,13 @@ def _price(value) -> str:
     return f"{float(value):.2f}"
 
 
-def _basis(target: str, p: Dict[str, Any]) -> str:
-    source = {"analogues": f"{p['eligible']} analogue label(s) ({p['without_label']} without)",
-              "prior_only": f"no analogue label ({p['without_label']} without): the prior only",
-              "none": "no estimate"}[p["estimation_status"]]
+def _basis(target: str, p: Dict[str, Any], algorithm: str) -> str:
+    source = ("the earlier-session prior alone" if algorithm == fc.PRIOR_VERSION else
+              {"analogues": f"{p['eligible']} analogue label(s) ({p['without_label']} without)",
+               "prior_only": f"no analogue label ({p['without_label']} without): the prior only",
+               "none": "no estimate"}[p["estimation_status"]])
     share = f"; p = {percent(p['distribution'][p['predicted_label']])}" if p["status"] == "predicted" else ""
-    return (f"{fc.BASELINE_VERSION}: {source}, prior {p['prior_sessions']} session(s) "
+    return (f"{algorithm}: {source}, prior {p['prior_sessions']} session(s) "
             f"({p['prior_without_label']} without a label){share}")
 
 
@@ -57,7 +58,8 @@ def forecast_rows(run: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
     for name, target in fc.FORECAST_TARGETS:
         p = preds.get(target) or missing
         if p["status"] == "predicted":
-            out[name] = (defs.display(target, p["predicted_label"], "predicted"), _basis(target, p))
+            out[name] = (defs.display(target, p["predicted_label"], "predicted"),
+                         _basis(target, p, run["algorithm_version"]))
         else:
             out[name] = (UNAVAILABLE, f"{p['status'].replace('_', ' ')}: {p['reason']}")
     fifteen = preds.get(fc.PROBABILITY_TARGET) or missing

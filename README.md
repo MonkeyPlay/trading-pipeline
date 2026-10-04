@@ -123,6 +123,10 @@ Pages:
 - **Analogues** (`/analogues`, [dashboard/views/analogues.py](dashboard/views/analogues.py)) — a
   session's structural analogues side by side (outcomes hidden until asked for); see
   [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
+- **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
+  registered experiments (guideline stage 4): each manifest, its stored scorings (paired arm
+  differences with intervals, every target, where the differences sit) and its frozen cases,
+  each linked to its forecast run.
 - **Forecast** (`/forecast`, `/forecast?run=<id>`, [dashboard/views/forecast.py](dashboard/views/forecast.py))
   — one stored baseline forecast run, by its id: provenance, the chart drawn from the snapshot's
   frozen bars, per-target distributions with their denominators, P1's 47 fields, and the realised
@@ -227,12 +231,15 @@ invoked by absolute path from anywhere without a `cd` first.
 Those cron times are in the machine's local timezone — 09:15 ET is 13:15 UTC (14:15 UTC
 during EST), so adjust if the box is not on New York time.
 
-**There is no live capture.** The real-time streamer and its `bar_receipts` were removed
-(commit a428bab, migration 0008), so every journal snapshot is a historical reconstruction
-and every forecast a historical replay - research on evidence read after the fact, never a
-timely live forecast. The live issue policy and the database's 09:29:50 ET deadline gate
-exist and are tested; a scheduled pre-open capture job with receipt provenance (guideline
-stage 3D) needs a real-time feed again and is not built.
+**Live capture is a separate, scheduled job.** The old real-time streamer was removed
+(commit a428bab, migration 0008). Its replacement, `python scripts/nq_journal.py live`
+(guideline stage 3D, [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#live-capture-3d)), runs
+once before the open: right after the 09:29 cutoff it fetches the session's 1m bars from IB
+(its own client id, `IB_CLIENT_ID + 1`), records a receipt per bar with the database time,
+freezes a live snapshot and issues the forecasts, which the database marks late after
+09:29:50 ET. Schedule it in New York time (a systemd timer example is in the docs). It is
+tested against a fake IB, not yet on a trading day; until it runs, every journal snapshot
+is a historical reconstruction and every forecast a historical replay.
 
 It collects every symbol in `SYMBOLS`, and hands the whole list to the collector in one
 process so its rate-limit pacing stays accurate.
@@ -365,12 +372,15 @@ name contains `test`; they reset it).
 | Path | What lives there |
 |---|---|
 | [collector/](collector/) | IB API client, coverage planner, request pacing, contract rolls |
-| [database/](database/) | Connection, queries, migrations, backfill/repair tools, economic calendar loader |
-| [features/](features/) | Trading calendar, session/timezone classification, VWAP and the chart's reference levels |
-| [dashboard/](dashboard/) | NiceGUI app, the Session Explorer, and the Lightweight Charts component |
-| [scripts/](scripts/) | Daily runner, DB backup |
-| [tests/](tests/) | Calendar, collector, data-store, event-calendar and dashboard tests |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md) |
+| [database/](database/) | Connection, queries, migrations, the journal store, backfill/repair tools, economic calendar and earnings loaders |
+| [features/](features/) | Trading calendar, session/timezone classification, VWAP, the chart's reference levels, the NQ evidence snapshot |
+| [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract |
+| [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture |
+| [matching/](matching/) | The P1 structural analogue matcher |
+| [dashboard/](dashboard/) | NiceGUI app: Session Explorer, Analogues, Forecast, Evaluation; the Lightweight Charts component |
+| [scripts/](scripts/) | The journal CLI, daily runner, DB backup, report generators |
+| [tests/](tests/) | Pure and database tests for all of the above |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [reports](docs/reports/) |
 
 ## Database
 
@@ -388,8 +398,10 @@ forecasting records (the v1 tables, the `forecast` schema) and `bar_receipts`.
 The `journal` schema (`0009`-`0014`) holds the NQ prompt-v2 records
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): the definition registry, evidence
 snapshots, revisioned outcomes, review sets, structure annotations, analogue sets, the
-inference request ledger and the forecast runs with their evidence and predictions. All of it
-is append-only - the database rejects UPDATE, DELETE and TRUNCATE.
+inference request ledger, the forecast runs with their evidence and predictions, the
+registered experiments with their frozen cases and results (`0015`), and the live captures
+with their bar receipts (`0016`). All of it is append-only - the database rejects UPDATE,
+DELETE and TRUNCATE.
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
 ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll
