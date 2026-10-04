@@ -39,16 +39,23 @@ DEFINITIONS = "NQ-v2"
 PROMPT_VERSION = "2.1"
 # nq_prompt_v2_1_impl1 (registered 2026-10-03): the first six targets only, same rules.
 # impl2 adds first level tested and the LO-v1 level outcomes; impl3 the supplementary
-# descriptors of P2 sections 5 and 7 (MP-v1 for the morning pullback).
-LABEL_VERSION = "nq_prompt_v2_1_impl3"
+# descriptors of P2 sections 5 and 7 (MP-v1 for the morning pullback); impl4 (FL-v2) adds
+# Premarket High / Low (nq_conv_v4) and the Long MA to the first-level candidates and
+# names the first level where impl3 left it unavailable: candidates at one price by
+# FIRST_LEVEL_PRECEDENCE, levels on both sides of one bar's open by the one nearest the
+# open (an estimate, flagged in the measurements).
+LABEL_VERSION = "nq_prompt_v2_1_impl4"
+FIRST_LEVEL_CONVENTION = "FL-v2"
 PULLBACK_RUBRIC = "MP-v1"
 PATTERN_CONVENTION = "FP-v1"
 LEVEL_OUTCOME_CONVENTION = "LO-v1"
 # nq_conv_v1 (registered 2026-10-03) took events from the session's calendar day only and
 # configured no moving averages; nq_conv_v2 widens the events to P1 section 8 (EV-v1 in
 # contracts/nq_preopen.py) and adds the user's TradingView moving averages; nq_conv_v3
-# adds the five prior sessions' RTH prices on the snapshot contract (HTB-v1).
-CONVENTION_VERSION = "nq_conv_v3"
+# adds the five prior sessions' RTH prices on the snapshot contract (HTB-v1); nq_conv_v4
+# defines the premarket window, [08:00 ET, cutoff), as the user's TradingView script does.
+CONVENTION_VERSION = "nq_conv_v4"
+PREMARKET_START = time(8, 0)
 SYMBOL = "NQ"
 
 RTH_OPEN = time(9, 30)
@@ -65,11 +72,11 @@ class Profile:
 
 PROFILES: Dict[str, Profile] = {
     "research_0929": Profile(
-        "research_0929", time(9, 29), "nq_evidence_v3_r0929",
+        "research_0929", time(9, 29), "nq_evidence_v4_r0929",
         "Prompt comparison profile: bars complete by 09:29:00 ET (last 1m bar 09:28, last 2m bar "
         "09:26-09:28)."),
     "operational_0927": Profile(
-        "operational_0927", time(9, 27), "nq_evidence_v3_o0927",
+        "operational_0927", time(9, 27), "nq_evidence_v4_o0927",
         "Operational profile for live runs that need the extra time: bars complete by 09:27:00 ET (last 1m "
         "bar 09:26, last 2m bar 09:24-09:26). Its ATRs, thresholds and labels are not comparable with "
         "research_0929."),
@@ -105,15 +112,19 @@ SWEEP_REFERENCES = ("on_high", "on_low", "prev_rth_high", "prev_rth_low")
 _DIRECTION = ("bullish", "bearish", "neutral_band")
 
 # First level tested (P2 section 6): the candidate identities this convention can
-# verify from the snapshot, with P2's category names. Premarket High/Low (no
-# premarket window defined), Long MA (no moving average configured) and round
-# numbers / other named levels (none identified pre-open by the pipeline) are not
-# in the candidate set.
+# verify from the snapshot, with P2's category names. Round numbers / other named
+# levels (none identified pre-open by the pipeline) are not in the candidate set;
+# impl1-impl3 also lacked Premarket High/Low and the Long MA.
 FIRST_LEVEL_CANDIDATES: Dict[str, str] = {
     "on_high": "ON High", "on_low": "ON Low",
     "prev_rth_high": "Previous RTH High", "prev_rth_low": "Previous RTH Low", "prev_rth_close": "Previous RTH Close",
     "overnight_open": "Overnight Open", "vwap": "VWAP",
+    "premarket_high": "Premarket High", "premarket_low": "Premarket Low", "long_ma": "Long MA",
 }
+# FL-v2: which identity names a price several candidates share - the longer-horizon
+# reference first (a premarket high equal to the ON high is the ON high).
+FIRST_LEVEL_PRECEDENCE = ("prev_rth_high", "prev_rth_low", "prev_rth_close", "on_high", "on_low", "premarket_high",
+                          "premarket_low", "overnight_open", "vwap", "long_ma")
 
 # LO-v1 level outcomes: target -> the session reference it follows over standard RTH.
 LEVEL_OUTCOME_REFERENCES: Dict[str, str] = {
@@ -242,11 +253,13 @@ TARGETS: Dict[str, Dict[str, Any]] = {
         "predicted_property": "Expected First Level Tested",
         "display_realised": FIRST_LEVEL_CANDIDATES,
         "display_predicted": FIRST_LEVEL_CANDIDATES,
-        "rule": "The first candidate reached (1m low <= level <= high) in [09:30, 09:45); its price is the "
+        "rule": "FL-v2. The first candidate reached (1m low <= level <= high) in [09:30, 09:45); its price is the "
                 "measurement first_level_price. Within one bar: a level equal to the bar's open first, else the "
-                "nearest on one side of the open; levels on both sides: ambiguous_intrabar. Several candidates at "
-                "that price: coincident_levels (price kept). A missing candidate: missing_reference. None reached "
-                "in the complete window: none_tested.",
+                "nearest to the open - observed when every level reached lies on one side of the open, estimated "
+                "(first_level_order) when levels on both sides were reached; levels above and below at exactly the "
+                "same distance: ambiguous_intrabar. Several candidates at that price: the first in "
+                "FIRST_LEVEL_PRECEDENCE, the others kept as first_level_coincident. A missing candidate: "
+                "missing_reference. None reached in the complete window: none_tested.",
     },
     "first_level_outcome": {
         "labels": tuple(k for k in _LO_DISPLAY if k != "not_tested"),
@@ -462,16 +475,24 @@ LABEL_CONVENTIONS = {
     "o": "O is the open of the 09:30 1m bar - never the cutoff price",
     "missing_sweep_reference": "a missing sweep reference blocks the opening type only when a sweep was possible: "
                                "the window went below O - T (support) or above O + T (resistance)",
-    "first_level_candidates": "on_high, on_low, prev_rth_high, prev_rth_low, prev_rth_close, overnight_open (the "
-                              "snapshot references) and vwap; premarket high / low, Long MA and round numbers / "
-                              "other named levels are not in this convention's candidate set",
+    "first_level_candidates": "on_high, on_low, prev_rth_high, prev_rth_low, prev_rth_close, overnight_open, "
+                              "premarket_high, premarket_low (the snapshot references), vwap and long_ma; round "
+                              "numbers / other named levels are not in the candidate set",
+    "long_ma": "the frozen cutoff Long MA: EMA(100) of the snapshot's archived overnight 2m bars at the last one "
+               "complete by the cutoff (nq_conv_v2's TradingView line, as the structure annotation computes it); "
+               "unavailable under 100 2m bars",
+    "first_level_coincident": "candidates at one price are one level: the identity is the first of "
+                              "prev_rth_high, prev_rth_low, prev_rth_close, on_high, on_low, premarket_high, "
+                              "premarket_low, overnight_open, vwap, long_ma",
     "vwap": "the frozen cutoff VWAP: sum(hlc3 x volume) / sum(volume) over the snapshot's archived overnight 1m "
             "bars [18:00, cutoff), exact; unavailable when the overnight coverage is under 90% or volume is zero",
     "level_reach": "a level is reached by a 1m bar with low <= level <= high; a level the opening gap crossed "
                    "with no RTH trade there is not reached",
     "level_order_in_bar": "within one 1m bar price is taken to trade through every price between the bar's open "
                           "and its extremes: a level equal to the open is reached first, then the nearest on its "
-                          "side; levels on both sides of the open: order unknown",
+                          "side; levels on both sides of the open: first level tested takes the one nearest the "
+                          "open (an estimate - the order is not observed - flagged first_level_order: estimated); "
+                          "the LO-v1 level outcomes are unaffected",
     "lo_v1_breach": "a breach is a 1m close strictly beyond the level; a touch or an equal close is not",
     "lo_v1_acceptance": "acceptance: the window's final three 1m bars all close strictly on one side; those bars "
                         "must be stored",
@@ -566,7 +587,8 @@ CONVENTION = {
         "overnight_open": "open of the 1m bar starting exactly 18:00 ET",
         "cutoff_price": "close of the last 1m bar complete by the cutoff, if it ended at most 5 minutes before it",
         "price_at_0929": "unavailable in both profiles: neither observes 09:29:00-09:29:59",
-        "premarket_high_low": "unavailable: this convention defines no premarket window",
+        "premarket_high_low": "high / low of the 1m bars in [08:00 ET, cutoff) - the user's TradingView "
+                              "premarket session 08:00-09:30 cut at the cutoff; needs at least 90% of its minutes",
     },
     "moving_averages": {
         "source": "the user's TradingView indicator 'TEMA & Session Levels' (Pine v6) at its default inputs",
@@ -620,7 +642,9 @@ def _record(version: str, kind: str, definition: Dict[str, Any]) -> Dict[str, An
 def label_record() -> Dict[str, Any]:
     return _record(LABEL_VERSION, "labels", {
         "definitions": DEFINITIONS, "prompt_version": PROMPT_VERSION, "sources": ["P1", "P2"],
-        "supersedes": "nq_prompt_v2_1_impl2",
+        "supersedes": "nq_prompt_v2_1_impl3: the same rules but first level tested (FL-v2: premarket high / low "
+                      "and the Long MA as candidates, coincident candidates named by precedence, both sides of one "
+                      "bar's open resolved by the nearest to the open, flagged as estimated)",
         "thresholds": {"T": "max(1, ceil(0.5 x frozen two-minute ATR)) points",
                        "B": "max(1, ceil(0.05 x frozen daily ATR)) points", "A": "frozen daily ATR"},
         "targets": {t: {k: list(v) if isinstance(v, tuple) else v for k, v in d.items()} for t, d in TARGETS.items()},
@@ -628,6 +652,7 @@ def label_record() -> Dict[str, Any]:
         "level_outcome_convention": LEVEL_OUTCOME_CONVENTION,
         "pullback_rubric": PULLBACK_RUBRIC,
         "pattern_convention": PATTERN_CONVENTION,
+        "first_level_convention": FIRST_LEVEL_CONVENTION, "first_level_precedence": list(FIRST_LEVEL_PRECEDENCE),
         "conventions": LABEL_CONVENTIONS,
     })
 

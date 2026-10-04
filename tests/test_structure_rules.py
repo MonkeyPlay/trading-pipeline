@@ -1,5 +1,5 @@
 # tests/test_structure_rules.py
-"""The rule-based pre-open structure annotation (forecaster/structure_rules.py, nq_structure_rules_v2)."""
+"""The rule-based pre-open structure annotation (forecaster/structure_rules.py, nq_structure_rules_v3)."""
 
 from datetime import datetime, timedelta, timezone
 

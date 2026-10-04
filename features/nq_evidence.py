@@ -11,8 +11,9 @@ used, so the snapshot can be checked without the mutable source tables:
   cutoff               input cutoff, last completed bar, data mode and
                        point-in-time status
   references           previous-RTH high / low / close, overnight open, ON high /
-                       low, cutoff price - each with a status; Price at 09:29 and
-                       premarket high / low are unavailable by convention
+                       low, premarket high / low ([08:00, cutoff), nq_conv_v4), cutoff
+                       price - each with a status; Price at 09:29 is unavailable by
+                       convention
   atr, thresholds      frozen daily and 2-minute Wilder ATR(14) and T, B, A
   bars                 the overnight window's 1m bars and their complete 2m, 5m and
                        15m clock buckets; previous_rth_bars, daily_atr_inputs
@@ -337,8 +338,16 @@ def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> D
         refs["cutoff_price"] = _ref(None, "missing", "no bar in the overnight window")
     refs["price_at_0929"] = _ref(None, "not_observed",
                                  "the cutoff precedes 09:29:59; the 09:29 minute is not observed")
-    refs["premarket_high"] = refs["premarket_low"] = _ref(None, "not_defined",
-                                                          "no premarket window in this convention")
+    # premarket (nq_conv_v4): [08:00 ET, cutoff), the same 90% minute coverage as the overnight window
+    pm_start = cal.ny_instant(session.session_date, defs.PREMARKET_START)
+    pm = [b for b in bars if b[0] >= pm_start]
+    pm_expected = _minutes(pm_start, cutoff)
+    if pm and Decimal(len(pm)) / Decimal(pm_expected) >= defs.ON_MIN_COVERAGE:
+        refs["premarket_high"] = _ref(max(dec(b[2]) for b in pm), window_minutes=len(pm))
+        refs["premarket_low"] = _ref(min(dec(b[3]) for b in pm), window_minutes=len(pm))
+    else:
+        detail = f"{len(pm)} of {pm_expected} premarket minutes (< {defs.ON_MIN_COVERAGE:.0%})"
+        refs["premarket_high"] = refs["premarket_low"] = _ref(None, "insufficient_coverage", detail)
     refs["_coverage"] = {"expected_minutes": expected, "minutes": len(bars), "ratio": coverage.quantize(
         Decimal("0.0001"))}
     return refs

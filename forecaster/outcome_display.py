@@ -105,6 +105,15 @@ def _notes(snapshot: Dict[str, Any], outcome: Dict[str, Any], label_version: str
             for t, v in labels.items() if v["label"] is None and v["reason"] != "not_applicable"]
     if gaps:
         parts.append("Unavailable - " + "; ".join(gaps) + ".")
+    first = labels.get("first_level_tested", {}).get("label")
+    if first is not None and (m.get("first_level_order") == "estimated" or m.get("first_level_coincident")):
+        shown = defs.display("first_level_tested", first)
+        if m.get("first_level_order") == "estimated":
+            parts.append(f"{defs.FIRST_LEVEL_CONVENTION}: {shown} is the level nearest the open of the "
+                         f"{m.get('first_level_bar')} bar, which reached levels on both sides - an estimated order.")
+        if m.get("first_level_coincident"):
+            also = ", ".join(defs.display("first_level_tested", c) for c in m["first_level_coincident"])
+            parts.append(f"{defs.FIRST_LEVEL_CONVENTION}: {also} at the same price, named {shown} by precedence.")
     mp = m.get("mp_v1")
     if mp and mp.get("direction") != "two_sided":
         parts.append(f"MP-v1 {mp['direction']} morning: leg {mp['leg_start']} to {mp['leg_extreme']} "

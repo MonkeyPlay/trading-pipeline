@@ -1,6 +1,6 @@
 # forecaster/structure_rules.py
 """
-Rule-based pre-open structure annotation (protocol nq_structure_rules_v2,
+Rule-based pre-open structure annotation (protocol nq_structure_rules_v3,
 contracts/nq_preopen.py): the stand-in for the Claude structure annotation of
 Appendix A (A1) until the API is in place. It reads one frozen snapshot only and
 returns contracts.nq_preopen.ANNOTATION_SCHEMA, the shape the Claude annotator
@@ -414,10 +414,10 @@ def higher_timeframe_bias(payload: Dict[str, Any]) -> Dict[str, Any]:
     m = Fraction(close - Decimal(str(start["open"]))) / A
     p = Fraction(close - low) / Fraction(high - low) if high > low else Fraction(1, 2)
     value = htb_label(close > high, close < low, p, m)
-    upper, lower = p >= Fraction(2, 3), p <= Fraction(1, 3)
-    third = "upper" if upper else "lower" if lower else "middle"
-    basis = (f"cutoff {close} in the 5-session range {low}-{high} ({third} third, position {float(p):.2f}); momentum "
-             f"{float(m):+.2f} ATR from the {start['open']} open of {start['session_date']}")
+    where = ("above the range" if close > high else "below the range" if close < low else
+             "upper third" if p >= Fraction(2, 3) else "lower third" if p <= Fraction(1, 3) else "middle third")
+    basis = (f"cutoff {close} against the 5-session range {low}-{high} ({where}, position {float(p):.2f}); "
+             f"momentum {float(m):+.2f} ATR from the {start['open']} open of {start['session_date']}")
     ids = ["ref:cutoff_price"] + [f"prior:{x['session_date']}" for x in valid]
     if value is None:
         return _field(None, "unavailable", "uncovered: location and momentum disagree", ids, basis)

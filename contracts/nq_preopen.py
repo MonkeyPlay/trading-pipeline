@@ -136,14 +136,14 @@ HTB = {
     "momentum": "m = (cutoff price - the RTH open of the session five sessions back) / the frozen daily ATR A",
     "rules": ["Unavailable: fewer than five verified prior sessions (every RTH minute bar on the contract), or "
               "no cutoff price or A",
-              "Bullish: above H5, or m >= +0.5 in the upper third; Bearish: below L5, or m <= -0.5 in the lower "
-              "third",
-              "Neutral: the middle third, or |m| <= 0.15",
-              "Neutral-bullish: the upper third with 0 < m < +0.5; Neutral-bearish: the lower third with "
-              "-0.5 < m < 0",
-              "anything else - the upper third with m < -0.15 or the lower third with m > +0.15, where location "
-              "and momentum disagree - is unavailable as uncovered"],
-    "order": "the rules apply in the order listed: a breakout beats the neutral checks",
+              "exclusive bands (the user's wording, 2026-10-04): Bullish above H5, or the upper third with "
+              "m >= +0.5; Neutral-bullish the upper third with +0.15 < m < +0.5; Neutral the middle third, or "
+              "|m| <= 0.15; Neutral-bearish the lower third with -0.5 < m < -0.15; Bearish below L5, or the lower "
+              "third with m <= -0.5; the thirds lie inside the range",
+              "a close beyond the range with |m| <= 0.15 is in the breakout band and Neutral at once: the "
+              "breakout",
+              "no band - the upper third with m < -0.15, or the lower third with m > +0.15, where location and "
+              "momentum disagree - is unavailable as uncovered"],
     "arithmetic": "exact (decimal prices, the exact fraction A)",
 }
 
@@ -153,8 +153,10 @@ HTB = {
 # --------------------------------------------------------------------------
 
 # nq_structure_rules_v1 (registered 2026-10-04) left Higher-Timeframe Bias uncovered;
-# v2 is v1 plus HTB-v1, every other rule unchanged.
-RULES_PROTOCOL_VERSION = "nq_structure_rules_v2"
+# v2 is v1 plus HTB-v1, every other rule unchanged; v3 gives the same labels with HTB-v1
+# worded as the user's exclusive bands and its basis naming a close beyond the range as
+# such (v2 called it the upper / lower third).
+RULES_PROTOCOL_VERSION = "nq_structure_rules_v3"
 
 RULES = {
     "swings": {"timeframe": "5m", "left": 2, "right": 2,
@@ -227,7 +229,8 @@ def rules_record() -> Dict[str, Any]:
     return _record(RULES_PROTOCOL_VERSION, "annotation", {
         "annotator": "rules", "fields": FIELDS, "price_location": PRICE_LOCATION, "rules": RULES,
         "event_risk": EVENT_RISK, "higher_timeframe_bias": HTB,
-        "supersedes": "nq_structure_rules_v1: the same rules with Higher-Timeframe Bias not covered",
+        "supersedes": "nq_structure_rules_v2: the same labels; HTB-v1 worded as exclusive bands and its basis "
+                      "naming a close beyond the range (v1: Higher-Timeframe Bias not covered)",
         "replaced_by": "a Claude structure annotation (Appendix A, A1) under its own "
                                                  "protocol version, producing the same ANNOTATION_SCHEMA",
     })

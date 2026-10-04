@@ -39,6 +39,16 @@
       "sha256": "8a7813a15dd696b113bf340e7eaa9c0059856d62d82561144ad35eadca70a1c9",
       "bytes": 6139,
       "provenance": "The text of the guideline's Appendix A, pasted into a Claude Code session on 2026-10-04 and saved as received."
+    },
+    {
+      "id": "B",
+      "path": "prompts/source/GUIDELINE APPENDIX B - PRE-OPEN FIELD OWNERSHIP.md",
+      "title": "Appendix B Pre open field ownership",
+      "document": "Nasdaq 100 Forecast Implementation Guideline, 28 September 2026, implementation proposal version 1",
+      "contents": "which component owns each of P1's 47 output fields; the 47-field display/export adapter",
+      "sha256": "328f6939debe7280540c02b7ae912453512af5cccc4aed824ab9de53edae5bbc",
+      "bytes": 2551,
+      "provenance": "The text of the guideline's Appendix B, pasted into a Claude Code session on 2026-10-04 and saved as received."
     }
   ],
   "runtime": [

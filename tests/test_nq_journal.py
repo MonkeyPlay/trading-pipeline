@@ -144,12 +144,16 @@ def test_research_snapshot_contents(market):
     refs = p["references"]
     assert {k: v["status"] for k, v in refs.items()} == {
         "overnight_open": "valid", "on_high": "valid", "on_low": "valid", "cutoff_price": "valid",
-        "price_at_0929": "not_observed", "premarket_high": "not_defined", "premarket_low": "not_defined",
+        "price_at_0929": "not_observed", "premarket_high": "valid", "premarket_low": "valid",
         "prev_rth_high": "valid", "prev_rth_low": "valid", "prev_rth_close": "valid"}
     nq = bars[NQ_CID]
     prev_rth = nq[(nq["bar_start_at"] >= cal.session(PREV).rth_open_at)
                   & (nq["bar_start_at"] < cal.session(PREV).scheduled_close_at)]
     assert refs["prev_rth_close"]["value"] == dec(prev_rth["close"].iloc[-1])
+    pm = nq[(nq["bar_start_at"] >= cal.ny_instant(date.fromisoformat(DAY), time(8, 0)))
+            & (nq["bar_start_at"] < snap.cutoff_at)]                        # 08:00-09:28: complete by 09:29
+    assert len(pm) == 89 and refs["premarket_high"]["window_minutes"] == 89
+    assert refs["premarket_high"]["value"] == dec(pm["high"].max()) and refs["premarket_low"]["value"] == dec(pm["low"].min())
     assert refs["prev_rth_high"]["value"] == dec(prev_rth["high"].max())
     assert len(p["previous_rth_bars"]["1m"]) == 390
 

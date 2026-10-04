@@ -19,17 +19,22 @@ EARLY = "2026-11-27"               # the 13:00 early close after Thanksgiving
 MIN = timedelta(minutes=1)
 
 
-def snapshot(day=DAY, T=5, B=10, A="200", vwap=None, **refs):
-    """A frozen snapshot with the thresholds and references the labels read. ``vwap`` is
-    given through the archived overnight bars, as a real snapshot provides it."""
-    names = [n for n in defs.FIRST_LEVEL_CANDIDATES if n != "vwap"]
+def snapshot(day=DAY, T=5, B=10, A="200", vwap=None, long_ma=None, **refs):
+    """A frozen snapshot with the thresholds and references the labels read. ``vwap`` and
+    ``long_ma`` are given through the archived overnight bars, as a real snapshot provides
+    them (100 flat 2m bars make an EMA(100) of exactly that price)."""
+    names = [n for n in defs.FIRST_LEVEL_CANDIDATES if n not in ("vwap", "long_ma")]
+    start = cal.session(day).overnight_start_at
+    two = [] if long_ma is None else [[(start + 2 * i * MIN).strftime("%Y-%m-%dT%H:%M:%SZ"), long_ma, long_ma,
+                                        long_ma, long_ma, 1, 2] for i in range(100)]
     return {"snapshot_id": "test", "payload": {
         "identity": {"session_date": day},
         "thresholds": {"T": T, "B": B, "A": A},
         "references": {n: {"value": None if refs.get(n) is None else str(refs[n]),
                            "status": "valid" if refs.get(n) is not None else "missing"} for n in names},
         "bars": {"coverage": {"ratio": "1" if vwap is not None else "0"},
-                 "1m": [] if vwap is None else [["2026-06-10T12:00:00Z", vwap, vwap, vwap, vwap, 1]]},
+                 "1m": [] if vwap is None else [["2026-06-10T12:00:00Z", vwap, vwap, vwap, vwap, 1]],
+                 "2m": two},
     }}
 
 
@@ -318,7 +323,7 @@ def test_every_target_present_and_unavailable_labels_carry_a_registered_reason()
 # --------------------------------------------------------------------------
 
 FAR = dict(on_high=150, on_low=50, prev_rth_high=160, prev_rth_low=40, prev_rth_close=170, overnight_open=30,
-           vwap=180)
+           vwap=180, premarket_high=190, premarket_low=20, long_ma=210)
 
 
 def levels(**over):
@@ -347,16 +352,31 @@ def test_a_level_at_the_opening_trade_is_tested_first():
     assert label(out, "first_level_outcome") == (None, "approach_unresolved")      # equal to O: no approach
 
 
-def test_within_a_bar_the_nearest_level_on_one_side_is_first_and_both_sides_is_ambiguous():
-    assert first(run(session(bars={2: (100, 106, 100, 105)}), levels(vwap=104, on_high=105))) == ("vwap", None)
-    both = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=105, on_low=95))
-    assert first(both) == (None, "ambiguous_intrabar")
+def test_within_a_bar_the_nearest_level_to_the_open_is_first():
+    one_side = run(session(bars={2: (100, 106, 100, 105)}), levels(vwap=104, on_high=105))
+    assert first(one_side) == ("vwap", None) and one_side["measurements"]["first_level_order"] == "observed"
+    both = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=104, on_low=95))     # FL-v2: 4 below 5
+    assert first(both) == ("on_high", None) and both["measurements"]["first_level_order"] == "estimated"
+    tie = run(session(bars={2: (100, 106, 94, 101)}), levels(on_high=105, on_low=95))
+    assert first(tie) == (None, "ambiguous_intrabar") and tie["measurements"]["first_level_price"] is None
 
 
-def test_coincident_levels_keep_the_price_but_not_the_identity():
+def test_coincident_levels_are_named_by_precedence():
     out = run(session(bars={4: (100, 100, 94, 96)}), levels(on_low=95, prev_rth_low=95))
-    assert first(out) == (None, "coincident_levels") and out["measurements"]["first_level_price"] == "95"
-    assert label(out, "first_level_outcome") == (None, "upstream_unavailable")
+    assert first(out) == ("prev_rth_low", None) and out["measurements"]["first_level_price"] == "95"
+    assert out["measurements"]["first_level_coincident"] == ["on_low"]
+    assert label(out, "first_level_outcome")[1] != "upstream_unavailable"
+    premarket = run(session(bars={1: (100, 103, 100, 102)}), levels(premarket_high=102.5, on_high=102.5))
+    assert first(premarket) == ("on_high", None)                     # the premarket high is the ON high
+    assert premarket["measurements"]["first_level_coincident"] == ["premarket_high"]
+
+
+def test_premarket_levels_and_the_long_ma_are_candidates():
+    assert first(run(session(bars={2: (100, 101, 98, 99)}), levels(premarket_low=98.5))) == ("premarket_low", None)
+    out = run(session(bars={5: (100, 103.5, 100, 103)}), levels(long_ma=103.25))
+    assert first(out) == ("long_ma", None) and out["measurements"]["first_level_price"] == "103.250000"
+    assert first(run(session(bars={5: (100, 103.5, 100, 103)}), snapshot(**{**FAR, "long_ma": None}))) == \
+        (None, "missing_reference")
 
 
 def test_a_level_the_opening_gap_crossed_without_a_trade_is_not_tested():
@@ -584,7 +604,7 @@ def test_p2_record_has_the_prompts_40_properties_in_order():
     assert values["Realised Opening Type"] == "Opening drive up" and values["Opening Drive Strength"] == "Strong"
     assert values["First 15-Minute Pattern"] == "Drive continuation" and values["Realised Outcome Confidence"] == "5"
     assert values["Realised First Move"] == "Up" and values["First 30-Minute Direction"] == "Two-sided"
-    assert "nq_prompt_v2_1_impl3" in values["Outcome Data Notes"]
+    assert defs.LABEL_VERSION in values["Outcome Data Notes"]
 
 
 def test_p2_record_unavailable_blank_and_confidence():

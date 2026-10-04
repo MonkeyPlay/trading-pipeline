@@ -128,6 +128,17 @@ def _vwap(payload: Dict[str, Any]) -> Optional[Fraction]:
     return None if vol == 0 else pv / vol
 
 
+def _long_ma(payload: Dict[str, Any], overnight_start: datetime) -> Optional[Fraction]:
+    """The frozen cutoff Long MA: EMA(100) of the snapshot's overnight 2m bars at the last one (nq_conv_v2), computed
+    as the structure annotation computes it; None under 100 bars. Kept to six decimals."""
+    from forecaster.structure_rules import _bars, moving_averages
+    bars = [b for b in _bars(payload, "2m") if b.start >= overnight_start]
+    if len(bars) < 100:
+        return None
+    value = float(moving_averages(bars)["ema_trend"].iloc[-1])
+    return Fraction(Decimal(repr(value)).quantize(_SHOW))
+
+
 class _Session:
     """The realised bars of one session indexed by minute from the open (-1 = the 09:29 bar)."""
 
@@ -152,8 +163,8 @@ class _Session:
         self.levels: Dict[str, Optional[Fraction]] = {}
         self.level_shown: Dict[str, Optional[str]] = {}
         for name in defs.FIRST_LEVEL_CANDIDATES:
-            if name == "vwap":
-                v = _vwap(payload)
+            if name in ("vwap", "long_ma"):
+                v = _vwap(payload) if name == "vwap" else _long_ma(payload, self.session.overnight_start_at)
                 self.levels[name] = v
                 self.level_shown[name] = None if v is None else _show_fraction(v)
             else:
@@ -342,7 +353,12 @@ def _session_type(x: _Session, close_dir: Dict[str, Any], meas: Dict[str, Any]) 
 
 
 def _first_level(x: _Session, meas: Dict[str, Any]) -> Dict[str, Any]:
-    """P2 section 6: the first candidate reached in [09:30, 09:45), by 1m bar and order within it."""
+    """
+    P2 section 6 under FL-v2: the first candidate reached in [09:30, 09:45), by 1m bar and order within it.
+    Within a bar the level nearest the open is first - observed when every level reached lies on one side of the
+    open, estimated when both sides were reached (first_level_order); candidates at one price are named by
+    FIRST_LEVEL_PRECEDENCE (first_level_coincident lists the others).
+    """
     if x.O is None:
         return _label(reason="missing_bars", detail="no 09:30 bar: O unknown")
     missing = [n for n, v in x.levels.items() if v is None]
@@ -357,22 +373,18 @@ def _first_level(x: _Session, meas: Dict[str, Any]) -> Dict[str, Any]:
         reached = {n: v for n, v in x.levels.items() if low <= v <= high}
         if not reached:
             continue
-        at_open = [n for n, v in reached.items() if v == op]
-        if at_open:
-            first = at_open
-        else:
-            above = {n: v for n, v in reached.items() if v > op}
-            below = {n: v for n, v in reached.items() if v < op}
-            if above and below:
-                return _label(reason="ambiguous_intrabar",
-                              detail=f"levels on both sides of the {x.at(m)} bar's open reached: "
-                                     + ", ".join(sorted(reached)))
-            side = above or below
-            nearest = min(abs(v - op) for v in side.values())
-            first = [n for n, v in side.items() if abs(v - op) == nearest]
-        meas.update(first_level_price=x.level_shown[first[0]], first_level_bar=x.at(m))
-        if len(first) > 1:
-            return _label(reason="coincident_levels", detail="reached together at one price: " + ", ".join(sorted(first)))
+        both_sides = any(v > op for v in reached.values()) and any(v < op for v in reached.values())
+        nearest = min(abs(v - op) for v in reached.values())
+        first = [n for n, v in reached.items() if abs(v - op) == nearest]
+        if len({reached[n] for n in first}) > 1:          # one above and one below at the same distance
+            meas.update(first_level_price=None, first_level_bar=x.at(m))
+            return _label(reason="ambiguous_intrabar",
+                          detail=f"levels above and below the {x.at(m)} bar's open at the same distance: "
+                                 + ", ".join(sorted(first)))
+        first.sort(key=defs.FIRST_LEVEL_PRECEDENCE.index)
+        meas.update(first_level_price=x.level_shown[first[0]], first_level_bar=x.at(m),
+                    first_level_order="estimated" if both_sides and reached[first[0]] != op else "observed",
+                    first_level_coincident=first[1:])
         return _label(first[0])
     meas["first_level_price"] = None
     return _label(reason="none_tested", detail="no candidate level reached in the complete first 15 minutes")

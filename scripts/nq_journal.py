@@ -50,6 +50,7 @@ from forecaster import review_set
 from contracts import nq_preopen as preopen
 from forecaster.journal import annotate, catch_up, match, record_outcome, register, take_snapshot
 from forecaster.outcome_display import p2_record
+from forecaster.preopen_display import p1_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 PROTOCOLS = {"rules": preopen.RULES_PROTOCOL_VERSION, "llm": preopen.LLM_PROTOCOL_VERSION}
@@ -269,15 +270,11 @@ def cmd_show(conn, args):
     print(f"  events: {', '.join(e['time_et'] + ' ' + e['name'] for e in events['events']) or 'none'}"
           + ("" if events["covered_sources"] else " (no calendar coverage)"))
     annotation = store.latest_annotation(conn, snap["snapshot_id"], preopen.RULES_PROTOCOL_VERSION)
-    if annotation is None:
-        print(f"  no {preopen.RULES_PROTOCOL_VERSION} annotation yet")
-    else:
-        print(f"  pre-open structure ({preopen.RULES_PROTOCOL_VERSION}, {annotation['integrity_status']}):")
-        for prop in (p for p in preopen.FIELDS if p in annotation["fields"]):
-            f = annotation["fields"][prop]
-            shown = f["value"] if f["value"] is not None else f"Unavailable ({f['reason']})"
-            print(f"    {prop:22} {shown}")
-        print("    price location: " + ", ".join(f"{k} {v}" for k, v in annotation["price_location"].items()))
+    aset = store.latest_analogue_set(conn, snap["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION)
+    provenance, rows = p1_record(snap, annotation, aset)
+    print(f"  P1 pre-open record - {provenance}:")
+    for i, (prop, value, basis) in enumerate(rows, 1):
+        print(f"    {i:2}. {prop:36} {value}" + (f"  [{basis}]" if value == "Unavailable" else ""))
     outcome = store.latest_outcome(conn, snap["snapshot_id"], defs.LABEL_VERSION)
     if outcome is None:
         print("  no outcome recorded yet")

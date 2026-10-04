@@ -46,9 +46,13 @@ def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs
     for name, value in (refs or {}).items():
         references[name] = {"value": str(value), "status": "valid"}
     payload = {
-        "identity": {"session_date": DAY},
+        "identity": {"session_date": DAY, "weekday": "Friday", "contract_id": 1, "local_symbol": "NQM6",
+                     "active_contract_rule": "test"},
         "schedule": {"overnight_start_at": iso(ON_START), "scheduled_close_at": iso(SESSION.scheduled_close_at)},
-        "cutoff": {"input_cutoff_at": iso(CUTOFF)},
+        "cutoff": {"input_cutoff_at": iso(CUTOFF), "cutoff_et": "09:29", "data_mode": "historical_reconstruction",
+                   "pit_availability_status": "unverified_historical"},
+        "atr": {"daily": {"status": "valid", "value": "300.500000"},
+                "two_minute": {"status": "valid", "value": "12.345678", "last_bucket_end": "2026-06-12T13:28:00Z"}},
         "references": references,
         "thresholds": {"T": T, "A": A},
         "bars": {"1m": [[iso(s), o, h, low, c, v] for s, o, h, low, c, v in bars] + list(extra_1m),
@@ -56,7 +60,7 @@ def snapshot(price, T=8, events=(), covered=ALL_SOURCES, coverage="1.0000", refs
         "events": {"covered_sources": list(covered), "events": list(events)},
         "prior_sessions": {"contract_id": 1, "sessions": list(prior or []), "bars_digest": "-"},
     }
-    return {"snapshot_id": "test", "session_date": DAY, "payload": payload}
+    return {"snapshot_id": "test", "session_date": DAY, "snapshot_version": "test_snapshot", "payload": payload}
 
 
 def event(source, key, name, tier, et, day=DAY):

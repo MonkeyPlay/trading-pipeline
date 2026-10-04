@@ -26,6 +26,7 @@ from contracts import nq_prompt_v2 as defs
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import LEVEL_LABELS, preopen_spec
 from database import journal_store as store
+from forecaster.preopen_display import p1_record
 from matching.structural import features
 
 _MUTED = "color:#787b86"
@@ -76,6 +77,9 @@ class AnaloguesPage:
                 ui.switch("Show outcomes", value=False, on_change=self.toggle_outcomes)
                 self.summary = ui.label().classes("text-sm").style(_MUTED)
             self.table = ui.column().classes("w-full gap-0 overflow-x-auto")
+            with ui.expansion("P1 pre-open record (47 fields)", icon="list_alt", value=False).classes("w-full").style(
+                    "background:#1c212e"):
+                self.record = ui.column().classes("w-full gap-0")
             self.outcome_panel = ui.column().classes("w-full gap-1")
             self.chart_title = ui.label().classes("text-sm")
             self.chart = LightweightChart(height=480)
@@ -111,6 +115,7 @@ class AnaloguesPage:
     def render(self) -> None:
         self.table.clear()
         self.outcome_panel.clear()
+        self._render_record()
         aset = self.aset
         if aset is None:
             self.summary.text = ""
@@ -167,6 +172,20 @@ class AnaloguesPage:
         if self.outcomes_shown:
             self._render_frequencies(aset)
         self._push_chart()
+
+    def _render_record(self) -> None:
+        """P1's 47 fields of the selected session (forecaster/preopen_display.py): pre-open only, no outcome."""
+        self.record.clear()
+        snap = self.snaps[self.day]
+        annotation = store.latest_annotation(self.conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION)
+        provenance, rows = p1_record(snap, annotation, self.aset)
+        with self.record:
+            ui.label(provenance).classes("text-xs mb-1").style(_MUTED)
+            with ui.grid(columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,2fr)").classes("w-full gap-x-3 gap-y-0"):
+                for i, (prop, value, basis) in enumerate(rows, 1):
+                    ui.label(f"{i}. {prop}").classes("text-xs").style(_MUTED)
+                    ui.label(value).classes("text-xs" + (" opacity-60" if value == "Unavailable" else ""))
+                    ui.label(basis).classes("text-[11px]").style(_MUTED)
 
     def _date_button(self, day: str, caption: str) -> None:
         ui.button(f"{caption} {day}", on_click=lambda d=day: self.select_chart(d)).props(
