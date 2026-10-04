@@ -47,6 +47,8 @@ version identifier.
 | `nq_evidence_v2_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v2` |
 | `nq_evidence_v1_r0929` / `_o0927` | snapshot | the same under `nq_conv_v1`; the 269 stored v1 snapshots and the review set stay as they are |
 | `nq_structure_rules_v1` | annotation | the rule-based pre-open structure annotation (stage 2, below) |
+| `nq_structure_llm_v1` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5` - built, waiting for an API key |
+| `nq_match_p1_v1` | matcher | P1 section 7's analogue rubric (stage 2B / 2C) |
 
 Each label version keeps every rule of the one before unchanged (checked on the
 stored sessions) and adds targets; the earlier versions stay with the outcomes
@@ -316,7 +318,7 @@ note. Verdicts are append-only rows (migration 0010, `journal.review_verdicts`;
 labels mean what P1 / P2 say - not whether anything predicts them. Pre-open
 classifications join the review with stage 2.
 
-## Stage 2: pre-open structure (2A, in progress)
+## Stage 2: pre-open structure and structural analogues
 
 Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_preopen.py).
 
@@ -373,27 +375,84 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   once. The collector's journal step loads the calendar, refreshes the earnings and
   annotates every snapshot without an annotation.
 
-**When Claude takes over**, it gets its own protocol version (e.g.
-`nq_structure_llm_v1`) with the A1 prompt under `prompts/runtime/`, receives the
-snapshot plus the numeric layer as evidence, and writes the same shape to the same
-table (`annotator = 'llm'`, `model` recorded). The two protocols are never
-compared as if they were one: the matcher takes annotations of one protocol only.
+- **Claude structure annotation** (`nq_structure_llm_v1`,
+  [forecaster/structure_llm.py](../forecaster/structure_llm.py)), built and tested
+  against a stand-in client; it runs once `ANTHROPIC_API_KEY` is in `.env`. The
+  system prompt [prompts/runtime/structure_annotation_v1.md](../prompts/runtime/structure_annotation_v1.md)
+  quotes Appendix A's A1 and P1 section 4 verbatim and adds the conventions and
+  vocabularies; its hash is part of the registered protocol, so an edit needs a new
+  version. The user message is the evidence bundle - references, the overnight 5m
+  and 15m bars, the last 45 2m bars with the three lines, the confirmed swing
+  points, every item with an id - and the answer must follow the
+  structure_annotation JSON schema (structured outputs). `claude-opus-5-5`, effort
+  high. Claude annotates the ten descriptive fields; Event Risk, Event Notes and the
+  price location come from the same rules as the rule-based protocol. Validation:
+  allowed values, null exactly when unavailable (with a reason), every evidence id in
+  the bundle. Every request is an attempt in `journal.annotation_attempts`, failures
+  included; only a valid answer becomes an annotation. Live requests have the
+  server-side refusal fallback on, but an answer another model served is kept as an
+  attempt, not as an annotation of this protocol. A snapshot holding anything after
+  its cutoff is never sent. The historical backfill goes through the Batch API at
+  half price; `--estimate` sizes it first.
+
+### Analogues (2B-2D)
+
+[matching/structural.py](../matching/structural.py), matcher `nq_match_p1_v1`:
+
+- **Rubric (P1 section 7, exact weights):** price location against each session's
+  own five levels 6% each; Overnight and Short-Term Structure 12.5% each; 5- and
+  15-Minute Trend, Price vs Long MA, Long MA Slope 6.25% each; Premarket Pattern and
+  Chop Score 5% each; Event Risk 10%. Categorical equality 1 / 0; Chop Score
+  max(0, 1 - |a - b| / 3). A feature counts only when both sessions have a
+  classified value under the same annotation protocol and snapshot version;
+  comparable weight under 75% rejects a candidate; similarity = 100 x weighted
+  matches / comparable weight.
+- **Pool and selection:** earlier NQ sessions only, never the target or later; the
+  five highest similarities, ties by comparable weight, then the more recent
+  session, then the snapshot id; no minimum similarity; zero analogues allowed.
+  Exclusions are counted by reason.
+- **Outcomes after selection (2C):** each analogue's latest stage-1 outcome; per P1
+  target the class counts over the analogues with a label and that denominator (an
+  analogue without one is kept, not replaced), the unweighted mean similarity, and
+  a separately named smoothed baseline (count + 5 x prior) / (n + 5), the prior from
+  every earlier session's label; no analogue label gives the prior only, said so.
+- **Store (2D):** `journal.analogue_sets` / `journal.analogue_members` (migration
+  0012, append-only): pool size and hash, exclusions, per-feature components,
+  similarity and coverage per member, the outcome revisions used and the outcome
+  summary; a set is new only when its pool or its outcome revisions change.
+  Historical sets are marked `historical_reconstruction`: their outcomes were
+  computed after the fact.
+- **Dashboard:** **Analogues** (`/analogues`) puts a session and its analogues side
+  by side - each feature cell a match, a mismatch, partly similar or not comparable -
+  with the similarity and coverage of each; outcomes stay hidden until "Show
+  outcomes", so the page first serves the outcome-blind check of why each analogue
+  qualifies. Clicking a date charts that session's own pre-open (its own contract
+  and prices, never rebased). **Pre-open review** (`/preopen-review`) is the
+  outcome-blind review of the annotations: the overnight chart to the cutoff with
+  the three lines, every field with the numbers behind it, a verdict and a note per
+  field (`journal.annotation_review_*`).
 
 ```bash
 python -m database.events                                   # the calendar (also run by the collector)
 python -m database.earnings                                 # earnings from EDGAR (also run by the collector)
 python scripts/nq_journal.py annotate --start 2025-09-01 --end 2026-10-02
+python scripts/nq_journal.py match                          # analogue sets (also run by the collector)
+python scripts/nq_journal.py analogues --date 2026-10-02 [--outcomes]
+python scripts/nq_journal.py annotation-review-set --name preopen_review_v1
+python scripts/nq_journal.py annotation-review-report --name preopen_review_v1
+python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --estimate
+python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --batch
+python scripts/nq_journal.py match --protocol llm           # analogues over Claude's annotations
 python scripts/nq_journal.py show --date 2026-10-02         # snapshot, annotation and outcome
 ```
 
-The first collector run after this change catches up the v2 snapshots, their
-annotations and outcomes over every session the v1 journal holds (a few minutes).
+The collector's journal step does everything above except the review set and the
+Claude requests, which cost money and are started by hand.
 
 ## Not built yet
 
-- Stage 2B-2D: the structural matcher with P1's weights, analogue sets, outcome
-  attachment and the dashboard view; the outcome-blind review of the annotations.
-- The Claude structure annotation (needs `ANTHROPIC_API_KEY`).
+- Running the Claude structure annotation (needs `ANTHROPIC_API_KEY`), and your
+  verdicts on the pre-open review set.
 
 - The operational profile (09:27) is registered but not caught up automatically;
   run `backfill --profile operational_0927` when live runs need it.

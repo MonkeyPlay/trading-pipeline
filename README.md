@@ -117,6 +117,10 @@ python -m dashboard.app
 
 One page:
 
+- **Analogues** (`/analogues`, [dashboard/views/analogues.py](dashboard/views/analogues.py)) and
+  **Pre-open review** (`/preopen-review`) — a session's structural analogues side by side
+  (outcomes hidden until asked for) and the outcome-blind review of the pre-open annotations;
+  see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
   around the first hour. Three selectors, in order: the **session day** (searchable, newest
   first), the **instrument** with bars that day (ES, NQ, ...), and the **contract** holding it

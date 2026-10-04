@@ -59,3 +59,22 @@ def select_sessions(candidates: Iterable[Dict[str, Any]], size: int = 25) -> Tup
         covered |= best["items"]
         picked_days.append(date.fromisoformat(best["session_date"]))
     return chosen, {"items": len(freq), "covered": len(covered), "uncovered": sorted(set(freq) - covered)}
+
+
+ANNOTATION_RULE = ("greedy coverage of (field, value or unavailable reason) over the matcher's pre-open fields and "
+                   "price locations, plus calendar quarters, each item weighted 1 / its session count; then the "
+                   "largest gap in time; then the earlier date")
+
+
+def annotation_items(annotation: Dict[str, Any], day: str) -> Set[str]:
+    """The items one session's structure annotation covers (pre-open review, guideline 1E / 2A)."""
+    items = set()
+    for name, f in annotation["fields"].items():
+        if name in ("Event Notes", "Higher-Timeframe Bias"):
+            continue
+        items.add(f"{name}={f['value']}" if f["value"] is not None else f"{name}:{f['status']}")
+    for level, value in annotation["price_location"].items():
+        items.add(f"price:{level}={value}")
+    d = date.fromisoformat(day)
+    items.add(f"quarter={d.year}Q{(d.month - 1) // 3 + 1}")
+    return items

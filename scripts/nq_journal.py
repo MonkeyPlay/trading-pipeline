@@ -10,6 +10,13 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py backfill --start 2026-06-01 --end 2026-09-25  # snapshot + outcome, in order
     python scripts/nq_journal.py catch-up                                   # every final session not yet stored
     python scripts/nq_journal.py annotate --start 2025-09-01 --end 2026-10-02  # rule-based structure annotations
+    python scripts/nq_journal.py match                                      # analogue sets (P1 section 7 rubric)
+    python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --estimate   # Claude: size and cost
+    python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --batch      # Claude backfill
+    python scripts/nq_journal.py match --protocol llm                       # analogues over Claude's annotations
+    python scripts/nq_journal.py analogues --date 2026-10-02 [--outcomes]   # one session's analogues
+    python scripts/nq_journal.py annotation-review-set --name preopen_review_v1   # outcome-blind review set
+    python scripts/nq_journal.py annotation-review-report --name preopen_review_v1
     python scripts/nq_journal.py show --date 2026-09-24                     # snapshot + P2's 40-field record
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
@@ -41,10 +48,11 @@ from features import calendar as cal
 from features.nq_evidence import SnapshotError
 from forecaster import review_set
 from contracts import nq_preopen as preopen
-from forecaster.journal import annotate, catch_up, record_outcome, register, take_snapshot
+from forecaster.journal import annotate, catch_up, match, record_outcome, register, take_snapshot
 from forecaster.outcome_display import p2_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+PROTOCOLS = {"rules": preopen.RULES_PROTOCOL_VERSION, "llm": preopen.LLM_PROTOCOL_VERSION}
 logger = logging.getLogger("nq_journal")
 
 
@@ -98,6 +106,140 @@ def cmd_annotate(conn, args):
     for snap in snaps:
         annotate(conn, snap)
     logger.info(f"Annotations recorded or confirmed for {len(snaps)} {version} snapshot(s).")
+    return 0
+
+
+def cmd_match(conn, args):
+    """The analogue sets of every annotated snapshot (stored when new)."""
+    match(conn, args.profile, PROTOCOLS[args.protocol])
+    return 0
+
+
+def cmd_annotate_llm(conn, args):
+    """The Claude structure annotation (forecaster/structure_llm.py): estimate, live requests or a batch."""
+    import time
+    from datetime import datetime, timezone
+    from forecaster import structure_llm as llm
+    version = defs.PROFILES[args.profile].snapshot_version
+    snaps = store.list_snapshots(conn, args.date or args.start, args.date or args.end, version)
+    todo = [s for s in snaps if store.latest_annotation(conn, s["snapshot_id"], preopen.LLM_PROTOCOL_VERSION) is None]
+    print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) without a {preopen.LLM_PROTOCOL_VERSION} annotation.")
+    if args.estimate or not todo:
+        if todo:
+            e = llm.estimate(todo)
+            print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
+                  f"live, ~${e['usd_batch']} with --batch ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT})")
+        return 0
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        client.models.retrieve(preopen.LLM_MODEL)
+    except Exception as e:
+        print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
+        return 1
+    if not args.batch:
+        status = 0
+        for snap in todo:
+            attempt = llm.annotate_live(conn, client, snap)
+            print(f"  {snap['session_date']}: {attempt['status']}" + (f" - {attempt['error']}" if attempt.get("error") else ""))
+            status |= attempt["status"] not in ("ok", "contaminated")
+        return status
+    submitted = datetime.now(timezone.utc)
+    batch_id = llm.submit_batch(client, todo)
+    print(f"  batch {batch_id} submitted ({len(todo)} requests); waiting for it to end ...")
+    while client.messages.batches.retrieve(batch_id).processing_status != "ended":
+        time.sleep(llm.batch_poll_delay(submitted))
+    counts = llm.collect_batch(conn, client, batch_id, {s["snapshot_id"]: s for s in todo}, submitted)
+    print(f"  results: {counts}")
+    return 0 if set(counts) <= {"ok"} else 1
+
+
+def _components_line(members, feature):
+    marks = {True: "=", False: "x", None: "."}
+    out = []
+    for m in members:
+        c = m["components"][feature]
+        out.append(marks[None if not c["comparable"] else c["score"] == "1.000000"] if feature != "Chop Score"
+                   else ("." if not c["comparable"] else f"{float(c['score']):.2f}"))
+    return " ".join(f"{x:>4}" for x in out)
+
+
+def cmd_analogues(conn, args):
+    """One session's analogues: the features side by side; outcomes only with --outcomes."""
+    version = defs.PROFILES[args.profile].snapshot_version
+    snaps = store.list_snapshots(conn, args.date, args.date, version)
+    if not snaps:
+        print(f"No {version} snapshot for {args.date}.")
+        return 1
+    aset = store.latest_analogue_set(conn, snaps[0]["snapshot_id"], preopen.MATCHER_VERSION, defs.LABEL_VERSION)
+    if aset is None:
+        print(f"No {preopen.MATCHER_VERSION} analogue set for {args.date}; run 'match' first.")
+        return 1
+    members = aset["members"]
+    print(f"{args.date}: {len(members)} analogue(s) from {aset['pool_size']} earlier session(s) "
+          f"({preopen.MATCHER_VERSION}, {aset['data_mode']}); excluded {aset['excluded'] or 'none'}")
+    print(f"  {'':24} {'target':>14}  " + " ".join(f"{m['session_date'][5:]:>5}" for m in members))
+    print(f"  {'similarity / coverage':24} {'':>14}  " + " ".join(
+        f"{float(m['similarity']):5.1f}" for m in members))
+    print(f"  {'':24} {'':>14}  " + " ".join(f"{float(m['comparable_weight']):5.0f}" for m in members))
+    for feature in preopen.MATCH_WEIGHTS:
+        target = members[0]["components"][feature]["target"] if members else None
+        print(f"  {feature:24} {str(target):>14}  {_components_line(members, feature)}")
+    print("  (= match, x mismatch, . not comparable; Chop Score shows its similarity)")
+    print(f"  mean similarity {aset['mean_similarity']}")
+    if not args.outcomes:
+        print("  outcomes hidden (outcome-blind); add --outcomes to show them")
+        return 0
+    for target, t in aset["outcome_summary"]["targets"].items():
+        counts = ", ".join(f"{k} {v}" for k, v in t["counts"].items() if v)
+        smoothed = ", ".join(f"{k} {float(v):.2f}" for k, v in (t["smoothed"] or {}).items())
+        print(f"  {target:20} {t['status']:10} n={t['eligible']} ({counts or '-'}) smoothed: {smoothed or '-'}")
+    return 0
+
+
+def cmd_annotation_review_set(conn, args):
+    """Chooses and stores an outcome-blind review set of pre-open annotations (forecaster/review_set.py)."""
+    version = defs.PROFILES[args.profile].snapshot_version
+    candidates = []
+    for snap in store.list_snapshots(conn, "2000-01-01", "2100-01-01", version):
+        a = store.latest_annotation(conn, snap["snapshot_id"], preopen.RULES_PROTOCOL_VERSION)
+        if a is None or a["integrity_status"] != "ok":
+            continue
+        candidates.append({"snapshot_id": snap["snapshot_id"], "session_date": str(snap["session_date"]),
+                           "annotation_id": a["annotation_id"],
+                           "items": review_set.annotation_items(a, str(snap["session_date"]))})
+    if not candidates:
+        print(f"No {preopen.RULES_PROTOCOL_VERSION} annotations; run 'annotate' first.")
+        return 1
+    chosen, coverage = review_set.select_sessions(candidates, args.size)
+    by_id = {c["snapshot_id"]: c for c in candidates}
+    members = [{**c, "annotation_id": by_id[c["snapshot_id"]]["annotation_id"]} for c in chosen]
+    selection = {"rule": review_set.ANNOTATION_RULE, "size": args.size, "candidates": len(candidates), **coverage}
+    if not store.create_annotation_review_set(conn, args.name, preopen.RULES_PROTOCOL_VERSION, version, selection,
+                                              members):
+        print(f"Annotation review set {args.name} already exists; choose another name.")
+        return 1
+    print(f"{args.name}: {len(chosen)} of {len(candidates)} sessions, covering {coverage['covered']} of "
+          f"{coverage['items']} classes")
+    return 0
+
+
+def cmd_annotation_review_report(conn, args):
+    members = store.annotation_review_members(conn, args.name)
+    if not members:
+        print(f"No annotation review set {args.name}.")
+        return 1
+    verdicts = store.latest_annotation_verdicts(conn, args.name)
+    print(f"{args.name}: {len({v['snapshot_id'] for v in verdicts})} of {len(members)} sessions reviewed")
+    counts = {}
+    for v in verdicts:
+        counts.setdefault(v["field"], {"agree": 0, "disagree": 0, "unsure": 0})[v["verdict"]] += 1
+    for field, c in sorted(counts.items(), key=lambda kv: (-kv[1]["disagree"], kv[0])):
+        print(f"  {field:24} agree {c['agree']:3}  disagree {c['disagree']:3}  unsure {c['unsure']:3}")
+    for v in verdicts:
+        if v["verdict"] != "agree":
+            print(f"  {v['session_date']} {v['field']}: {v['verdict']} (shown {v['shown_value']!r})"
+                  + (f" - {v['note']}" if v["note"] else ""))
     return 0
 
 
@@ -220,6 +362,22 @@ def main(argv=None):
            single=False, ranged=False)
     common(sub.add_parser("annotate", help="Rule-based structure annotations of the stored snapshots"),
            single=False)
+    p = sub.add_parser("match", help="Analogue sets of every annotated snapshot")
+    common(p, single=False, ranged=False)
+    p.add_argument("--protocol", choices=sorted(PROTOCOLS), default="rules", help="Annotation protocol to match on")
+    p = sub.add_parser("annotate-llm", help="Claude structure annotations (needs ANTHROPIC_API_KEY)")
+    common(p)
+    p.add_argument("--batch", action="store_true", help="Use the Batch API (half price, results within 24 h)")
+    p.add_argument("--estimate", action="store_true", help="Only estimate the tokens and the cost")
+    p = sub.add_parser("analogues", help="One session's analogues (outcome-blind unless --outcomes)")
+    common(p, ranged=False)
+    p.add_argument("--outcomes", action="store_true", help="Also show the analogues' outcomes")
+    p = sub.add_parser("annotation-review-set", help="Choose an outcome-blind review set of pre-open annotations")
+    p.add_argument("--name", required=True)
+    p.add_argument("--size", type=int, default=25)
+    p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p = sub.add_parser("annotation-review-report", help="Summarise an annotation review set's verdicts")
+    p.add_argument("--name", required=True)
     common(sub.add_parser("show", help="Print one session's snapshot and latest outcome"), ranged=False)
     p = sub.add_parser("review-set", help="Choose and store a review set of diverse sessions")
     p.add_argument("--name", required=True, help="Review set name (immutable once stored)")
@@ -233,7 +391,9 @@ def main(argv=None):
         parser.error("give --date, or --start and --end")
     if args.command in ("outcomes", "annotate") and not (args.start and args.end):
         parser.error("give --start and --end")
-    if args.command == "show" and not args.date:
+    if args.command == "annotate-llm" and not args.date and not (args.start and args.end):
+        parser.error("give --date, or --start and --end")
+    if args.command in ("show", "analogues") and not args.date:
         parser.error("give --date")
 
     init_database(args.db)
@@ -242,7 +402,9 @@ def main(argv=None):
         register(conn)
         handler = {"register": lambda c, a: 0, "snapshot": cmd_snapshot, "outcomes": cmd_outcomes,
                    "backfill": cmd_backfill, "catch-up": cmd_catch_up, "annotate": cmd_annotate,
-                   "show": cmd_show, "review-set": cmd_review_set,
+                   "match": cmd_match, "annotate-llm": cmd_annotate_llm, "analogues": cmd_analogues,
+                   "annotation-review-set": cmd_annotation_review_set,
+                   "annotation-review-report": cmd_annotation_review_report, "show": cmd_show, "review-set": cmd_review_set,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

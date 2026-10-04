@@ -360,7 +360,7 @@ def _ma_fields(bars2: List[Bar], close: float, cutoff: datetime, T: Optional[int
     return out, m
 
 
-def _price_location(refs: Dict[str, Any], close: Optional[float]) -> Dict[str, Optional[str]]:
+def price_location(refs: Dict[str, Any], close: Optional[float]) -> Dict[str, Optional[str]]:
     out = {}
     for name in pre.PRICE_LOCATION["levels"]:
         ref = refs.get(name) or {}
@@ -374,7 +374,7 @@ def _price_location(refs: Dict[str, Any], close: Optional[float]) -> Dict[str, O
     return out
 
 
-def _event_risk(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def event_risk(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     ev = payload.get("events") or {}
     covered = set(ev.get("covered_sources") or [])
     missing = sorted(set(pre.EVENT_RISK["sources"]) - covered)
@@ -403,7 +403,7 @@ def _event_risk(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]
             _field(notes, evidence=ids, basis=f"{pre.EVENT_RISK_VERSION} window"))
 
 
-def _integrity(payload: Dict[str, Any], cutoff: datetime) -> List[str]:
+def after_cutoff(payload: Dict[str, Any], cutoff: datetime) -> List[str]:
     """Items after the cutoff that the snapshot must not hold."""
     bad = []
     for tf in ("1m",) + tuple(MINUTES):
@@ -432,18 +432,18 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     T = None if T is None else int(T)
     out: Dict[str, Any] = {"protocol_version": pre.RULES_PROTOCOL_VERSION, "annotator": "rules"}
 
-    bad = _integrity(p, cutoff)
+    bad = after_cutoff(p, cutoff)
     if bad:
         out.update(integrity_status="contaminated", fields={}, price_location={},
                    measurements={"after_cutoff": bad[:20]})
-        return _sealed(out)
+        return seal(out)
     if close is None:
         reason = f"no valid cutoff price ({cp.get('status')})"
         fields = {name: _missing(reason) for name in pre.FIELDS}
         fields["Higher-Timeframe Bias"] = _field(None, "not_covered", "not covered by nq_structure_rules_v1")
-        fields["Event Risk"], fields["Event Notes"] = _event_risk(p)
-        out.update(integrity_status="ok", fields=fields, price_location=_price_location(refs, None), measurements={})
-        return _sealed(out)
+        fields["Event Risk"], fields["Event Notes"] = event_risk(p)
+        out.update(integrity_status="ok", fields=fields, price_location=price_location(refs, None), measurements={})
+        return seal(out)
 
     bars5, bars2, bars15 = _bars(p, "5m"), _bars(p, "2m"), _bars(p, "15m")
     on_start = _ts(p["schedule"]["overnight_start_at"])
@@ -460,11 +460,11 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     fields["Higher-Timeframe Bias"] = _field(None, "not_covered", "not covered by nq_structure_rules_v1")
     ma_fields, ma_meas = _ma_fields([b for b in bars2 if b.start >= on_start], close, cutoff, T)
     fields.update(ma_fields)
-    fields["Event Risk"], fields["Event Notes"] = _event_risk(p)
+    fields["Event Risk"], fields["Event Notes"] = event_risk(p)
     fields = {name: fields[name] for name in pre.FIELDS}
 
     out.update(
-        integrity_status="ok", fields=fields, price_location=_price_location(refs, close),
+        integrity_status="ok", fields=fields, price_location=price_location(refs, close),
         measurements={
             "cutoff_price": close, "T": T,
             "overnight": {k: _r(v, 4) for k, v in on_stats.items()},
@@ -472,10 +472,10 @@ def annotate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
                            s.confirmed_at.strftime("%Y-%m-%dT%H:%MZ")] for s in sw],
             "moving_averages_2m": ma_meas,
         })
-    return _sealed(out)
+    return seal(out)
 
 
-def _sealed(annotation: Dict[str, Any]) -> Dict[str, Any]:
+def seal(annotation: Dict[str, Any]) -> Dict[str, Any]:
     """Validates the vocabularies and adds the output hash."""
     for name, f in annotation["fields"].items():
         allowed = pre.FIELDS[name]["values"]

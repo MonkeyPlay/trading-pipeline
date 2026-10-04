@@ -45,7 +45,7 @@ from features.calculations import (
     pre_open_levels,
 )
 
-_RESAMPLE_FREQ = {"5m": "5min", "15m": "15min", "30m": "30min"}
+_RESAMPLE_FREQ = {"2m": "2min", "5m": "5min", "15m": "15min", "30m": "30min"}
 
 # The instrument the page opens on; its current contract is preselected.
 DEFAULT_SYMBOL = "NQ"
@@ -53,7 +53,7 @@ DEFAULT_SYMBOL = "NQ"
 # Minutes shown either side of the regular session, drawn muted.
 _EXTRA = pd.Timedelta(minutes=15)
 _NY = "America/New_York"
-_BAR_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30}
+_BAR_MINUTES = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30}
 _GLOBEX_DAY_MINUTES = 23 * 60
 _MA_COLUMNS = ["tema", "ema_trend", "ema_trigger"]
 

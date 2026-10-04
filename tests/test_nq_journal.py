@@ -9,6 +9,7 @@ tests/test_dashboard_data.py for TEST_DATABASE_URL).
 """
 
 import hashlib
+import json
 import os
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -351,6 +352,96 @@ def test_rules_annotations_are_stored_once(market):
         store.save_annotation(conn, snap["snapshot_id"], {**out, "output_hash": "changed rules"})
     with pytest.raises(psycopg.Error, match="append-only"):
         conn.execute("DELETE FROM journal.structure_annotations;")
+
+
+@needs_db
+def test_analogue_sets_are_stored_once_per_pool_and_outcomes(market):
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster.journal import match
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    snaps = store.list_snapshots(conn, "2000-01-01", DAY, version)
+    target = snaps[-1]
+    aset = store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION)
+    assert aset is not None and aset["pool_size"] == len(snaps) - 1                 # catch-up made it
+    assert 1 <= len(aset["members"]) <= pre.TOP_ANALOGUES
+    assert all(m["session_date"] < DAY and float(m["comparable_weight"]) >= 75 for m in aset["members"])
+    assert [m["rank"] for m in aset["members"]] == list(range(1, len(aset["members"]) + 1))
+    assert set(aset["outcome_summary"]["targets"]) == set(pre.OUTCOME_TARGETS)
+    assert match(conn) == 0                                                          # nothing changed: nothing new
+    with pytest.raises(psycopg.Error, match="append-only"):
+        conn.execute("DELETE FROM journal.analogue_members;")
+
+
+class _Usage:
+    def to_json(self):
+        return '{"input_tokens": 1000, "output_tokens": 500}'
+
+
+class _Message:
+    def __init__(self, answer, model, stop_reason="end_turn"):
+        self.content = [type("Text", (), {"type": "text", "text": json.dumps(answer)})()]
+        self.model, self.stop_reason, self.usage, self.stop_details = model, stop_reason, _Usage(), None
+
+
+class _Client:
+    def __init__(self, message):
+        self.calls = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kw):
+                outer.calls.append(kw)
+                return message
+        self.beta = type("Beta", (), {"messages": _Messages()})()
+
+
+@needs_db
+def test_claude_annotation_attempts_are_kept_and_only_valid_ones_stored(market):
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster import structure_llm as llm
+    from tests.test_structure_llm import answer_from_rules
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    snap = store.list_snapshots(conn, DAY, DAY, version)[0]
+    answer = answer_from_rules(snap)
+    attempts = lambda: conn.execute("SELECT status, model, error FROM journal.annotation_attempts "
+                                    "ORDER BY finished_at;").fetchall()
+
+    fallback = llm.annotate_live(conn, _Client(_Message(answer, "claude-opus-4-8")), snap)
+    assert fallback["status"] == "invalid" and "fallback" in fallback["error"]
+    assert store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is None
+    refused = llm.annotate_live(conn, _Client(_Message({}, pre.LLM_MODEL, stop_reason="refusal")), snap)
+    assert refused["status"] == "refused"
+
+    client = _Client(_Message(answer, pre.LLM_MODEL))
+    ok = llm.annotate_live(conn, client, snap)
+    assert ok["status"] == "ok" and client.calls[0]["fallbacks"] == "default"
+    assert client.calls[0]["betas"] == [llm.FALLBACK_BETA]
+    stored = store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION)
+    assert stored["annotator"] == "llm" and stored["model"] == pre.LLM_MODEL
+    assert [r["status"] for r in attempts()] == ["invalid", "refused", "ok"]
+
+
+@needs_db
+def test_annotation_review_set_cli(market, capsys):
+    from database import journal_store as store
+    from scripts.nq_journal import main
+    conn = market[0]
+    assert main(["--db", DSN, "annotation-review-set", "--name", "t_pre", "--size", "2"]) == 0
+    assert main(["--db", DSN, "annotation-review-set", "--name", "t_pre"]) == 1      # immutable
+    members = store.annotation_review_members(conn, "t_pre")
+    assert len(members) == 2 and all(m["reasons"] for m in members)
+    store.save_annotation_verdicts(conn, "t_pre", members[0]["snapshot_id"], members[0]["annotation_id"], [
+        {"field": "Overnight Structure", "shown_value": "Uptrend", "verdict": "disagree", "note": "a V"}])
+    capsys.readouterr()
+    assert main(["--db", DSN, "annotation-review-report", "--name", "t_pre"]) == 0
+    out = capsys.readouterr().out
+    assert "1 of 2 sessions reviewed" in out and "disagree (shown 'Uptrend') - a V" in out
+    assert main(["--db", DSN, "analogues", "--date", DAY]) == 0
+    assert "outcomes hidden" in capsys.readouterr().out
 
 
 def test_earnings_rows_from_edgar_filings():

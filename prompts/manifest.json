@@ -40,5 +40,20 @@
       "bytes": 6139,
       "provenance": "The text of the guideline's Appendix A, pasted into a Claude Code session on 2026-10-04 and saved as received."
     }
+  ],
+  "runtime": [
+    {
+      "id": "nq_structure_llm_v1",
+      "path": "prompts/runtime/structure_annotation_v1.md",
+      "title": "Structure annotation - runtime prompt",
+      "derived_from": [
+        "A (A1, verbatim)",
+        "P1 section 4 (verbatim)",
+        "P1 section 3, trend timeframes (verbatim)"
+      ],
+      "sha256": "e58c8cfa9b70c92d352b58fb5a881613d11c82044a149c728798b2de9bc5a156",
+      "bytes": 9882,
+      "provenance": "Generated 2026-10-04 from the source files; the registered protocol nq_structure_llm_v1 records the same hash, so an edit needs a new protocol version."
+    }
   ]
 }

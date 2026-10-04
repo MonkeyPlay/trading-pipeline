@@ -10,11 +10,13 @@ once the session is final.
   annotate        the rule-based structure annotation of a stored snapshot
                   (forecaster/structure_rules.py; Claude takes this over later)
   record_outcome  labels a stored snapshot once its session is final
+  match           the structural analogues of every annotated snapshot and their
+                  outcomes (matching/structural.py), stored when new
   catch_up        every final session since the journal's first one that has no
                   snapshot yet, oldest first; then annotations and outcomes for
-                  stored snapshots without one, and a re-check of the outcomes of
-                  the sessions the collector re-downloads (the vendor revises
-                  recent bars)
+                  stored snapshots without one, a re-check of the outcomes of the
+                  sessions the collector re-downloads (the vendor revises recent
+                  bars), and the analogue sets
 
 catch_up never rebuilds a stored snapshot: a snapshot is frozen once taken. A new
 snapshot version catches up over the sessions the earlier versions hold.
@@ -22,6 +24,7 @@ scripts/nq_journal.py is the CLI; the IB collector runs catch_up after every
 full collection (collector/ib_collector.py), so no separate call is needed.
 """
 
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -34,12 +37,13 @@ from features import calendar as cal
 from features.nq_evidence import SnapshotError, build_snapshot
 from forecaster import labels_prompt_v2 as labels
 from forecaster import structure_rules
+from matching import structural as ms
 
 logger = logging.getLogger("nq_journal")
 
 
 def register(conn) -> None:
-    for rec in defs.all_records() + [preopen.rules_record()]:
+    for rec in defs.all_records() + [preopen.rules_record(), preopen.llm_record(), preopen.matcher_record()]:
         store.register_version(conn, rec)
 
 
@@ -80,11 +84,63 @@ def record_outcome(conn, snapshot: Dict[str, Any], now: Optional[datetime] = Non
     return revision
 
 
+def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RULES_PROTOCOL_VERSION) -> int:
+    """
+    Stores the analogue set of every snapshot of the profile's version annotated under
+    ``protocol``: its P1-rubric analogues among the earlier sessions, then their latest
+    outcomes and the earlier sessions' labels as the prior. Returns how many sets were
+    new - a set changes only with its pool or its analogues' outcome revisions.
+    """
+    version = defs.PROFILES[profile].snapshot_version
+    records, outcomes, modes = [], {}, {}
+    for snap in store.list_snapshots(conn, "2000-01-01", "2100-01-01", version):
+        a = store.latest_annotation(conn, snap["snapshot_id"], protocol)
+        if a is None:
+            continue
+        records.append(ms.Record(snap["snapshot_id"], str(snap["session_date"]), snap["symbol"],
+                                 snap["snapshot_version"], a["annotation_id"], a["protocol_version"],
+                                 a["integrity_status"], ms.features(a)))
+        outcomes[snap["snapshot_id"]] = store.latest_outcome(conn, snap["snapshot_id"], defs.LABEL_VERSION)
+        modes[snap["snapshot_id"]] = snap["data_mode"]
+    labels_of = {sid: (o["labels"] if o else None) for sid, o in outcomes.items()}
+    created = 0
+    for target in records:
+        if target.integrity_status != "ok":
+            continue
+        ranked = ms.rank(target, records)
+        prior = [labels_of[r.snapshot_id] for r in records
+                 if r.session_date < target.session_date and labels_of[r.snapshot_id]]
+        summary = ms.outcome_summary(ranked["selected"], labels_of, prior)
+        members = []
+        for m in ranked["selected"]:
+            r, o = m["record"], outcomes[m["record"].snapshot_id]
+            members.append({
+                "rank": m["rank"], "snapshot_id": r.snapshot_id, "annotation_id": r.annotation_id,
+                "session_date": r.session_date, "similarity": ms.show(m["similarity"]),
+                "comparable_weight": ms.show(m["comparable_weight"]),
+                "components": {f: {**c, "weight": str(c["weight"]), "score": ms.show(c["score"])}
+                               for f, c in m["components"].items()},
+                "outcome_revision": None if o is None else int(o["outcome_revision"]),
+                "outcome_computed_at": None if o is None else o["computed_at"]})
+        digest = hashlib.sha256(defs.canonical_json(
+            [[m["snapshot_id"], m["outcome_revision"]] for m in members]).encode()).hexdigest()
+        _, new = store.save_analogue_set(conn, {
+            "target_snapshot_id": target.snapshot_id, "target_annotation_id": target.annotation_id,
+            "matcher_version": preopen.MATCHER_VERSION, "label_version": defs.LABEL_VERSION,
+            "data_mode": modes[target.snapshot_id], "pool_size": ranked["pool_size"],
+            "pool_hash": ranked["pool_hash"], "excluded": ranked["excluded"], "outcome_digest": digest,
+            "mean_similarity": summary["mean_similarity"], "outcome_summary": summary}, members)
+        created += new
+    logger.info(f"Analogues ({preopen.MATCHER_VERSION}, {protocol}): {created} new set(s) of {len(records)} "
+                f"annotated session(s).")
+    return created
+
+
 def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] = None) -> Dict[str, Any]:
     """
     Brings the journal up to date (see the module docstring). Returns
     ``{'snapshots': taken, 'annotations': new, 'outcomes': recorded or re-checked,
-    'failed': [session dates]}``. Does nothing until the journal has a first
+    'analogue_sets': new, 'failed': [session dates]}``. Does nothing until the journal has a first
     snapshot (start it with ``nq_journal.py backfill``).
     """
     now = now or datetime.now(timezone.utc)
@@ -94,7 +150,7 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
     first = str(stored[0]["session_date"]) if stored else store.first_session(conn, defs.SYMBOL)
     if first is None:
         logger.info("Journal: no snapshots yet; start it with nq_journal.py backfill.")
-        return {"snapshots": 0, "annotations": 0, "outcomes": 0, "failed": []}
+        return {"snapshots": 0, "annotations": 0, "outcomes": 0, "analogue_sets": 0, "failed": []}
 
     have = {str(s["session_date"]) for s in stored}
     taken, failed = [], []
@@ -124,4 +180,6 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
     logger.info(f"Journal ({version}, {defs.LABEL_VERSION}): {len(taken)} new snapshot(s), {annotated} "
                 f"annotation(s), {recorded} outcome(s) recorded or re-checked"
                 + (f", {len(failed)} session(s) failed: {', '.join(failed)}" if failed else "") + ".")
-    return {"snapshots": len(taken), "annotations": annotated, "outcomes": recorded, "failed": failed}
+    sets = match(conn, profile)
+    return {"snapshots": len(taken), "annotations": annotated, "outcomes": recorded, "analogue_sets": sets,
+            "failed": failed}

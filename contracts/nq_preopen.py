@@ -17,6 +17,8 @@ API is in place.
   ANNOTATION_SCHEMA   the output both annotators produce - the rules now, Claude
                       (A1) later under its own protocol version - so the matcher and
                       the store take either
+  MATCH_WEIGHTS       P1 section 7's analogue rubric (MATCHER_VERSION), used by
+                      matching/structural.py
 
 Moving averages are the user's TradingView indicator "TEMA & Session Levels" on
 2-minute bars (nq_conv_v2): the long MA is EMA(100), the fast pair TEMA(14) then
@@ -28,8 +30,10 @@ separately and is never compared with a Claude annotation as if the two were the
 same protocol.
 """
 
+import hashlib
 import json
 import os
+from fractions import Fraction
 from typing import Any, Dict
 
 from contracts.nq_prompt_v2 import _record
@@ -207,3 +211,122 @@ ANNOTATION_SCHEMA = {
     "price_location": {"<level>": "Above | At | Below | null"},
     "measurements": "the numbers the classifications used",
 }
+
+
+# --------------------------------------------------------------------------
+# Structural analogue matching (guideline stage 2B / 2C)
+# --------------------------------------------------------------------------
+
+MATCHER_VERSION = "nq_match_p1_v1"
+
+# P1 section 7, exactly: feature -> weight in percent (exact fractions, they sum to 100).
+# "price:<level>" is the cutoff price Above / At / Below that session's own level.
+MATCH_WEIGHTS: Dict[str, Fraction] = {
+    "price:prev_rth_high": Fraction(6), "price:prev_rth_low": Fraction(6), "price:prev_rth_close": Fraction(6),
+    "price:on_high": Fraction(6), "price:on_low": Fraction(6),
+    "Overnight Structure": Fraction(25, 2), "Short-Term Structure": Fraction(25, 2),
+    "5-Minute Trend": Fraction(25, 4), "15-Minute Trend": Fraction(25, 4),
+    "Price vs Long MA": Fraction(25, 4), "Long MA Slope": Fraction(25, 4),
+    "Premarket Pattern": Fraction(5), "Chop Score": Fraction(5),
+    "Event Risk": Fraction(10),
+}
+MATCH_GROUPS = {
+    "Price location": [k for k in MATCH_WEIGHTS if k.startswith("price:")],
+    "Structure": ["Overnight Structure", "Short-Term Structure"],
+    "Trends and MA": ["5-Minute Trend", "15-Minute Trend", "Price vs Long MA", "Long MA Slope"],
+    "Final-hour condition": ["Premarket Pattern", "Chop Score"],
+    "Events": ["Event Risk"],
+}
+MIN_COMPARABLE = Fraction(75)          # percent of the weight that must be comparable
+TOP_ANALOGUES = 5
+SMOOTHING_PSEUDO_COUNT = 5
+
+# The P1 forecast targets whose analogue outcomes are counted (stage 1 label targets).
+OUTCOME_TARGETS = ["first_move_5m", "opening_type_15m", "direction_15m", "opening_bias_30m",
+                   "close_direction_rth", "session_type_rth", "first_level_tested"]
+
+MATCHER = {
+    "source": "P1 section 7",
+    "weights": {k: str(v) for k, v in MATCH_WEIGHTS.items()},
+    "groups": MATCH_GROUPS,
+    "similarity": "categorical equality scores 1, inequality 0; Chop Score max(0, 1 - |a - b| / 3); price "
+                  "location compares Above / At / Below, At within one point of each session's own level",
+    "comparable": "a feature counts when both sessions have a classified value under the same annotation "
+                  "protocol and snapshot version; missing or incompatible inputs are neither matches nor "
+                  "mismatches",
+    "coverage": "comparable_weight = the weights of the comparable features; candidates under 75 are rejected",
+    "score": "similarity = 100 x weighted matches / comparable_weight",
+    "pool": "earlier NQ sessions (never the target date or later) of the same snapshot version whose annotation "
+            "has the same protocol and integrity ok; fixed before any outcome is attached",
+    "selection": "the 5 highest similarities; ties by higher comparable_weight, then the more recent session, "
+                 "then the snapshot id; no minimum similarity",
+    "outcomes": {
+        "targets": OUTCOME_TARGETS,
+        "attach": "after selection, each analogue's latest outcome under the label version; an unavailable label "
+                  "leaves that target's denominator smaller - the analogue is never replaced",
+        "raw": "unweighted class counts and frequencies over the analogues with a label",
+        "mean_similarity": "unweighted mean of the selected similarities",
+        "smoothed": "(class_count + 5 x prior) / (eligible_count + 5), the prior from every earlier session's "
+                    "label under the same label version; no analogue label: prior only, said so",
+    },
+}
+
+
+def matcher_record() -> Dict[str, Any]:
+    return _record(MATCHER_VERSION, "matcher", MATCHER)
+
+
+# --------------------------------------------------------------------------
+# Claude structure annotation (Appendix A, A1)
+# --------------------------------------------------------------------------
+
+LLM_PROTOCOL_VERSION = "nq_structure_llm_v1"
+LLM_MODEL = "claude-opus-5-5"
+LLM_EFFORT = "high"
+LLM_MAX_TOKENS = 16000
+LLM_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
+                          "structure_annotation_v1.md")
+# The fields Claude annotates; Event Risk, Event Notes and the price location come from the
+# application's own rules (EV-v1, P1 section 7), so both protocols carry them identically.
+LLM_FIELDS = ["Overnight Structure", "Premarket Pattern", "Short-Term Structure", "5-Minute Trend",
+              "15-Minute Trend", "Higher-Timeframe Bias", "Price vs Long MA", "Long MA Slope", "Fast MA Alignment",
+              "Chop Score"]
+
+
+def llm_output_schema() -> Dict[str, Any]:
+    """The structure_annotation JSON schema Claude must return (structured outputs)."""
+    def field_schema(name):
+        values = FIELDS[name]["values"]
+        value = {"type": "integer", "enum": values} if name == "Chop Score" else {"type": "string", "enum": values}
+        return {"type": "object", "additionalProperties": False,
+                "required": ["value", "status", "reason", "evidence_ids", "basis"],
+                "properties": {"value": {"anyOf": [value, {"type": "null"}]},
+                               "status": {"type": "string", "enum": ["classified", "unavailable"]},
+                               "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                               "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                               "basis": {"type": "string"}}}
+    return {"type": "object", "additionalProperties": False,
+            "required": ["integrity_status", "contradictions", "fields"],
+            "properties": {"integrity_status": {"type": "string", "enum": list(INTEGRITY_STATUSES)},
+                           "contradictions": {"type": "array", "items": {"type": "string"}},
+                           "fields": {"type": "object", "additionalProperties": False, "required": LLM_FIELDS,
+                                      "properties": {f: field_schema(f) for f in LLM_FIELDS}}}}
+
+
+def llm_record() -> Dict[str, Any]:
+    with open(LLM_PROMPT, "rb") as f:
+        prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
+    return _record(LLM_PROTOCOL_VERSION, "annotation", {
+        "annotator": "llm", "model": LLM_MODEL, "effort": LLM_EFFORT, "max_tokens": LLM_MAX_TOKENS,
+        "prompt": {"path": "prompts/runtime/structure_annotation_v1.md", "sha256": prompt_sha256,
+                   "sources": ["A (A1)", "P1 section 4", "P1 section 3 (trend timeframes)"]},
+        "output_schema": llm_output_schema(), "fields": LLM_FIELDS,
+        "from_the_application": {"Event Risk": EVENT_RISK_VERSION, "Event Notes": EVENT_RISK_VERSION,
+                                 "price_location": "P1 section 7, At within one point"},
+        "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
+                    "the three moving averages, and the confirmed 2/2 swing points on 5m bars (ids inside the "
+                    "bundle)",
+        "validation": "values in the vocabularies, null exactly when unavailable (with a reason), every evidence "
+                      "id inside the bundle; an answer from any other model than LLM_MODEL (a server-side "
+                      "fallback) is kept as an attempt, not as an annotation of this protocol",
+    })
