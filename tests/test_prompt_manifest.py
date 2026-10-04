@@ -1,5 +1,5 @@
 # tests/test_prompt_manifest.py
-"""The source prompts in prompts/source/ are the files prompts/manifest.json hashed."""
+"""The sources in prompts/source/ (P1, P2 and the guideline's Appendix A) are the files prompts/manifest.json hashed."""
 
 import hashlib
 import json
@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def test_source_prompts_match_their_manifest_hashes():
     manifest = json.load(open(os.path.join(ROOT, "prompts", "manifest.json")))
-    assert {s["id"] for s in manifest["sources"]} == {"P1", "P2"}
+    assert {s["id"] for s in manifest["sources"]} == {"P1", "P2", "A"}
     for s in manifest["sources"]:
         data = open(os.path.join(ROOT, s["path"]), "rb").read()
         assert hashlib.sha256(data).hexdigest() == s["sha256"], f"{s['path']} changed since it was hashed"

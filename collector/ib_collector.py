@@ -912,16 +912,27 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
 
 def update_journal(dsn) -> bool:
     """
-    Brings the NQ prompt-v2 journal up to date after a collection: a snapshot and
-    outcome for every final session it lacks (forecaster/journal.py). A session
-    whose snapshot cannot be built is logged and retried next run. False only when
-    the update itself failed; the collected bars are stored either way.
+    Brings the NQ prompt-v2 journal up to date after a collection: reloads the
+    economic calendar and the material earnings releases (database/events.py,
+    database/earnings.py), then a snapshot, structure annotation and outcome for
+    every final session the journal lacks (forecaster/journal.py). A failed
+    earnings fetch is logged and leaves Event Risk unavailable for the sessions it
+    would have covered; a session whose snapshot cannot be built is logged and
+    retried next run. False only when the journal update itself failed; the
+    collected bars are stored either way.
     """
     try:
         # Imported here so that a problem in the journal code can never stop a collection.
+        from database import earnings, events
         from forecaster.journal import catch_up
         conn = get_db_connection(dsn)
         try:
+            events.load(conn)
+            try:
+                earnings.refresh(conn)
+            except Exception as e:
+                logger.warning(f"Earnings releases not refreshed ({e}); Event Risk stays unavailable for the "
+                               f"sessions they would cover. Retry with: python -m database.earnings")
             catch_up(conn)
         finally:
             conn.close()

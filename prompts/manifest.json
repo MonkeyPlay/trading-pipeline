@@ -28,6 +28,17 @@
       "bytes": 23008,
       "provenance": "Confirmed by the prompts' author on 2026-10-04 as the original file. Saved on 2026-10-03 and renamed after its title; contents unchanged since.",
       "byte_exact_original": true
+    },
+    {
+      "id": "A",
+      "path": "prompts/source/GUIDELINE APPENDIX A - RUNTIME PROMPTS.md",
+      "title": "Appendix A Proposed runtime prompts",
+      "document": "Nasdaq 100 Forecast Implementation Guideline, 28 September 2026, implementation proposal version 1",
+      "contents": "A1 structure annotation, A2 forecast synthesis, A3 optional supplementary outcome annotation, A4 provider-neutral interface sketch",
+      "status": "Proposed implementation prompts, not P1/P2 text. Runtime prompts adapted from them go under prompts/runtime/, each under its own version identifier.",
+      "sha256": "8a7813a15dd696b113bf340e7eaa9c0059856d62d82561144ad35eadca70a1c9",
+      "bytes": 6139,
+      "provenance": "The text of the guideline's Appendix A, pasted into a Claude Code session on 2026-10-04 and saved as received."
     }
   ]
 }

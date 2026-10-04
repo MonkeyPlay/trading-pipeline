@@ -10,6 +10,8 @@ appends; the database rejects UPDATE, DELETE and TRUNCATE.
                      convention version, source payload hash)
   save_outcome       the next outcome_revision when the recomputed labels,
                      measurements or source differ from the latest, else the latest
+  save_annotation    a structure annotation (migration 0011), idempotent on its
+                     output; a rule-based protocol may annotate a snapshot once
 """
 
 import hashlib
@@ -207,3 +209,59 @@ def latest_verdicts(conn: Database, name: str) -> List[Dict[str, Any]]:
     rows = conn.execute("SELECT * FROM journal.review_latest WHERE review_set = %s ORDER BY session_date, field;",
                         (name,)).fetchall()
     return [dict(zip(r.keys(), r), snapshot_id=str(r["snapshot_id"])) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# Structure annotations (migration 0011)
+# --------------------------------------------------------------------------
+
+def save_annotation(conn: Database, snapshot_id: str, annotation: Dict[str, Any],
+                    model: Optional[str] = None) -> Tuple[str, bool]:
+    """
+    Stores one structure annotation (contracts.nq_preopen.ANNOTATION_SCHEMA).
+    Returns ``(annotation_id, created)``; the same output again returns the stored
+    one. A rule-based protocol is deterministic, so a different output for a
+    snapshot it already annotated raises VersionConflict: changed rules need a new
+    protocol version.
+    """
+    protocol = annotation["protocol_version"]
+    with conn:
+        _lock(conn, "journal.structure_annotations", snapshot_id, protocol)
+        stored = conn.execute(
+            "SELECT annotation_id, output_hash FROM journal.structure_annotations "
+            "WHERE snapshot_id = %s AND protocol_version = %s;", (snapshot_id, protocol)).fetchall()
+        for row in stored:
+            if row["output_hash"] == annotation["output_hash"]:
+                return str(row["annotation_id"]), False
+        if stored and annotation["annotator"] == "rules":
+            raise VersionConflict(
+                f"{protocol} already annotated snapshot {snapshot_id} differently. Rule changes need a new "
+                f"protocol version.")
+        annotation_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO journal.structure_annotations (annotation_id, snapshot_id, protocol_version, annotator, "
+            "model, integrity_status, fields, price_location, measurements, output_hash) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            (annotation_id, snapshot_id, protocol, annotation["annotator"], model, annotation["integrity_status"],
+             canonical_json(annotation["fields"]), canonical_json(annotation["price_location"]),
+             canonical_json(annotation["measurements"]), annotation["output_hash"]))
+    return annotation_id, True
+
+
+def latest_annotation(conn: Database, snapshot_id: str, protocol_version: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM journal.structure_annotations WHERE snapshot_id = %s AND protocol_version = %s "
+        "ORDER BY created_at DESC LIMIT 1;", (snapshot_id, protocol_version)).fetchone()
+    if row is None:
+        return None
+    d = dict(zip(row.keys(), row))
+    for key in ("fields", "price_location", "measurements"):
+        d[key] = _load(d[key])
+    d["annotation_id"], d["snapshot_id"] = str(d["annotation_id"]), str(d["snapshot_id"])
+    return d
+
+
+def first_session(conn: Database, symbol: str = "NQ") -> Optional[str]:
+    """The earliest session any snapshot version holds for ``symbol``."""
+    row = conn.execute("SELECT min(session_date) FROM journal.snapshots WHERE symbol = %s;", (symbol,)).fetchone()
+    return None if row[0] is None else str(row[0])

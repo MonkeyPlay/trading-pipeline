@@ -6,8 +6,10 @@ Loads the economic calendar into ``economic_events`` and
 
   data/economic_calendar.csv           scheduled releases as the agencies published
                                        them: FOMC decisions and minutes (fed); CPI,
-                                       Employment Situation, PPI and JOLTS (bls),
-                                       the 2025 shutdown rescheduling included
+                                       Employment Situation, PPI and JOLTS (bls); GDP
+                                       and Personal Income and Outlays (bea); advance
+                                       retail sales (census) - the 2025 shutdown
+                                       rescheduling included
   data/economic_calendar_coverage.csv  per source, the days it covers
   ism_rule                             ISM Manufacturing (first business day of the
                                        month) and Services (third) at 10:00 ET, by
@@ -16,9 +18,12 @@ Loads the economic calendar into ``economic_events`` and
 
 Within a source's coverage, a day without a row of it had none of its releases;
 outside every coverage the calendar is missing, which consumers report as such,
-never as "no event". GDP, PCE and retail sales are not included: their 2025
-dates could not be sourced reliably. The CSVs are the source of truth: loading
-is idempotent, and a release whose date changed in the CSV replaces its row.
+never as "no event". BEA's past releases are at the times its release archive
+shows them published (its 2025 schedule still lists the cancelled Q3 advance GDP),
+later ones from its schedule; retail sales from Census's retail release schedule.
+Material Nasdaq-100 earnings come from SEC EDGAR (database/earnings.py). The CSVs
+are the source of truth: loading is idempotent, and a release whose date changed in
+the CSV replaces its row.
 
     python -m database.events                 # load, then print what is covered
 """

@@ -169,7 +169,7 @@ def test_research_snapshot_contents(market):
 def test_operational_snapshot_is_a_different_version_with_earlier_bars(market):
     conn, _, _ = market
     snap = build_snapshot(conn, DAY, "operational_0927")
-    assert snap.snapshot_version == "nq_evidence_v1_o0927"
+    assert snap.snapshot_version == "nq_evidence_v2_o0927"
     assert snap.payload["bars"]["1m"][-1][0] == "2026-06-12T13:26:00Z"
     assert snap.payload["bars"]["2m"][-1][0] == "2026-06-12T13:24:00Z"
 
@@ -280,7 +280,7 @@ def test_cli_backfill_and_show(market, capsys):
     assert main(["--db", DSN, "backfill", "--date", "2026-06-10"]) == 0
     assert main(["--db", DSN, "show", "--date", "2026-06-10"]) == 0
     printed = capsys.readouterr().out
-    assert "Realised First Move" in printed and "nq_evidence_v1_r0929" in printed
+    assert "Realised First Move" in printed and "nq_evidence_v2_r0929" in printed
     assert main(["--db", DSN, "show", "--date", "2026-06-10", "--profile", "operational_0927"]) == 1
 
 
@@ -333,6 +333,53 @@ def test_catch_up_takes_every_final_session_once(market):
     assert all(store.latest_outcome(conn, s["snapshot_id"], defs.LABEL_VERSION) for s in snaps.values())
     assert all(snaps[d]["snapshot_id"] == s["snapshot_id"] for d, s in had.items())   # stored ones stay frozen
     assert catch_up(conn, now=final)["snapshots"] == 0                  # nothing taken twice
+
+
+@needs_db
+def test_rules_annotations_are_stored_once(market):
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster.structure_rules import annotate
+    conn = market[0]
+    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+    snap = store.list_snapshots(conn, DAY, DAY, version)[0]
+    stored = store.latest_annotation(conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION)   # catch-up wrote it
+    assert stored is not None and stored["integrity_status"] == "ok" and set(stored["fields"]) == set(pre.FIELDS)
+    out = annotate(snap)
+    assert store.save_annotation(conn, snap["snapshot_id"], out) == (stored["annotation_id"], False)
+    with pytest.raises(store.VersionConflict):
+        store.save_annotation(conn, snap["snapshot_id"], {**out, "output_hash": "changed rules"})
+    with pytest.raises(psycopg.Error, match="append-only"):
+        conn.execute("DELETE FROM journal.structure_annotations;")
+
+
+def test_earnings_rows_from_edgar_filings():
+    from database.earnings import covered_to, earnings_rows
+    filings = {"form": ["8-K", "4", "8-K", "8-K"], "items": ["2.02,9.01", "", "7.01", "2.02"],
+               "acceptanceDateTime": ["2026-07-30T20:30:28.000Z", "2026-07-29T21:00:00.000Z",
+                                      "2026-07-01T12:00:00.000Z", "2025-05-01T20:30:21.000Z"],
+               "accessionNumber": ["a1", "a2", "a3", "a4"]}
+    rows = earnings_rows("AAPL", filings, date(2025, 6, 1))
+    assert [(r["event_key"], r["scheduled_at"], r["source"]) for r in rows] == [
+        ("AAPL:a1", datetime(2026, 7, 30, 20, 30, 28, tzinfo=UTC), "sec_earnings")]   # 16:30 ET
+    assert covered_to(datetime(2026, 10, 2, 13, 28, tzinfo=UTC)) == date(2026, 10, 1)   # 09:28 ET: before the cutoff
+    assert covered_to(datetime(2026, 10, 2, 13, 29, tzinfo=UTC)) == date(2026, 10, 2)
+
+
+@needs_db
+def test_snapshot_events_run_from_the_previous_close_and_earnings_stop_at_the_cutoff(market):
+    from database.earnings import load
+    conn = market[0]
+    at = lambda day, hhmm: cal.ny_instant(date.fromisoformat(day), time(*map(int, hhmm.split(":"))))
+    rows = [{"source": "sec_earnings", "event_key": key, "scheduled_at": at(day, hhmm), "name": f"{key} earnings",
+             "tier": "moderate", "country": "US"}
+            for key, day, hhmm in (("AAPL:prev-evening", PREV, "16:30"), ("NVDA:after-cutoff", DAY, "16:05"),
+                                   ("MSFT:before-close", PREV, "15:00"))]
+    assert load(conn, rows, at(DAY, "18:00"), since=date(2026, 6, 1)) == {"events": 3, "coverage": 1}
+    events = build_snapshot(conn, DAY).payload["events"]
+    assert "sec_earnings" in events["covered_sources"]
+    assert [e["event_key"] for e in events["events"] if e["source"] == "sec_earnings"] == ["AAPL:prev-evening"]
+    assert load(conn, rows, at(DAY, "18:00"), since=date(2026, 6, 1)) == {"events": 0, "coverage": 0}
 
 
 @needs_db

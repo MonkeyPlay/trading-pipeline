@@ -9,6 +9,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py outcomes --start 2026-06-01 --end 2026-09-25
     python scripts/nq_journal.py backfill --start 2026-06-01 --end 2026-09-25  # snapshot + outcome, in order
     python scripts/nq_journal.py catch-up                                   # every final session not yet stored
+    python scripts/nq_journal.py annotate --start 2025-09-01 --end 2026-10-02  # rule-based structure annotations
     python scripts/nq_journal.py show --date 2026-09-24                     # snapshot + P2's 40-field record
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
@@ -39,7 +40,8 @@ from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.nq_evidence import SnapshotError
 from forecaster import review_set
-from forecaster.journal import catch_up, record_outcome, register, take_snapshot
+from contracts import nq_preopen as preopen
+from forecaster.journal import annotate, catch_up, record_outcome, register, take_snapshot
 from forecaster.outcome_display import p2_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -89,6 +91,16 @@ def cmd_backfill(conn, args):
     return status
 
 
+def cmd_annotate(conn, args):
+    """The rule-based structure annotation of every stored snapshot in the range (idempotent)."""
+    version = defs.PROFILES[args.profile].snapshot_version
+    snaps = store.list_snapshots(conn, args.start, args.end, version)
+    for snap in snaps:
+        annotate(conn, snap)
+    logger.info(f"Annotations recorded or confirmed for {len(snaps)} {version} snapshot(s).")
+    return 0
+
+
 def cmd_catch_up(conn, args):
     """Every final session since the journal's first that has no snapshot yet, then outcomes (catch_up)."""
     return 1 if catch_up(conn, args.profile)["failed"] else 0
@@ -114,6 +126,16 @@ def cmd_show(conn, args):
     events = p["events"]
     print(f"  events: {', '.join(e['time_et'] + ' ' + e['name'] for e in events['events']) or 'none'}"
           + ("" if events["covered_sources"] else " (no calendar coverage)"))
+    annotation = store.latest_annotation(conn, snap["snapshot_id"], preopen.RULES_PROTOCOL_VERSION)
+    if annotation is None:
+        print(f"  no {preopen.RULES_PROTOCOL_VERSION} annotation yet")
+    else:
+        print(f"  pre-open structure ({preopen.RULES_PROTOCOL_VERSION}, {annotation['integrity_status']}):")
+        for prop in (p for p in preopen.FIELDS if p in annotation["fields"]):
+            f = annotation["fields"][prop]
+            shown = f["value"] if f["value"] is not None else f"Unavailable ({f['reason']})"
+            print(f"    {prop:22} {shown}")
+        print("    price location: " + ", ".join(f"{k} {v}" for k, v in annotation["price_location"].items()))
     outcome = store.latest_outcome(conn, snap["snapshot_id"], defs.LABEL_VERSION)
     if outcome is None:
         print("  no outcome recorded yet")
@@ -196,6 +218,8 @@ def main(argv=None):
     common(sub.add_parser("backfill", help="Snapshot + outcome, session by session"))
     common(sub.add_parser("catch-up", help="Snapshot + outcome for every final session not yet stored"),
            single=False, ranged=False)
+    common(sub.add_parser("annotate", help="Rule-based structure annotations of the stored snapshots"),
+           single=False)
     common(sub.add_parser("show", help="Print one session's snapshot and latest outcome"), ranged=False)
     p = sub.add_parser("review-set", help="Choose and store a review set of diverse sessions")
     p.add_argument("--name", required=True, help="Review set name (immutable once stored)")
@@ -207,7 +231,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command in ("snapshot", "backfill") and not args.date and not (args.start and args.end):
         parser.error("give --date, or --start and --end")
-    if args.command == "outcomes" and not (args.start and args.end):
+    if args.command in ("outcomes", "annotate") and not (args.start and args.end):
         parser.error("give --start and --end")
     if args.command == "show" and not args.date:
         parser.error("give --date")
@@ -217,7 +241,8 @@ def main(argv=None):
     try:
         register(conn)
         handler = {"register": lambda c, a: 0, "snapshot": cmd_snapshot, "outcomes": cmd_outcomes,
-                   "backfill": cmd_backfill, "catch-up": cmd_catch_up, "show": cmd_show, "review-set": cmd_review_set,
+                   "backfill": cmd_backfill, "catch-up": cmd_catch_up, "annotate": cmd_annotate,
+                   "show": cmd_show, "review-set": cmd_review_set,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

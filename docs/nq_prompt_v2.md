@@ -13,8 +13,12 @@ prompt **P2** (prompt version 2.1, definitions NQ-v2, overnight classification
 ON-v1, revised 2026-09-15), in `prompts/source/` (renamed after their titles; the
 manifest keeps the original file names), hashed in `prompts/manifest.json` (a test
 checks the hashes). Their author confirmed them as the original files on
-2026-10-04 (`byte_exact_original: true`). Adapted runtime prompts (stage 3) belong
-in `prompts/runtime/`.
+2026-10-04 (`byte_exact_original: true`). The guideline's **Appendix A** - its
+proposed runtime prompts A1 structure annotation, A2 forecast synthesis, A3
+supplementary outcome annotation and the A4 interface sketch - is beside them
+(`GUIDELINE APPENDIX A - RUNTIME PROMPTS.md`, pasted 2026-10-04, also hashed).
+Runtime prompts adapted from it belong in `prompts/runtime/`, each under its own
+version identifier.
 
 ## What is built
 
@@ -37,9 +41,12 @@ in `prompts/runtime/`.
 | `nq_prompt_v2_1_impl3` | labels | impl2 plus the supplementary descriptors of P2 sections 5 and 7 (MP-v1) and the first 15-minute pattern (FP-v1) - current, recorded for the 269 sessions |
 | `nq_prompt_v2_1_impl2` | labels | NQ-v2 scored classifications, 30-minute bias, first level tested and the LO-v1 level outcomes (P2 sections 2-6) |
 | `nq_prompt_v2_1_impl1` | labels | the first six targets only |
-| `nq_conv_v1` | convention | what P1/P2 leave open (below) |
-| `nq_evidence_v1_r0929` | snapshot | research profile, cutoff 09:29:00 ET |
-| `nq_evidence_v1_o0927` | snapshot | operational profile, cutoff 09:27:00 ET |
+| `nq_conv_v2` | convention | what P1/P2 leave open (below): v1 plus P1 section 8's events (EV-v1) and the TradingView moving averages - current |
+| `nq_conv_v1` | convention | v1: events of the session's calendar day only, no moving averages |
+| `nq_evidence_v2_r0929` | snapshot | research profile, cutoff 09:29:00 ET, under `nq_conv_v2` - current |
+| `nq_evidence_v2_o0927` | snapshot | operational profile, cutoff 09:27:00 ET, under `nq_conv_v2` |
+| `nq_evidence_v1_r0929` / `_o0927` | snapshot | the same under `nq_conv_v1`; the 269 stored v1 snapshots and the review set stay as they are |
+| `nq_structure_rules_v1` | annotation | the rule-based pre-open structure annotation (stage 2, below) |
 
 Each label version keeps every rule of the one before unchanged (checked on the
 stored sessions) and adds targets; the earlier versions stay with the outcomes
@@ -125,7 +132,7 @@ fall-through to a lower rule. Outcomes are computed two hours after the schedule
 close and become a new `outcome_revision` only when they change (a vendor
 revision, say); earlier revisions stay.
 
-## Conventions (`nq_conv_v1`)
+## Conventions (`nq_conv_v1`; `nq_conv_v2` adds events and moving averages)
 
 Decisions P1/P2 leave to the implementation, recorded in the convention and label
 definitions:
@@ -146,7 +153,7 @@ definitions:
   starting 18:00 exactly; the cutoff price is the last complete 1m close if at most
   5 minutes old. **Price at 09:29 is always unavailable** (neither profile observes
   09:29:00-09:29:59) and **premarket high / low are unavailable** (no premarket
-  window defined). Moving averages are not configured.
+  window defined). Moving averages: none in v1; v2 adds the TradingView lines (stage 2 below).
 - **First level tested (P2 section 6):** the candidates are the snapshot's ON high
   / low, previous-RTH high / low / close, overnight open, and the **frozen cutoff
   VWAP** - sum(hlc3 x volume) / sum(volume) over the snapshot's archived overnight
@@ -299,7 +306,8 @@ python scripts/nq_journal.py review-report --name stage1_review_v1  # agreement 
 [forecaster/review_set.py](../forecaster/review_set.py): greedy coverage of every
 target's labels and unavailable reasons (142 classes, all covered by the first 15
 picks), early closes, contract rolls and calendar quarters, rare classes first;
-the other 10 spread the set over the year. The dashboard's **Review** page shows
+the other 10 spread the set over the year. Reviewed 2026-10-04: all 25 sessions, every field agreed,
+nothing flagged. The dashboard's **Review** page shows
 each session's chart with the frozen levels the labels used (previous RTH close /
 high / low, ON high / low, the cutoff VWAP) and O +/- T, beside P2's 40-field
 record; every field counts as agreed unless marked disagree or unsure, with a
@@ -308,11 +316,87 @@ note. Verdicts are append-only rows (migration 0010, `journal.review_verdicts`;
 labels mean what P1 / P2 say - not whether anything predicts them. Pre-open
 classifications join the review with stage 2.
 
+## Stage 2: pre-open structure (2A, in progress)
+
+Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_preopen.py).
+
+- **Fields and vocabularies.** The P1 properties an annotation fills: Overnight
+  Structure (ON-v1), Premarket Pattern, Short-Term Structure, 5- and 15-Minute
+  Trend, Higher-Timeframe Bias, Price vs Long MA, Long MA Slope, Fast MA
+  Alignment, Chop Score, Event Risk and Event Notes. Values are P1's own lists
+  where it gives one, otherwise the live Notion Weekday Trades options P1 points to,
+  copied read-only to [contracts/weekday_trades_schema.json](../contracts/weekday_trades_schema.json)
+  (fetched 2026-10-04). Price location (P1 section 7) is the cutoff price Above /
+  At / Below each of the five levels, At within one point.
+- **Moving averages** (`nq_conv_v2`): the user's TradingView indicator on 2-minute
+  bars - the long MA is EMA(100), the fast pair TEMA(14) + SMA(3) (faster) over
+  EMA(14) + SMA(3) (slower). Computed from the snapshot's 2m bars, seeded at
+  18:00; by the final pre-open hour the seed weighs under 0.05% in the EMA(100).
+- **Event Risk (EV-v1)** meets P1 section 8 with a source for each part:
+  - Scheduled releases: FOMC decisions and minutes, CPI, payrolls, PPI and JOLTS
+    (existing), ISM by rule, and now **BEA** GDP and Personal Income and Outlays
+    (PCE) and **Census** advance retail sales
+    ([data/economic_calendar.csv](../data/economic_calendar.csv)). BEA's past
+    releases are taken at the times its release archive shows them published - its
+    2025 schedule still lists the Q3 advance GDP the shutdown cancelled - and later
+    ones from its schedule; retail sales from Census's retail release schedule
+    (which has the February and March 2026 reports its indicator calendar lacks).
+  - Material Nasdaq-100 earnings: the ten largest constituents' 8-K Item 2.02
+    filings from SEC EDGAR at their acceptance time
+    ([database/earnings.py](../database/earnings.py); set `SEC_USER_AGENT` to
+    "name e-mail" as SEC asks). Coverage reaches a date only when a fetch ran after
+    its cutoff; a failed fetch records none.
+  - The rule: High-risk for a high-tier release from the previous session's close
+    to the session's close; else Reduced-confidence for a moderate release or a
+    material earnings release published since the previous close (single-name
+    repricing at the open); else Normal - only when every source covers the
+    session, otherwise unavailable. Event Notes list each event with its ET time,
+    released pre-open or upcoming. Unscheduled shocks have no source and are not
+    detected; P1 bases Normal on scheduled risk.
+  - Snapshots (`nq_evidence_v2_*`) hold scheduled releases from the previous
+    session's close to the end of the day and earnings only up to the cutoff.
+- **Rule-based structure annotation** (`nq_structure_rules_v1`,
+  [forecaster/structure_rules.py](../forecaster/structure_rules.py)): the stand-in
+  for the Claude structure annotation (Appendix A, A1) until the API is in place.
+  It reads one frozen snapshot only and returns the shape A1 will return - per
+  field a value or null with a reason, a status, evidence ids inside the snapshot
+  and a short basis with the numbers - plus the price location and the numeric
+  layer (2/2 swing points on 5m bars confirmed by the cutoff, the moving averages,
+  window statistics) in `measurements`. A target-session item after the cutoff
+  makes it `contaminated`, with no classifications. Its thresholds are a trial
+  convention (`RULES`), not P1's text: P1 does not quantify dominant, meaningful,
+  flat or frequent. Higher-Timeframe Bias is not covered (not a matcher input).
+  On the 274 stored sessions it gives Overnight Structure Mixed 80, Uptrend 54,
+  V-reversal 48, Downtrend 34, Inverted-V 33, Range 25.
+- **Store**: `journal.structure_annotations` (migration 0011, append-only), one row
+  per snapshot, protocol and output; a rules protocol may annotate a snapshot only
+  once. The collector's journal step loads the calendar, refreshes the earnings and
+  annotates every snapshot without an annotation.
+
+**When Claude takes over**, it gets its own protocol version (e.g.
+`nq_structure_llm_v1`) with the A1 prompt under `prompts/runtime/`, receives the
+snapshot plus the numeric layer as evidence, and writes the same shape to the same
+table (`annotator = 'llm'`, `model` recorded). The two protocols are never
+compared as if they were one: the matcher takes annotations of one protocol only.
+
+```bash
+python -m database.events                                   # the calendar (also run by the collector)
+python -m database.earnings                                 # earnings from EDGAR (also run by the collector)
+python scripts/nq_journal.py annotate --start 2025-09-01 --end 2026-10-02
+python scripts/nq_journal.py show --date 2026-10-02         # snapshot, annotation and outcome
+```
+
+The first collector run after this change catches up the v2 snapshots, their
+annotations and outcomes over every session the v1 journal holds (a few minutes).
+
 ## Not built yet
+
+- Stage 2B-2D: the structural matcher with P1's weights, analogue sets, outcome
+  attachment and the dashboard view; the outcome-blind review of the annotations.
+- The Claude structure annotation (needs `ANTHROPIC_API_KEY`).
 
 - The operational profile (09:27) is registered but not caught up automatically;
   run `backfill --profile operational_0927` when live runs need it.
 - Live capture with receipt provenance, the 09:29:50 deadline and the
   inference-attempt log (needs a real-time feed again; stage 3).
-- Your verdicts on `stage1_review_v1` (the set and the page are ready).
 - Scoring predictions against outcomes (nothing predicts yet).

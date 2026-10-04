@@ -156,7 +156,9 @@ python -m collector.ib_collector --days 30 --full                 # re-download 
 ```
 
 With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`, then brings
-the NQ prompt-v2 journal up to date: a snapshot and outcome for every final session it
+the NQ prompt-v2 journal up to date: it reloads the economic calendar, fetches the material
+Nasdaq-100 earnings releases from SEC EDGAR (set `SEC_USER_AGENT` to "name e-mail"), and
+stores a snapshot, pre-open structure annotation and outcome for every final session it
 does not hold yet ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal`
 skips that; a `--symbol` subset or a pinned `--expiry` skips it too.
 
@@ -341,8 +343,10 @@ python -m database.events        # load data/economic_calendar.csv (+ ISM by rul
 It holds FOMC decisions and minutes (federalreserve.gov), BLS CPI, Employment Situation, PPI
 and JOLTS as released - the October-November 2025 shutdown rescheduling included - and the
 ISM PMIs at 10:00 on the first / third exchange session of the month (ISM's own calendar needs
-a login). GDP, PCE and retail sales are not included: their 2025 dates could not be sourced
-reliably. `data/economic_calendar_coverage.csv` says which days each source covers; within it
+a login), BEA GDP and Personal Income and Outlays (PCE) at the times BEA's release archive
+shows them published, and Census advance retail sales from its retail release schedule.
+Material Nasdaq-100 earnings come from SEC EDGAR (`python -m database.earnings`).
+`data/economic_calendar_coverage.csv` says which days each source covers; within it
 a day without a release had none, outside it the calendar is missing - never "no event". The
 CSVs are the source of truth: when the agencies publish the next year's schedules (BLS in the
 autumn), add the rows, extend the coverage, and load again; a release whose date changed

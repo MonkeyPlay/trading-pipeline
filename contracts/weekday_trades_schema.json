@@ -1,0 +1,683 @@
+{
+ "description": "Option lists of the Notion database 'Weekday Trades' (NASDAQ 100 Trading Journal), the live schema P1 refers to ('use the live allowed labels'). A read-only copy: property names, types, descriptions and select options; option colours and URLs left out.",
+ "database_url": "https://app.notion.com/p/0d19c1ba0ebc4c6594128f584712f418",
+ "data_source": "collection://ce53fb75-7bfb-4c75-8860-e3e898dda207",
+ "fetched": "2026-10-04",
+ "properties": {
+  "14-Day Daily ATR": {
+   "type": "number"
+  },
+  "15-Minute Trend": {
+   "type": "select",
+   "options": [
+    "Bearish",
+    "Neutral-bearish",
+    "Neutral",
+    "Neutral-bullish",
+    "Bullish"
+   ]
+  },
+  "15m Direction Match": {
+   "type": "formula"
+  },
+  "2-Min ATR at 09:29": {
+   "type": "number"
+  },
+  "5-Minute Trend": {
+   "type": "select",
+   "options": [
+    "Bearish",
+    "Neutral-bearish",
+    "Neutral",
+    "Neutral-bullish",
+    "Bullish"
+   ]
+  },
+  "Afternoon Continuation": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "None"
+   ]
+  },
+  "Analogue Session Similarity Scores": {
+   "type": "text"
+  },
+  "Analogue Sessions": {
+   "type": "text"
+  },
+  "Analogue Sessions Relation": {
+   "type": "relation"
+  },
+  "Analogue Similarity Score": {
+   "type": "number"
+  },
+  "Bearish Probability": {
+   "type": "number"
+  },
+  "Bullish Probability": {
+   "type": "number"
+  },
+  "Chop Score": {
+   "type": "number"
+  },
+  "Choppy Probability": {
+   "type": "number"
+  },
+  "Close Direction Match": {
+   "type": "formula"
+  },
+  "Contract": {
+   "type": "select",
+   "options": [
+    "NQU26",
+    "NQU25",
+    "NQU24",
+    "NQH26",
+    "ESH26",
+    "NQM26",
+    "ESM26",
+    "NQZ26"
+   ]
+  },
+  "Day": {
+   "type": "date"
+  },
+  "Distance to ON High": {
+   "type": "formula"
+  },
+  "Distance to ON Low": {
+   "type": "formula"
+  },
+  "Event Notes": {
+   "type": "text",
+   "description": "Free-text narrative describing the specific event(s) driving the Event Risk classification"
+  },
+  "Event Risk": {
+   "type": "select",
+   "options": [
+    "Normal",
+    "Reduced-confidence",
+    "High-risk"
+   ]
+  },
+  "Expected Downside Target 1": {
+   "type": "number"
+  },
+  "Expected Downside Target 2": {
+   "type": "number"
+  },
+  "Expected First Level Price": {
+   "type": "number"
+  },
+  "Expected First Level Tested": {
+   "type": "select",
+   "options": [
+    "ON High",
+    "ON Low",
+    "Previous RTH High",
+    "Previous RTH Low",
+    "Previous RTH Close",
+    "Premarket High",
+    "Premarket Low",
+    "Overnight Open",
+    "VWAP",
+    "Long MA",
+    "Round number",
+    "Other named level",
+    "Unavailable"
+   ]
+  },
+  "Expected First Move": {
+   "type": "select",
+   "options": [
+    "Two-sided",
+    "Up",
+    "Down"
+   ]
+  },
+  "Expected Upside Target 1": {
+   "type": "number"
+  },
+  "Expected Upside Target 2": {
+   "type": "number"
+  },
+  "Fast MA Alignment": {
+   "type": "select",
+   "options": [
+    "Above",
+    "Above/crossing",
+    "Below",
+    "Crossing",
+    "At",
+    "Crossing/below",
+    "Falling",
+    "Bearish",
+    "Mixed",
+    "Bullish"
+   ]
+  },
+  "First 15-Minute Close": {
+   "type": "number"
+  },
+  "First 15-Minute Close Location": {
+   "type": "formula"
+  },
+  "First 15-Minute Direction": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "Two-sided"
+   ]
+  },
+  "First 15-Minute Direction Matched Session": {
+   "type": "select",
+   "options": [
+    "Yes",
+    "No",
+    "Mixed"
+   ]
+  },
+  "First 15-Minute Drive Efficiency": {
+   "type": "formula"
+  },
+  "First 15-Minute High": {
+   "type": "number"
+  },
+  "First 15-Minute Low": {
+   "type": "number"
+  },
+  "First 15-Minute MAE": {
+   "type": "formula"
+  },
+  "First 15-Minute MFE": {
+   "type": "formula"
+  },
+  "First 15-Minute Pattern": {
+   "type": "select",
+   "options": [
+    "Double top/bottom",
+    "Unavailable",
+    "no clear pattern",
+    "Choppy",
+    "Spike and channel",
+    "Balanced rotation",
+    "V-shape reversal",
+    "Fade reversal",
+    "Drive continuation"
+   ]
+  },
+  "First 15-Minute Range": {
+   "type": "formula"
+  },
+  "First 30-Minute Direction": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "Two-sided"
+   ]
+  },
+  "First 30-Minute Range": {
+   "type": "number"
+  },
+  "First Level Outcome": {
+   "type": "select",
+   "options": [
+    "Not tested",
+    "Break without acceptance",
+    "Test and rejection",
+    "Break and acceptance",
+    "Break–reclaim–acceptance"
+   ]
+  },
+  "First Move Match": {
+   "type": "formula"
+  },
+  "Forecast Confidence": {
+   "type": "number"
+  },
+  "Gap %": {
+   "type": "formula"
+  },
+  "Gap Outcome": {
+   "type": "select",
+   "options": [
+    "Gap-and-go",
+    "Full gap fill",
+    "Partial gap fill",
+    "No material gap"
+   ]
+  },
+  "Gap Points": {
+   "type": "formula"
+  },
+  "Graph ETH": {
+   "type": "file"
+  },
+  "Graph RTH": {
+   "type": "file"
+  },
+  "Higher-Timeframe Bias": {
+   "type": "select",
+   "options": [
+    "Neutral",
+    "Bullish",
+    "Bearish",
+    "Neutral-bullish",
+    "Bullish into cutoff",
+    "Neutral-bearish"
+   ]
+  },
+  "Historical Analogue Count": {
+   "type": "number"
+  },
+  "Initial Balance Direction": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "Two-sided"
+   ]
+  },
+  "Initial Balance Extension": {
+   "type": "select",
+   "options": [
+    "Up",
+    "Both sides",
+    "Down",
+    "None"
+   ]
+  },
+  "Initial Balance High": {
+   "type": "number"
+  },
+  "Initial Balance Low": {
+   "type": "number"
+  },
+  "Initial Balance Range": {
+   "type": "formula"
+  },
+  "Long MA Slope": {
+   "type": "select",
+   "options": [
+    "Unavailable",
+    "Flat",
+    "Falling",
+    "Rising"
+   ]
+  },
+  "Morning Pullback Severity": {
+   "type": "select",
+   "options": [
+    "Deep",
+    "Moderate",
+    "Minor",
+    "None"
+   ]
+  },
+  "Most Likely Opening Type": {
+   "type": "select",
+   "options": [
+    "Chop",
+    "Range",
+    "Opening drive up",
+    "Opening drive down",
+    "Sweep low then rebound",
+    "Sweep high then reverse",
+    "Breakout and retest",
+    "Failed breakout",
+    "Rejection-reversal",
+    "Two-sided whipsaw",
+    "Test-drive continuation",
+    "Unavailable"
+   ]
+  },
+  "ON High": {
+   "type": "number"
+  },
+  "ON High Outcome": {
+   "type": "select",
+   "options": [
+    "Break and acceptance",
+    "Not tested",
+    "Break–reclaim–acceptance",
+    "Break without acceptance",
+    "Test and rejection"
+   ]
+  },
+  "ON Low": {
+   "type": "number"
+  },
+  "ON Low Outcome": {
+   "type": "select",
+   "options": [
+    "Break without acceptance",
+    "Not tested",
+    "Break and acceptance",
+    "Break–reclaim–acceptance",
+    "Test and rejection"
+   ]
+  },
+  "ON Range ÷ 14-Day ATR": {
+   "type": "formula"
+  },
+  "Opening Components Graded": {
+   "type": "formula"
+  },
+  "Opening Confirmation Time": {
+   "type": "text"
+  },
+  "Opening Direction Matched Session": {
+   "type": "select",
+   "options": [
+    "Yes",
+    "No",
+    "Mixed"
+   ]
+  },
+  "Opening Drive Strength": {
+   "type": "select",
+   "options": [
+    "Strong",
+    "Moderate",
+    "Weak"
+   ]
+  },
+  "Opening MAE": {
+   "type": "number"
+  },
+  "Opening Match Score": {
+   "type": "formula"
+  },
+  "Opening Range Extension Direction": {
+   "type": "select",
+   "options": [
+    "Up",
+    "Down",
+    "Both sides",
+    "None"
+   ]
+  },
+  "Opening Type Match": {
+   "type": "formula"
+  },
+  "Outcome Data Notes": {
+   "type": "text"
+  },
+  "Overnight Open": {
+   "type": "number"
+  },
+  "Overnight Range": {
+   "type": "formula"
+  },
+  "Overnight Structure": {
+   "type": "select",
+   "options": [
+    "Downtrend",
+    "Inverted-V",
+    "Mixed",
+    "Range",
+    "Uptrend",
+    "V-reversal"
+   ]
+  },
+  "Overnight range expansion": {
+   "type": "formula"
+  },
+  "Predicted First 15-Minute Direction": {
+   "type": "select",
+   "options": [
+    "Two-sided",
+    "Bearish",
+    "Bullish"
+   ]
+  },
+  "Predicted Opening Bias": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "Neutral"
+   ]
+  },
+  "Predicted RTH Close Direction": {
+   "type": "select",
+   "options": [
+    "Two-sided",
+    "Bullish",
+    "Bearish"
+   ]
+  },
+  "Predicted RTH Session Type": {
+   "type": "select",
+   "options": [
+    "Reversal Day",
+    "Neutral Trend Day",
+    "Bull Trend Day",
+    "Two-sided volatile day",
+    "Bear Trend Day",
+    "Range Day"
+   ]
+  },
+  "Premarket High": {
+   "type": "number"
+  },
+  "Premarket Location": {
+   "type": "formula"
+  },
+  "Premarket Low": {
+   "type": "number"
+  },
+  "Premarket Pattern": {
+   "type": "select",
+   "options": [
+    "Mixed",
+    "Range",
+    "Bearish reversal",
+    "Bullish reversal",
+    "Bearish continuation",
+    "Bullish continuation"
+   ]
+  },
+  "Previous RTH Close": {
+   "type": "number"
+  },
+  "Previous RTH High": {
+   "type": "number"
+  },
+  "Previous RTH High Outcome": {
+   "type": "select",
+   "options": [
+    "Break–reclaim–acceptance",
+    "Break and acceptance",
+    "Not tested",
+    "Test and rejection",
+    "Break without acceptance"
+   ]
+  },
+  "Previous RTH Low": {
+   "type": "number"
+  },
+  "Previous RTH Low Outcome": {
+   "type": "select",
+   "options": [
+    "Break without acceptance",
+    "Not tested",
+    "Break and acceptance",
+    "Test and rejection",
+    "Break–reclaim–acceptance"
+   ]
+  },
+  "Price at 09:29": {
+   "type": "number"
+  },
+  "Price vs Long MA": {
+   "type": "select",
+   "options": [
+    "Above",
+    "Above/crossing",
+    "Below",
+    "Crossing",
+    "At",
+    "Crossing/below"
+   ]
+  },
+  "RTH Close": {
+   "type": "number"
+  },
+  "RTH Close Direction": {
+   "type": "select",
+   "options": [
+    "Two-sided",
+    "Bearish",
+    "Bullish"
+   ]
+  },
+  "RTH Close Location": {
+   "type": "formula"
+  },
+  "RTH High": {
+   "type": "number"
+  },
+  "RTH Low": {
+   "type": "number"
+  },
+  "RTH Net Change": {
+   "type": "formula"
+  },
+  "RTH Open": {
+   "type": "number"
+  },
+  "RTH Range": {
+   "type": "formula"
+  },
+  "RTH Session Type": {
+   "type": "select",
+   "options": [
+    "Reversal Day",
+    "Neutral Trend Day",
+    "Bull Trend Day",
+    "Two-sided volatile day",
+    "Bear Trend Day",
+    "Range Day"
+   ]
+  },
+  "Realised First Level Price": {
+   "type": "number"
+  },
+  "Realised First Level Tested": {
+   "type": "select",
+   "options": [
+    "ON High",
+    "ON Low",
+    "Previous RTH High",
+    "Previous RTH Low",
+    "Previous RTH Close",
+    "Premarket High",
+    "Premarket Low",
+    "Overnight Open",
+    "VWAP",
+    "Long MA",
+    "Round number",
+    "Other named level",
+    "Unavailable"
+   ]
+  },
+  "Realised First Move": {
+   "type": "select",
+   "options": [
+    "Two-sided",
+    "Up",
+    "Down"
+   ]
+  },
+  "Realised Opening Bias": {
+   "type": "select",
+   "options": [
+    "Bullish",
+    "Bearish",
+    "Two-sided"
+   ]
+  },
+  "Realised Opening Type": {
+   "type": "select",
+   "options": [
+    "Chop",
+    "Range",
+    "Opening drive up",
+    "Opening drive down",
+    "Sweep low then rebound",
+    "Sweep high then reverse",
+    "Breakout and retest",
+    "Failed breakout",
+    "Rejection-reversal",
+    "Two-sided whipsaw",
+    "Test-drive continuation",
+    "Unavailable"
+   ]
+  },
+  "Realised Outcome Confidence": {
+   "type": "number"
+  },
+  "Realised Primary Scenario": {
+   "type": "text"
+  },
+  "Referenced As Analogue For": {
+   "type": "relation"
+  },
+  "Scenario Match Grade — Secondary": {
+   "type": "formula"
+  },
+  "Session Components Graded": {
+   "type": "formula"
+  },
+  "Session High Timing": {
+   "type": "select",
+   "options": [
+    "Closing 30m",
+    "Afternoon",
+    "Opening 15m",
+    "Midday",
+    "Morning"
+   ]
+  },
+  "Session Low Timing": {
+   "type": "select",
+   "options": [
+    "Opening 15m",
+    "Closing 30m",
+    "Morning",
+    "Midday",
+    "Afternoon"
+   ]
+  },
+  "Session Match Score": {
+   "type": "formula"
+  },
+  "Session Type Match": {
+   "type": "formula"
+  },
+  "Short-Term Structure": {
+   "type": "select",
+   "options": [
+    "Lower highs / Lower lows",
+    "Higher highs / Higher Lows",
+    "Mixed"
+   ]
+  },
+  "Trend Persistence": {
+   "type": "select",
+   "options": [
+    "Moderate",
+    "Low",
+    "High"
+   ]
+  },
+  "Weekday": {
+   "type": "title"
+  }
+ }
+}

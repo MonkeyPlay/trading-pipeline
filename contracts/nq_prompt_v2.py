@@ -44,7 +44,10 @@ LABEL_VERSION = "nq_prompt_v2_1_impl3"
 PULLBACK_RUBRIC = "MP-v1"
 PATTERN_CONVENTION = "FP-v1"
 LEVEL_OUTCOME_CONVENTION = "LO-v1"
-CONVENTION_VERSION = "nq_conv_v1"
+# nq_conv_v1 (registered 2026-10-03) took events from the session's calendar day only and
+# configured no moving averages; nq_conv_v2 widens the events to P1 section 8 (EV-v1 in
+# contracts/nq_preopen.py) and adds the user's TradingView moving averages.
+CONVENTION_VERSION = "nq_conv_v2"
 SYMBOL = "NQ"
 
 RTH_OPEN = time(9, 30)
@@ -61,11 +64,11 @@ class Profile:
 
 PROFILES: Dict[str, Profile] = {
     "research_0929": Profile(
-        "research_0929", time(9, 29), "nq_evidence_v1_r0929",
+        "research_0929", time(9, 29), "nq_evidence_v2_r0929",
         "Prompt comparison profile: bars complete by 09:29:00 ET (last 1m bar 09:28, last 2m bar "
         "09:26-09:28)."),
     "operational_0927": Profile(
-        "operational_0927", time(9, 27), "nq_evidence_v1_o0927",
+        "operational_0927", time(9, 27), "nq_evidence_v2_o0927",
         "Operational profile for live runs that need the extra time: bars complete by 09:27:00 ET (last 1m "
         "bar 09:26, last 2m bar 09:24-09:26). Its ATRs, thresholds and labels are not comparable with "
         "research_0929."),
@@ -564,9 +567,22 @@ CONVENTION = {
         "price_at_0929": "unavailable in both profiles: neither observes 09:29:00-09:29:59",
         "premarket_high_low": "unavailable: this convention defines no premarket window",
     },
-    "moving_averages": "not configured in this convention version",
-    "events": "economic_events rows of the session's ET calendar day and the coverage rows that vouch for it; "
-              "recorded_at kept - a historical reconstruction does not prove the rows were known by the cutoff",
+    "moving_averages": {
+        "source": "the user's TradingView indicator 'TEMA & Session Levels' (Pine v6) at its default inputs",
+        "timeframe": "2m clock buckets of the snapshot's bars",
+        "long_ma": "EMA(100) of close (the script's 'EMA 50' plot)",
+        "fast_ma": "TEMA(14) = 3 (e1 - e2) + e3 of close, then SMA(3) (the faster line, 'TEMA Smoothed')",
+        "slow_ma": "EMA(14) of close, then SMA(3) (the slower line, 'EMA 9 Smoothed')",
+        "ema": "Pine ta.ema: alpha = 2 / (length + 1), seeded with the first value",
+    },
+    "events": {
+        "scheduled": "economic_events rows of the scheduled sources (fed, bls, ism_rule, bea, census) from the "
+                     "previous session's scheduled close to the end of the session's ET day",
+        "earnings": "sec_earnings rows (8-K Item 2.02 of the material Nasdaq-100 companies) from the previous "
+                    "session's scheduled close to the cutoff - a release after the cutoff is not known by it",
+        "coverage": "the coverage rows that vouch for the session date, per source",
+        "recorded_at": "kept - a historical reconstruction does not prove the rows were known by the cutoff",
+    },
     "intermarket": "last 1m bar complete by the cutoff of every other collected instrument (active contract), "
                    "its age and the asset's max_age_minutes (config.ASSET_SOURCES); stale values are null",
     "arithmetic": "prices as decimal.Decimal; ATRs as exact fractions (Wilder smoothing divides by 14), stored "

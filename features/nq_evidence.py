@@ -16,8 +16,10 @@ used, so the snapshot can be checked without the mutable source tables:
   atr, thresholds      frozen daily and 2-minute Wilder ATR(14) and T, B, A
   bars                 the overnight window's 1m bars and their complete 2m, 5m and
                        15m clock buckets; previous_rth_bars, daily_atr_inputs
-  events, intermarket  economic calendar rows of the day, last observations of the
-                       other collected instruments
+  events, intermarket  scheduled releases from the previous session's close to the
+                       end of the day and material earnings published by the cutoff
+                       (nq_conv_v2, P1 section 8), last observations of the other
+                       collected instruments
 
 Only bars that ended by the cutoff are read for the target session, so later bars
 cannot change a snapshot. Every read happens in one repeatable-read transaction,
@@ -312,9 +314,17 @@ def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> D
     return refs
 
 
+EARNINGS_SOURCE = "sec_earnings"
+
+
 def _events(conn, session: cal.Session, cutoff: datetime) -> Dict[str, Any]:
+    """
+    Scheduled releases from the previous session's scheduled close to the end of the
+    session's ET day, and earnings releases (EARNINGS_SOURCE) published from that close
+    to the cutoff only: a report after the cutoff is not known by it.
+    """
     day = session.session_date
-    start = cal.ny_instant(day, datetime.min.time())
+    start = cal.previous_session(day).scheduled_close_at
     end = cal.ny_instant(day + timedelta(days=1), datetime.min.time())
     coverage = conn.execute(
         "SELECT source, covered_from, covered_to, recorded_at FROM economic_event_coverage "
@@ -322,8 +332,9 @@ def _events(conn, session: cal.Session, cutoff: datetime) -> Dict[str, Any]:
     ).fetchall()
     rows = conn.execute(
         "SELECT source, event_key, scheduled_at, name, tier, recorded_at FROM economic_events "
-        "WHERE scheduled_at >= %s AND scheduled_at < %s ORDER BY scheduled_at, source, event_key;",
-        (start, end),
+        "WHERE scheduled_at >= %s AND scheduled_at < %s AND (source <> %s OR scheduled_at < %s) "
+        "ORDER BY scheduled_at, source, event_key;",
+        (start, end, EARNINGS_SOURCE, cutoff),
     ).fetchall()
     covered = sorted({r["source"] for r in coverage})
     return {
