@@ -343,27 +343,60 @@ def test_review_set_cli_and_append_only_verdicts(market, capsys):
 
 
 @needs_db
-def test_catch_up_takes_every_final_session_once(market):
+def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
+    """A session in progress gets its snapshot, annotation and analogue set once its bars past the cutoff are
+    stored - never from bars fetched before the cutoff - and its outcome once final."""
+    from contracts import nq_preopen as pre
     from database import journal_store as store
-    from forecaster.journal import catch_up
+    from forecaster.journal import PREOPEN_SETTLE, catch_up, snapshot_pending
+    from tests.synthetic import ES_CID
     conn = market[0]
     version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
     stored = lambda: {str(s["session_date"]): s for s in store.list_snapshots(conn, "2000-01-01", DAY, version)}
     had = stored()
+    assert DAY not in had
     first = min(had)
-    final = cal.ny_instant(date.fromisoformat(DAY), time(18, 0))      # two hours after DAY's close
-
-    catch_up(conn, now=final - timedelta(minutes=1))                     # DAY is not final yet
+    d = date.fromisoformat(DAY)
+    ready = cal.ny_instant(d, time(9, 29)) + PREOPEN_SETTLE                  # 09:31 ET
+    midday, final = cal.ny_instant(d, time(12, 0)), cal.ny_instant(d, time(18, 0))
     earlier = {s.session_date.isoformat() for s in cal.sessions_between(first, PREV)}
-    assert set(stored()) == set(had) | earlier
+    fetched = conn.execute("SELECT contract_id, fetched_at FROM session_days WHERE trading_day = %s;",
+                           (DAY,)).fetchall()
+    try:
+        catch_up(conn, now=ready - timedelta(seconds=1))                    # DAY's pre-open is not over
+        assert set(stored()) == set(had) | earlier
+        assert snapshot_pending(conn, DAY, now=ready - timedelta(seconds=1)) == \
+            "not before 09:31 ET (its pre-open runs to the 09:29 cutoff)"
 
-    result = catch_up(conn, now=final)
-    snaps = stored()
-    assert set(snaps) == earlier | {DAY} and result["failed"] == []
-    assert result["snapshots"] == (0 if DAY in had else 1)
-    assert all(store.latest_outcome(conn, s["snapshot_id"], defs.LABEL_VERSION) for s in snaps.values())
-    assert all(snaps[d]["snapshot_id"] == s["snapshot_id"] for d, s in had.items())   # stored ones stay frozen
-    assert catch_up(conn, now=final)["snapshots"] == 0                  # nothing taken twice
+        # an instrument's bars of the day fetched before the cutoff: never frozen from those
+        conn.execute("UPDATE session_days SET fetched_at = %s WHERE trading_day = %s AND contract_id = %s;",
+                     (ready - timedelta(hours=3), DAY, ES_CID))
+        assert "ES bars were fetched before the 09:29 ET cutoff" in snapshot_pending(conn, DAY, now=midday)
+        assert catch_up(conn, now=midday)["snapshots"] == 0 and DAY not in stored()
+
+        # every bar fetched after it: taken mid-session with its annotation and analogues, no outcome yet
+        conn.execute("UPDATE session_days SET fetched_at = %s WHERE trading_day = %s;", (ready, DAY))
+        assert snapshot_pending(conn, DAY, now=midday) is None
+        result = catch_up(conn, now=midday)
+        snap = stored()[DAY]
+        assert result["snapshots"] == 1 and result["failed"] == []
+        assert store.latest_annotation(conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION) is not None
+        assert store.latest_analogue_set(conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                         pre.RULES_PROTOCOL_VERSION) is not None
+        assert store.latest_outcome(conn, snap["snapshot_id"], defs.LABEL_VERSION) is None
+
+        # final: the outcome, the snapshot as frozen mid-session, nothing taken twice
+        result = catch_up(conn, now=final)
+        snaps = stored()
+        assert result["snapshots"] == 0 and snaps[DAY]["snapshot_id"] == snap["snapshot_id"]
+        assert set(snaps) == earlier | {DAY}
+        assert all(store.latest_outcome(conn, s["snapshot_id"], defs.LABEL_VERSION) for s in snaps.values())
+        assert all(snaps[d]["snapshot_id"] == s["snapshot_id"] for d, s in had.items())   # stored ones stay frozen
+        assert snapshot_pending(conn, "2026-06-13") == "no regular session that day"            # a Saturday
+    finally:
+        for r in fetched:
+            conn.execute("UPDATE session_days SET fetched_at = %s WHERE trading_day = %s AND contract_id = %s;",
+                         (r["fetched_at"], DAY, r["contract_id"]))
 
 
 @needs_db
@@ -631,30 +664,38 @@ def test_claude_annotation_attempts_are_kept_and_only_valid_ones_stored(market):
     attempts = lambda: conn.execute("SELECT status, model, error FROM journal.annotation_attempts "
                                     "ORDER BY finished_at;").fetchall()
 
-    fallback = llm.annotate_live(conn, _Client(_Message(answer, "claude-opus-4-8")), snap)
-    assert fallback["status"] == "invalid" and "fallback" in fallback["error"]
-    assert store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is None
-    refused = llm.annotate_live(conn, _Client(_Message({}, pre.LLM_MODEL, stop_reason="refusal")), snap)
-    assert refused["status"] == "refused"
+    # outside a run started and confirmed by hand nothing is sent or recorded
+    requests = lambda: conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
+    before, client = (requests(), len(attempts())), _Client(_Message(answer, pre.LLM_MODEL))
+    with pytest.raises(llm.ManualOnly, match="by hand only"):
+        llm.annotate_live(conn, client, snap)
+    assert (requests(), len(attempts())) == before and client.calls == []
 
-    client = _Client(_Message(answer, pre.LLM_MODEL))
-    ok = llm.annotate_live(conn, client, snap)
-    assert ok["status"] == "ok" and client.calls[0]["fallbacks"] == "default"
-    assert client.calls[0]["betas"] == [llm.FALLBACK_BETA]
-    stored = store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION)
-    assert stored["annotator"] == "llm" and stored["model"] == pre.LLM_MODEL
-    assert [r["status"] for r in attempts()] == ["invalid", "refused", "ok"]
-    # every request was in the ledger before it was sent, and every attempt answers exactly one of them
-    linked = conn.execute("SELECT count(*) FROM journal.inference_requests r JOIN journal.annotation_attempts t "
-                          "ON t.request_id = r.request_id WHERE r.mode = 'live';").fetchone()[0]
-    assert linked == 3 and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-    # an answer that is not JSON keeps its raw text
-    garbled = _Message({}, pre.LLM_MODEL)
-    garbled.content[0].text = "Overnight Structure: Uptrend"
-    bad = llm.annotate_live(conn, _Client(garbled), snap)
-    assert bad["status"] == "invalid" and bad["error"].startswith("not JSON")
-    assert conn.execute("SELECT raw_text FROM journal.annotation_attempts WHERE attempt_id = %s;",
-                        (bad["attempt_id"],)).fetchone()[0] == "Overnight Structure: Uptrend"
+    with llm.manual_requests():
+        fallback = llm.annotate_live(conn, _Client(_Message(answer, "claude-opus-4-8")), snap)
+        assert fallback["status"] == "invalid" and "fallback" in fallback["error"]
+        assert store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is None
+        refused = llm.annotate_live(conn, _Client(_Message({}, pre.LLM_MODEL, stop_reason="refusal")), snap)
+        assert refused["status"] == "refused"
+
+        client = _Client(_Message(answer, pre.LLM_MODEL))
+        ok = llm.annotate_live(conn, client, snap)
+        assert ok["status"] == "ok" and client.calls[0]["fallbacks"] == "default"
+        assert client.calls[0]["betas"] == [llm.FALLBACK_BETA]
+        stored = store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION)
+        assert stored["annotator"] == "llm" and stored["model"] == pre.LLM_MODEL
+        assert [r["status"] for r in attempts()] == ["invalid", "refused", "ok"]
+        # every request was in the ledger before it was sent, and every attempt answers exactly one of them
+        linked = conn.execute("SELECT count(*) FROM journal.inference_requests r JOIN journal.annotation_attempts t "
+                              "ON t.request_id = r.request_id WHERE r.mode = 'live';").fetchone()[0]
+        assert linked == 3 and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+        # an answer that is not JSON keeps its raw text
+        garbled = _Message({}, pre.LLM_MODEL)
+        garbled.content[0].text = "Overnight Structure: Uptrend"
+        bad = llm.annotate_live(conn, _Client(garbled), snap)
+        assert bad["status"] == "invalid" and bad["error"].startswith("not JSON")
+        assert conn.execute("SELECT raw_text FROM journal.annotation_attempts WHERE attempt_id = %s;",
+                            (bad["attempt_id"],)).fetchone()[0] == "Overnight Structure: Uptrend"
 
 
 class _Batches:
@@ -692,46 +733,53 @@ def test_llm_requests_are_accounted_for_across_an_interrupted_run(market):
     batches = _Batches(lambda custom_id: answer_from_rules(by_request[custom_id]), drop=1)
     client = type("Client", (), {"messages": type("M", (), {"batches": batches})()})()
 
-    # the run sends a batch and ends before collecting it: the batch id and its requests are on record
-    batch_id = llm.submit_batch(conn, client, snaps)
-    sent = store.inference_batch_requests(conn, batch_id)
-    assert batch_id == "msgbatch_test" and [r["custom_id"] for r in batches.requests] == [r["request_id"] for r in sent]
-    for r in sent:
-        by_request[r["request_id"]] = store.get_snapshot(conn, r["snapshot_id"])
-        assert r["request"]["system"][0]["text"] == llm._system_prompt() and r["code_revision"]
-        assert r["request_hash"] == hashlib.sha256(defs.canonical_json(r["request"]).encode()).hexdigest()
-    pending = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
-    assert {r["batch_id"] for r in pending} == {batch_id} and len(pending) == 3
+    with pytest.raises(llm.ManualOnly):
+        llm.submit_batch(conn, client, snaps)
+    with pytest.raises(llm.ManualOnly):
+        llm.collect_batch(conn, client, "msgbatch_test")
+    assert batches.requests == [] and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
 
-    # the next run collects it - after a prompt change, which must not touch what was sent: each answer is checked
-    # against the archived request; two answers, and the request the batch has no result for is closed as an error
-    real_prompt = llm._system_prompt
-    llm._system_prompt = lambda: "an edited prompt"
-    try:
-        assert llm.collect_batch(conn, client, batch_id) == {"ok": 2, "error": 1}
-    finally:
-        llm._system_prompt = real_prompt
-    assert [r["request_hash"] for r in store.inference_batch_requests(conn, batch_id)] == \
-        [r["request_hash"] for r in sent]
-    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-    assert llm.collect_batch(conn, client, batch_id) == {}                       # collecting again changes nothing
-    assert sum(store.latest_annotation(conn, s["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is not None
-               for s in snaps) == 2
+    with llm.manual_requests():
+        # the run sends a batch and ends before collecting it: the batch id and its requests are on record
+        batch_id = llm.submit_batch(conn, client, snaps)
+        sent = store.inference_batch_requests(conn, batch_id)
+        assert batch_id == "msgbatch_test" and [r["custom_id"] for r in batches.requests] == [r["request_id"] for r in sent]
+        for r in sent:
+            by_request[r["request_id"]] = store.get_snapshot(conn, r["snapshot_id"])
+            assert r["request"]["system"][0]["text"] == llm._system_prompt() and r["code_revision"]
+            assert r["request_hash"] == hashlib.sha256(defs.canonical_json(r["request"]).encode()).hexdigest()
+        pending = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
+        assert {r["batch_id"] for r in pending} == {batch_id} and len(pending) == 3
 
-    # a live request whose run ended before the answer was stored stays unresolved until closed by hand
-    params, request_hash, _ = llm.build_request(snaps[0])
-    store.save_inference_request(conn, llm._ledger_record(snaps[0], params, request_hash, "live"))
-    lost = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
-    assert [(r["mode"], r["batch_id"]) for r in lost] == [("live", None)]
-    assert llm.close_unresolved(conn, lost) == 1
-    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+        # the next run collects it - after a prompt change, which must not touch what was sent: each answer is checked
+        # against the archived request; two answers, and the request the batch has no result for is closed as an error
+        real_prompt = llm._system_prompt
+        llm._system_prompt = lambda: "an edited prompt"
+        try:
+            assert llm.collect_batch(conn, client, batch_id) == {"ok": 2, "error": 1}
+        finally:
+            llm._system_prompt = real_prompt
+        assert [r["request_hash"] for r in store.inference_batch_requests(conn, batch_id)] == \
+            [r["request_hash"] for r in sent]
+        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+        assert llm.collect_batch(conn, client, batch_id) == {}                       # collecting again changes nothing
+        assert sum(store.latest_annotation(conn, s["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is not None
+                   for s in snaps) == 2
 
-    # a batch the API refuses to create: its requests are closed at once, nothing is left pending
-    failing = type("Client", (), {"messages": type("M", (), {"batches": _Batches(None, fail=True)})()})()
-    assert llm.submit_batch(conn, failing, snaps[:1]) is None
-    assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-    with pytest.raises(psycopg.Error, match="append-only"):
-        conn.execute("DELETE FROM journal.inference_requests;")
+        # a live request whose run ended before the answer was stored stays unresolved until closed by hand
+        params, request_hash, _ = llm.build_request(snaps[0])
+        store.save_inference_request(conn, llm._ledger_record(snaps[0], params, request_hash, "live"))
+        lost = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
+        assert [(r["mode"], r["batch_id"]) for r in lost] == [("live", None)]
+        assert llm.close_unresolved(conn, lost) == 1
+        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+
+        # a batch the API refuses to create: its requests are closed at once, nothing is left pending
+        failing = type("Client", (), {"messages": type("M", (), {"batches": _Batches(None, fail=True)})()})()
+        assert llm.submit_batch(conn, failing, snaps[:1]) is None
+        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
+        with pytest.raises(psycopg.Error, match="append-only"):
+            conn.execute("DELETE FROM journal.inference_requests;")
 
 
 @needs_db

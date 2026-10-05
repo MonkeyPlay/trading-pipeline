@@ -6,7 +6,8 @@ in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. Besides Inte
 Brokers, two outside services are used, both by the NQ pre-open journal
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): SEC EDGAR, for the earnings filings behind
 Event Risk, and optionally the Claude API, for a structure annotation that runs only when
-started by hand with `ANTHROPIC_API_KEY` set. Everything else is computed locally.
+started by hand in a terminal - it asks you to type "send" first, and nothing else can start
+it - with `ANTHROPIC_API_KEY` set. Everything else is computed locally.
 
 Ten instruments are collected out of the box:
 
@@ -52,7 +53,8 @@ python -m dashboard.app        # then open http://127.0.0.1:8080
 
 That serves the dashboard against whatever is already in the `trading_pipeline` database
 (`DATABASE_URL`).
-It never needs IB to be running — it only reads stored data. `DASHBOARD_PORT` and
+It needs IB only to collect from it: **Update data**, in the header, runs the collector
+and the forecaster (see [below](#update-data-from-the-dashboard)). `DASHBOARD_PORT` and
 `DASHBOARD_HOST` override where it listens.
 
 **No data yet?** Seed a throwaway database with realistic fake sessions for all three
@@ -118,6 +120,27 @@ python -m database.migrate_from_sqlite --sqlite data/trading_pipeline.db
 python -m dashboard.app
 ```
 
+#### Update data from the dashboard
+
+**Update data**, at the right of the header on every page, opens the pipeline's jobs
+([dashboard/components/pipeline.py](dashboard/components/pipeline.py),
+[dashboard/jobs.py](dashboard/jobs.py)). Each runs as its own process, the same command as on
+the command line:
+
+| Button | Runs | What it does |
+|---|---|---|
+| **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection |
+| **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - and outcomes once a session is final. No Claude requests |
+| **Live forecast** | `python scripts/nq_journal.py live` | Today's pre-open live capture and its forecasts ([below](#both-together)); offered on a session day before 09:30 ET only - it then waits for the 09:29 cutoff |
+
+One job runs at a time. It belongs to the dashboard process, not to the browser tab: every
+page shows it and its output, the header shows its name and running time, closing the tab
+does not stop it (**Stop** interrupts it as Ctrl-C would), and the output is appended to
+`logs/pipeline_run.log`. When it ends, the pages that saw it running read the database
+again in place: the Session Explorer's calendar, coverage map, session (a session still in
+progress grows; showing the newest session, it moves on to a newer one) and analogues; the
+Forecast page's sessions and runs; the header's bar count.
+
 Pages:
 
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
@@ -182,10 +205,12 @@ python -m collector.ib_collector --days 30 --full                 # re-download 
 With no `--symbol` it collects everything in `SYMBOLS` and `CONTEXT_SYMBOLS`, then brings
 the NQ prompt-v2 journal up to date: it reloads the economic calendar, fetches the material
 Nasdaq-100 earnings releases from SEC EDGAR (set `SEC_USER_AGENT` to "name e-mail"), and
-stores a snapshot, pre-open structure annotation and outcome for every final session it
-does not hold yet, then the analogue sets and the historical-replay baseline forecasts, each
-once ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal` skips that; a
-`--symbol` subset or a pinned `--expiry` skips it too.
+stores a snapshot and pre-open structure annotation for every session it does not hold yet
+whose pre-open is over and stored - a session in progress too, once its bars were fetched
+after the 09:29 cutoff - its outcome once it is final (two hours after the close), then the
+analogue sets and the historical-replay baseline forecasts, each once ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#running-it)). `--no-journal` skips that; a
+`--symbol` subset or a pinned `--expiry` skips it too. `--journal-only` runs that step alone,
+without collecting or connecting to IB (the dashboard's **Run forecaster**).
 
 **Futures follow their front contract.** Each future has a roll rule in `config.py`
 (equity indices: the quarterly contract, rolling 8 days before expiry). The collector asks
@@ -387,7 +412,7 @@ name contains `test`; they reset it).
 | [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract |
 | [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture |
 | [matching/](matching/) | The P1 structural analogue matcher |
-| [dashboard/](dashboard/) | NiceGUI app: Session Explorer (with the analogues), Forecast, Evaluation; the Lightweight Charts component |
+| [dashboard/](dashboard/) | NiceGUI app: Session Explorer (with the analogues), Forecast, Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
 | [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [reports](docs/reports/) |

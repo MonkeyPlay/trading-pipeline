@@ -67,7 +67,8 @@ version identifier.
 | `nq_structure_rules_v3` | annotation | v2's labels, HTB-v1 worded as exclusive bands, its basis naming a close beyond the range; never stored |
 | `nq_structure_rules_v2` | annotation | v1 plus Higher-Timeframe Bias (HTB-v1) |
 | `nq_structure_rules_v1` | annotation | the same without Higher-Timeframe Bias |
-| `nq_structure_llm_v3` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5`, Higher-Timeframe Bias from HTB-v1; v2's prompt and schema with strict local validation and the request ledger - built, waiting for an API key |
+| `nq_structure_llm_v4` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5` at effort `xhigh`, Higher-Timeframe Bias from HTB-v1; v2's prompt and schema with strict local validation and the request ledger - built, the API key is in `.env`, not run yet |
+| `nq_structure_llm_v3` | annotation | the same at effort `high`; registered, never run |
 | `nq_structure_llm_v2` | annotation | the same, validated less strictly and without the ledger; registered, never run |
 | `nq_structure_llm_v1` | annotation | registered, never run: Claude judged Higher-Timeframe Bias itself |
 | `nq_match_p1_v2` | matcher | P1 section 7's analogue rubric (stage 2B / 2C); each session counts once; the prior from every snapshot (annotated or not), known as of the target, its manifest archived and hashed - current |
@@ -291,7 +292,7 @@ python scripts/nq_journal.py outcomes --start 2025-09-01 --end 2026-09-25   # la
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25   # snapshot + outcome per session
 python scripts/nq_journal.py backfill --start 2025-09-01 --end 2026-09-25 --profile operational_0927
 python scripts/nq_journal.py show --date 2026-09-24                         # snapshot, P1 record with the current run, P2 record
-python scripts/nq_journal.py catch-up                                       # every final session not yet stored, through forecasts
+python scripts/nq_journal.py catch-up                                       # every session past its cutoff not yet stored, through forecasts
 python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02    # baseline forecasts (historical replay), once each
 python scripts/nq_journal.py forecast --snapshot-id S --annotation-id A --set-id X   # explicit evidence ids
 python scripts/nq_journal.py show-forecast --run-id R                       # one stored run: provenance, P1 fields, per target
@@ -304,11 +305,16 @@ python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09  # 
 **The collector keeps the journal current.** After every full collection
 (`python -m collector.ib_collector` over all configured instruments, each future on
 its front contract - so `run_pipeline.sh` too) it runs `catch-up`
-([forecaster/journal.py](../forecaster/journal.py)): a research-profile snapshot and
-outcome for every session since the journal's first that is final (two hours past
-its close) and has no snapshot yet, outcomes for stored snapshots still without
-one, and a re-check of the sessions the collector re-downloads (a vendor revision
-becomes a new outcome revision). A stored snapshot is never rebuilt. A session
+([forecaster/journal.py](../forecaster/journal.py)): a research-profile snapshot for
+every session since the journal's first that has none yet and whose pre-open is over
+and stored, outcomes for stored snapshots still without one once their session is
+final (two hours past its close), and a re-check of the sessions the collector
+re-downloads (a vendor revision becomes a new outcome revision). A snapshot reads
+nothing after its cutoff, so a session in progress gets its snapshot, annotation,
+analogue set and historical-replay forecasts the same day (`snapshot_pending`): from
+2 minutes after the cutoff, once every bar of the day stored was fetched after then -
+never from bars fetched before the cutoff, since a stored snapshot is never rebuilt
+and would keep the minutes not yet fetched as unavailable. A session
 whose snapshot cannot be built is logged and retried next run. `--no-journal`
 skips the step; a `--symbol` subset or a pinned contract skips it too, since
 snapshots also read the context instruments.
@@ -487,7 +493,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   exclusive wording and names a close beyond the range as such in the basis. On the 274 sessions: Bullish 99, Neutral 77, Bearish
   55, Neutral-bullish 11, Neutral-bearish 4, unavailable 28 (19 without a daily ATR
   in September 2025, 9 uncovered). Not a matcher input.
-- **Claude structure annotation** (`nq_structure_llm_v3`,
+- **Claude structure annotation** (`nq_structure_llm_v4`,
   [forecaster/structure_llm.py](../forecaster/structure_llm.py)), built and tested
   against a stand-in client; it runs once `ANTHROPIC_API_KEY` is in `.env`. The
   system prompt [prompts/runtime/structure_annotation_v2.md](../prompts/runtime/structure_annotation_v2.md)
@@ -497,7 +503,7 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   and 15m bars, the last 45 2m bars with the three lines, the confirmed swing
   points, every item with an id - and the answer must follow the
   structure_annotation JSON schema (structured outputs). `claude-opus-5-5`, effort
-  high. Claude annotates the nine descriptive fields; Event Risk, Event Notes,
+  `xhigh` (v3, never run, was `high`). Claude annotates the nine descriptive fields; Event Risk, Event Notes,
   Higher-Timeframe Bias and the price location come from the same rules as the
   rule-based protocol. Validation, locally before anything is stored: the whole
   answer against the output JSON schema (types, enums, required and unknown keys - a
@@ -591,7 +597,9 @@ python scripts/nq_journal.py show --date 2026-10-02         # snapshot, annotati
 ```
 
 The collector's journal step does everything above except the review set and the
-Claude requests, which cost money and are started by hand.
+Claude requests, which cost money and are manual only, for now: `annotate-llm` sends
+them only from a terminal after you type "send" (`structure_llm.manual_requests`); the
+collector, catch-up, the live capture, the dashboard's jobs and cron cannot.
 
 ### P1's 47-field pre-open record (Appendix B)
 

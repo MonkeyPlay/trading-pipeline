@@ -40,6 +40,10 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 
 ## Gotchas
 
+- **Update data** (header) runs real jobs against the dashboard's `DATABASE_URL`: **Run collector** and
+  **Run forecaster** write to it (incremental, idempotent), and **Live forecast** records an append-only
+  live capture with its forecasts - never click that one to test. Opening the dialog is harmless; point a
+  test dashboard at `tp_test` before starting a job you only want to watch.
 - NiceGUI talks over a websocket: wait for the text you need (`wait_for_selector`), never for network idle.
 - `tp_test` is the disposable database for anything that writes (the test suite resets it).
 - The session day is a calendar: click the field labelled "Session day (NY trading day)", then a

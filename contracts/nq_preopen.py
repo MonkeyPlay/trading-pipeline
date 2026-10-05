@@ -347,10 +347,11 @@ def matcher_record() -> Dict[str, Any]:
 # Bias from the overnight bars; v2 takes it from HTB-v1 like the rule-based protocol. v3
 # (guideline revision 2, the same prompt and schema) validates the answer locally against
 # the full JSON schema and stricter field rules, and accounts for every request in the
-# ledger (migration 0013); v2 was registered, never run.
-LLM_PROTOCOL_VERSION = "nq_structure_llm_v3"
+# ledger (migration 0013); v2 was registered, never run. v4 (2026-10-05, the user's choice)
+# is v3 at effort xhigh instead of high; v3 was registered, never run.
+LLM_PROTOCOL_VERSION = "nq_structure_llm_v4"
 LLM_MODEL = "claude-opus-5-5"
-LLM_EFFORT = "high"
+LLM_EFFORT = "xhigh"
 LLM_MAX_TOKENS = 16000
 LLM_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
                           "structure_annotation_v2.md")
@@ -410,6 +411,7 @@ def llm_record() -> Dict[str, Any]:
                       "is unresolved - a recorded batch is collected later, never sent again; a lost live request "
                       "is closed by hand as an error attempt; at most one attempt per request; an annotation and "
                       "its attempt are stored in one transaction; an answer that is not JSON keeps its raw text",
-        "supersedes": "nq_structure_llm_v2: the same prompt and schema, the evidence without completeness "
+        "supersedes": "nq_structure_llm_v3: the same request at effort high (never run); v3 superseded "
+                      "nq_structure_llm_v2: the same prompt and schema, the evidence without completeness "
                       "metadata, validated less strictly and without the request ledger",
     })

@@ -12,15 +12,20 @@ once the session is final.
   record_outcome  labels a stored snapshot once its session is final
   match           the structural analogues of every annotated snapshot and their
                   outcomes (matching/structural.py), stored when new
-  catch_up        every final session since the journal's first one that has no
-                  snapshot yet, oldest first; then annotations and outcomes for
-                  stored snapshots without one, a re-check of the outcomes of the
-                  sessions the collector re-downloads (the vendor revises recent
-                  bars), the analogue sets, and the historical-replay baseline
-                  forecasts (forecaster/forecast_service.py) - each stored once
+  catch_up        every session since the journal's first one whose pre-open is
+                  over and stored (snapshot_pending) and that has no snapshot yet,
+                  oldest first; then annotations and outcomes for stored snapshots
+                  without one, a re-check of the outcomes of the sessions the
+                  collector re-downloads (the vendor revises recent bars), the
+                  analogue sets, and the historical-replay baseline forecasts
+                  (forecaster/forecast_service.py) - each stored once
 
-catch_up never rebuilds a stored snapshot: a snapshot is frozen once taken. A new
-snapshot version catches up over the sessions the earlier versions hold.
+A snapshot reads nothing after its cutoff, so a session in progress gets its snapshot,
+annotation, analogue set and forecasts as soon as its bars past the cutoff are stored;
+its outcome only once it is final (two hours after its close). catch_up never rebuilds
+a stored snapshot: a snapshot is frozen once taken - which is why a session's bars must
+have been fetched after its cutoff first. A new snapshot version catches up over the
+sessions the earlier versions hold.
 scripts/nq_journal.py is the CLI; the IB collector runs catch_up after every
 full collection (collector/ib_collector.py), so no separate call is needed.
 """
@@ -41,6 +46,40 @@ from forecaster import structure_rules
 from matching import structural as ms
 
 logger = logging.getLogger("nq_journal")
+
+# Before a session is final, its snapshot waits until this long after the cutoff, and for every bar of the day stored
+# to have been fetched after that: a snapshot is frozen once taken, so one from bars fetched before the cutoff would
+# keep the minutes not yet fetched as unavailable for good.
+PREOPEN_SETTLE = timedelta(minutes=2)
+
+
+def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
+                     now: Optional[datetime] = None) -> Optional[str]:
+    """
+    Why the snapshot of session ``day`` cannot be taken yet, or None when it can: a final session always can; one
+    in progress from its cutoff + PREOPEN_SETTLE, once the day's NQ bars are stored and every instrument's bars of
+    the day were fetched after then (the collector fetches them all in one run).
+    """
+    now = now or datetime.now(timezone.utc)
+    session = cal.session(day)
+    if not session.is_open:
+        return "no regular session that day"
+    if labels.session_finalised(day, now):
+        return None
+    cutoff = defs.PROFILES[profile].cutoff
+    ready_at = cal.ny_instant(session.session_date, cutoff) + PREOPEN_SETTLE
+    if now < ready_at:
+        return f"not before {ready_at.astimezone(cal.NY_TZ):%H:%M} ET (its pre-open runs to the {cutoff:%H:%M} cutoff)"
+    rows = conn.execute("SELECT c.symbol, d.fetched_at FROM session_days d JOIN contracts c USING (contract_id) "
+                        "WHERE d.trading_day = %s AND d.interval = '1m';", (day,)).fetchall()
+    if not any(r["symbol"] == defs.SYMBOL for r in rows):
+        return f"no {defs.SYMBOL} bars of the day are stored yet - run the collector"
+    early = sorted({r["symbol"] for r in rows
+                    if datetime.fromisoformat(str(r["fetched_at"])).replace(tzinfo=timezone.utc) < ready_at})
+    if early:
+        return (f"the day's {', '.join(early)} bars were fetched before the {cutoff:%H:%M} ET cutoff - run the "
+                f"collector")
+    return None
 
 
 def register(conn) -> None:
@@ -192,7 +231,12 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
     taken, failed = [], []
     for s in cal.sessions_between(first, now.date().isoformat()):
         day = s.session_date.isoformat()
-        if day in have or not labels.session_finalised(day, now):
+        if day in have:
+            continue
+        pending = snapshot_pending(conn, day, profile, now)
+        if pending:
+            if s.session_date <= now.astimezone(cal.NY_TZ).date():       # not tomorrow's, late in the evening
+                logger.info(f"Journal: {day} not taken yet: {pending}.")
             continue
         try:
             taken.append(take_snapshot(conn, day, profile))

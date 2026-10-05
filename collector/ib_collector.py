@@ -114,6 +114,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(threadName)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
+# ibapi echoes every request and every received bar at INFO - thousands of lines per day
+# fetched; its warnings and errors still show, and the collector logs its own progress.
+logging.getLogger("ibapi").setLevel(logging.WARNING)
 logger = logging.getLogger("IBCollector")
 
 INTERVAL_LABEL = "1m"
@@ -914,8 +917,9 @@ def update_journal(dsn) -> bool:
     """
     Brings the NQ prompt-v2 journal up to date after a collection: reloads the
     economic calendar and the material earnings releases (database/events.py,
-    database/earnings.py), then a snapshot, structure annotation and outcome for
-    every final session the journal lacks (forecaster/journal.py). A failed
+    database/earnings.py), then a snapshot and structure annotation for every
+    session the journal lacks whose pre-open is over and stored - the day's too -
+    and its outcome once final (forecaster/journal.py). A failed
     earnings fetch is logged and leaves Event Risk unavailable for the sessions it
     would have covered; a session whose snapshot cannot be built is logged and
     retried next run. False only when the journal update itself failed; the
@@ -965,6 +969,9 @@ if __name__ == "__main__":
     parser.add_argument("--init-only", action="store_true", help="Only initialise the database and exit")
     parser.add_argument("--no-journal", action="store_true",
                         help="Do not bring the NQ prompt-v2 journal up to date after collecting")
+    parser.add_argument("--journal-only", action="store_true",
+                        help="Collect nothing and do not connect to IB: only bring the NQ prompt-v2 journal up to "
+                             "date, as after a full collection")
 
     args = parser.parse_args()
 
@@ -972,6 +979,10 @@ if __name__ == "__main__":
         init_database(args.db)
         print("Database initialized successfully. Exiting.")
         sys.exit(0)
+
+    if args.journal_only:
+        init_database(args.db)
+        sys.exit(0 if update_journal(args.db) else 1)
 
     symbols = [s.strip().upper() for s in args.symbol.split(",") if s.strip()]
     if not symbols:

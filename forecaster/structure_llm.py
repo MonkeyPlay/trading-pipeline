@@ -1,6 +1,6 @@
 # forecaster/structure_llm.py
 """
-The Claude structure annotation (protocol nq_structure_llm_v3, Appendix A, A1):
+The Claude structure annotation (protocol nq_structure_llm_v4, Appendix A, A1):
 the replacement for the rule-based annotation (forecaster/structure_rules.py) once
 the Claude API is available. Same output shape (contracts.nq_preopen.ANNOTATION_SCHEMA),
 same store, its own protocol version - the matcher never mixes the two.
@@ -18,6 +18,12 @@ same store, its own protocol version - the matcher never mixes the two.
   submit_batch / collect_batch  the historical backfill through the Batch API (half
                               price; no fallback there); a recorded batch is collected
                               later if the run that sent it ended first
+
+Manual only, for now (the user's rule, 2026-10-05): annotate_live, submit_batch and
+collect_batch talk to the Claude API only inside ``manual_requests()``, which the
+annotate-llm command opens after a person typed "send" at a terminal
+(scripts/nq_journal.py). Anywhere else - the collector, catch-up, the live capture, the
+dashboard's jobs, cron - they raise ManualOnly before anything is recorded or sent.
 
 Accounting (migration 0013): every request is a row in journal.inference_requests
 before it is sent - the exact canonical request with its prompt, schema and evidence
@@ -51,6 +57,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -62,6 +69,29 @@ from forecaster.provenance import code_revision
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FINAL_2M_BARS = 45
+
+_manual = False
+
+
+class ManualOnly(RuntimeError):
+    """A Claude API request outside a run started and confirmed by hand."""
+
+
+@contextmanager
+def manual_requests():
+    """The only place Claude API requests may be made (see the module docstring)."""
+    global _manual
+    _manual = True
+    try:
+        yield
+    finally:
+        _manual = False
+
+
+def _require_manual() -> None:
+    if not _manual:
+        raise ManualOnly("Claude API requests are started by hand only, for now: run "
+                         "python scripts/nq_journal.py annotate-llm in a terminal and confirm there")
 
 
 def _bar_row(b: sr.Bar) -> list:
@@ -271,6 +301,7 @@ def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, i
 def annotate_live(conn, client, snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """One request now, with the server-side refusal fallback; returns the stored attempt (or the contaminated
     annotation's record when nothing was sent)."""
+    _require_manual()
     contaminated = _contaminated(snapshot)
     if contaminated is not None:
         annotation_id, _ = store.save_annotation(conn, snapshot["snapshot_id"], contaminated, model=pre.LLM_MODEL)
@@ -295,6 +326,7 @@ def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[
     Returns the batch id - or None when nothing was sent, or the batch was not created (its requests are then
     closed as error attempts).
     """
+    _require_manual()
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
     requests, ledger = [], []
@@ -329,6 +361,7 @@ def collect_batch(conn, client, batch_id: str) -> Dict[str, int]:
     request archived when it was sent (its evidence ids), whatever the code does today. A request the batch has no
     result for is closed as an error. Returns status counts.
     """
+    _require_manual()
     ledger = {r["request_id"]: r for r in store.inference_batch_requests(conn, batch_id)}
     counts: Dict[str, int] = {}
 

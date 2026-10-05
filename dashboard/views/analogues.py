@@ -25,6 +25,7 @@ from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
 from dashboard.components.preopen import LEVEL_LABELS
 from database import journal_store as store
+from forecaster.journal import snapshot_pending
 from forecaster.preopen_display import p1_record
 from matching.structural import features
 
@@ -106,16 +107,21 @@ class AnaloguesPanel:
         self.note.set_visibility(snap is None)
         self.body.set_visibility(snap is not None)
         if snap is None:
-            self.reason = (f"Analogues are kept for {defs.SYMBOL}, the journal symbol." if symbol != defs.SYMBOL
-                           else f"No {self.version} snapshot of {day}: the journal holds the sessions it has "
-                                f"caught up (python scripts/nq_journal.py catch-up).")
+            if symbol != defs.SYMBOL:
+                self.reason = f"Analogues are kept for {defs.SYMBOL}, the journal symbol."
+            else:
+                pending = snapshot_pending(self.conn, day)
+                self.reason = (f"No {self.version} snapshot of {day} yet: {pending}." if pending else
+                               f"No {self.version} snapshot of {day} yet: the journal takes it at its next run - "
+                               f"Update data, Run forecaster (or python scripts/nq_journal.py catch-up).")
             self.note.text = self.reason
             return []
         self.aset = store.latest_analogue_set(self.conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
                                               pre.RULES_PROTOCOL_VERSION)
         self.render()
         if self.aset is None:
-            self.reason = f"No analogue set for {day} yet: python scripts/nq_journal.py match"
+            self.reason = (f"No analogue set for {day} yet: Update data, Run forecaster (or python "
+                           f"scripts/nq_journal.py match)")
         elif not self.aset["members"]:
             self.reason = f"No analogue for {day}: {self.aset['pool_size']} earlier session(s) scored."
         return list(self.aset["members"]) if self.aset is not None else []

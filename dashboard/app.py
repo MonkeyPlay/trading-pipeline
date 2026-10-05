@@ -19,6 +19,7 @@ if _PROJECT_ROOT not in sys.path:
 from nicegui import app, ui
 
 from config import Config
+from dashboard.components.pipeline import PipelinePanel
 from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
 from dashboard.views.forecast import show_forecast_page
@@ -62,8 +63,11 @@ def _db_status(conn) -> str:
         return f"{describe_dsn(Config.DATABASE_URL)} · schema unknown"
 
 
-def chrome(active: str, conn) -> None:
-    """Header and navigation shared by every page."""
+def chrome(active: str, conn) -> PipelinePanel:
+    """
+    Header and navigation shared by every page, with the pipeline's "Update data"
+    control. The page adds its own reload to the returned panel's ``on_update``.
+    """
     ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
     with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
         ui.label("Trading Pipeline").classes("text-lg font-medium")
@@ -71,14 +75,18 @@ def chrome(active: str, conn) -> None:
             button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
-        ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
+        panel = PipelinePanel()
+        panel.build()
+        status = ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
+    panel.on_update.append(lambda: status.set_text(_db_status(conn)))
+    return panel
 
 
 @ui.page("/")
 def index() -> None:
     conn = connection()
-    chrome("Session Explorer", conn)
-    show_candles_page(conn)
+    panel = chrome("Session Explorer", conn)
+    panel.on_update.append(show_candles_page(conn).reload)
 
 
 @ui.page("/evaluation")
@@ -91,8 +99,8 @@ def evaluation() -> None:
 @ui.page("/forecast")
 def forecast(run: str = None) -> None:
     conn = connection()
-    chrome("Forecast", conn)
-    show_forecast_page(conn, run)
+    panel = chrome("Forecast", conn)
+    panel.on_update.append(show_forecast_page(conn, run).reload)
 
 
 def main() -> None:

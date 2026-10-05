@@ -19,6 +19,10 @@ status, so a superseded or late run stays visible.
   outcome        hidden until "Show realised outcome": P2's record of the session's
                  latest outcome revision, beside the run's classes - a view, not a
                  score (stage 4 scores registered runs)
+
+After the forecaster runs from the header, the sessions and runs are read again
+(``ForecastPage.reload``): the run shown stays shown - a run never changes once
+stored - unless it was of the newest session and a newer session now has runs.
 """
 
 from __future__ import annotations
@@ -46,14 +50,31 @@ _FORECAST_FIELDS = set(range(25, 37)) | set(range(42, 46))
 class ForecastPage:
     def __init__(self, conn, run_id: Optional[str] = None) -> None:
         self.conn = conn
-        self.runs = store.list_forecast_runs(conn, "2000-01-01", "2100-01-01", profile=defs.DEFAULT_PROFILE)
+        self._load_runs()
+        self.requested = store.get_forecast_run(conn, run_id) if run_id else None
+        self.run: Optional[Dict[str, Any]] = None
+        self.outcome_shown = False
+
+    def _load_runs(self) -> None:
+        self.runs = store.list_forecast_runs(self.conn, "2000-01-01", "2100-01-01", profile=defs.DEFAULT_PROFILE)
         self.by_day: Dict[str, List[Dict[str, Any]]] = {}
         for r in self.runs:
             self.by_day.setdefault(r["session_date"], []).append(r)
         self.days = sorted(self.by_day, reverse=True)
-        self.requested = store.get_forecast_run(conn, run_id) if run_id else None
-        self.run: Optional[Dict[str, Any]] = None
-        self.outcome_shown = False
+
+    def reload(self) -> None:
+        """The stored runs read again (see the module docstring)."""
+        if not self.days:                                  # built without runs: build it again
+            ui.navigate.reload()
+            return
+        day, run_id = self.day_select.value, self.run_select.value
+        newest = day == self.days[0]
+        self._load_runs()
+        if newest and self.days[0] != day:
+            self.day_select.set_options(self.days, value=self.days[0])     # pick_day follows
+        else:
+            self.day_select.set_options(self.days)
+            self.pick_day(day, run_id)
 
     # -- layout ---------------------------------------------------------------
 
@@ -61,8 +82,9 @@ class ForecastPage:
         with ui.column().classes("w-full p-4 gap-3"):
             ui.label("Forecast").classes("text-2xl font-medium")
             if not self.days:
-                ui.label("No forecast runs yet. They are issued by catch-up (the collector's journal step), or: "
-                         "python scripts/nq_journal.py forecast --start 2025-09-01 --end 2026-10-02").style(_MUTED)
+                ui.label("No forecast runs yet. The forecaster issues them (Update data, above - the collector "
+                         "runs it too), or: python scripts/nq_journal.py forecast --start 2025-09-01 --end "
+                         "2026-10-02").style(_MUTED)
                 return
             ui.label(f"Deterministic forecasts from the run's frozen evidence: the baseline ({fc.BASELINE_VERSION}, "
                      f"stage 4 arm B) smooths the selected analogues with the earlier sessions; the prior "
@@ -208,5 +230,7 @@ class ForecastPage:
                         ui.label(value).classes(_CELL + " break-words")
 
 
-def show_forecast_page(conn, run_id: Optional[str] = None) -> None:
-    ForecastPage(conn, run_id).build()
+def show_forecast_page(conn, run_id: Optional[str] = None) -> ForecastPage:
+    page = ForecastPage(conn, run_id)
+    page.build()
+    return page

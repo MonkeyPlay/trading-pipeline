@@ -8,11 +8,12 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py snapshot --start 2026-06-01 --end 2026-09-25
     python scripts/nq_journal.py outcomes --start 2026-06-01 --end 2026-09-25
     python scripts/nq_journal.py backfill --start 2026-06-01 --end 2026-09-25  # snapshot + outcome, in order
-    python scripts/nq_journal.py catch-up                                   # every final session not yet stored
+    python scripts/nq_journal.py catch-up                                   # every session past its cutoff not yet stored
     python scripts/nq_journal.py annotate --start 2025-09-01 --end 2026-10-02  # rule-based structure annotations
     python scripts/nq_journal.py match                                      # analogue sets (P1 section 7 rubric)
     python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --estimate   # Claude: size and cost
     python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --batch      # Claude backfill
+                                     (Claude requests are manual: only from a terminal, after typing "send")
     python scripts/nq_journal.py annotate-llm --date 2026-10-02 --close-unresolved   # close requests a crash lost
     python scripts/nq_journal.py match --protocol llm                       # analogues over Claude's annotations
     python scripts/nq_journal.py analogues --date 2026-10-02 [--outcomes]   # one session's analogues
@@ -32,8 +33,11 @@ and their realised NQ-v2 outcome labels.
 
 ``--profile`` picks the cutoff profile (research_0929, the default, or
 operational_0927); each has its own snapshot version. Snapshots are historical
-reconstructions. Outcomes are recorded only once a session is final (two hours
-after its scheduled close) and become a new revision only when they change.
+reconstructions; catch-up takes a session in progress once its bars past the cutoff
+are stored (forecaster/journal.py snapshot_pending). Outcomes are recorded only once
+a session is final (two hours after its scheduled close) and become a new revision
+only when they change. Claude API requests (annotate-llm) are manual only, for now:
+from a terminal, after typing "send".
 
 Every command registers the label, convention and snapshot definitions first; a
 changed definition under an existing version name stops the run. The IB collector
@@ -128,9 +132,8 @@ def cmd_match(conn, args):
 
 
 def cmd_annotate_llm(conn, args):
-    """The Claude structure annotation (forecaster/structure_llm.py): estimate, live requests or a batch."""
-    import time
-    from datetime import datetime, timezone
+    """The Claude structure annotation (forecaster/structure_llm.py): estimate, live requests or a batch - sent only
+    after a person confirmed at a terminal."""
     from forecaster import structure_llm as llm
     version = defs.PROFILES[args.profile].snapshot_version
     unresolved = store.unresolved_inference_requests(conn, preopen.LLM_PROTOCOL_VERSION)
@@ -149,12 +152,44 @@ def cmd_annotate_llm(conn, args):
     print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) to send for {preopen.LLM_PROTOCOL_VERSION}"
           + (f"; {len(waiting)} with an unresolved request" if waiting else "")
           + (f"; {len(batches)} recorded batch(es) to collect first" if batches else "") + ".")
+    if todo:
+        e = llm.estimate(todo)
+        print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
+              f"live, ~${e['usd_batch']} with --batch ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT})")
     if args.estimate or not (todo or batches):
-        if todo:
-            e = llm.estimate(todo)
-            print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
-                  f"live, ~${e['usd_batch']} with --batch ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT})")
         return 0
+    what = ([f"{len(todo)} {'batch' if args.batch else 'live'} request(s)"] if todo else []) + \
+           ([f"collect {len(batches)} recorded batch(es)"] if batches else [])
+    if not confirmed_by_hand(f"Claude API ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT}): {' and '.join(what)}."):
+        return 1
+    with llm.manual_requests():
+        return _send_llm(conn, args, llm, todo, batches)
+
+
+def confirmed_by_hand(summary: str) -> bool:
+    """
+    Claude API requests are started by hand only, for now: a person at a terminal reads ``summary`` and types
+    "send". Without a terminal (cron, the dashboard's jobs, a pipe) nothing is sent.
+    """
+    if not sys.stdin.isatty():
+        print("Claude API requests are started by hand only, for now: run annotate-llm in a terminal and confirm "
+              "there. Nothing was sent.")
+        return False
+    print(summary)
+    try:
+        answer = input('Type "send" to go ahead, anything else to stop: ')
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() != "send":
+        print("Stopped. Nothing was sent.")
+        return False
+    return True
+
+
+def _send_llm(conn, args, llm, todo, batches):
+    """The requests of a confirmed annotate-llm run (inside structure_llm.manual_requests)."""
+    import time
+    from datetime import datetime, timezone
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -285,7 +320,7 @@ def cmd_annotation_review_report(conn, args):
 
 
 def cmd_catch_up(conn, args):
-    """Every final session since the journal's first that has no snapshot yet, then outcomes (catch_up)."""
+    """Every session since the journal's first past its cutoff with no snapshot yet, then outcomes (catch_up)."""
     return 1 if catch_up(conn, args.profile)["failed"] else 0
 
 
@@ -555,7 +590,7 @@ def main(argv=None):
     common(sub.add_parser("snapshot", help="Build and store evidence snapshot(s)"))
     common(sub.add_parser("outcomes", help="Label the stored snapshots of final sessions"), single=False)
     common(sub.add_parser("backfill", help="Snapshot + outcome, session by session"))
-    common(sub.add_parser("catch-up", help="Snapshot + outcome for every final session not yet stored"),
+    common(sub.add_parser("catch-up", help="Snapshot for every session past its cutoff not yet stored, outcome once final"),
            single=False, ranged=False)
     common(sub.add_parser("annotate", help="Rule-based structure annotations of the stored snapshots"),
            single=False)

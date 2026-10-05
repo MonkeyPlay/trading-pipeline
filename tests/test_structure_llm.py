@@ -1,7 +1,9 @@
 # tests/test_structure_llm.py
-"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v3) - without the API."""
+"""The Claude structure annotation (forecaster/structure_llm.py, nq_structure_llm_v4) - without the API."""
 
 import json
+
+import pytest
 
 from contracts import nq_preopen as pre
 from forecaster import structure_llm as llm
@@ -87,3 +89,23 @@ def test_validation_is_strict_where_the_schema_and_the_prompt_are():
     assert llm.validate(["not", "an", "object"], ids).startswith("schema: (answer)")
     # an unavailable field may cite nothing
     assert problem(field(value=None, status="unavailable", reason="too few bars", evidence_ids=[])) is None
+
+
+def test_claude_requests_are_refused_outside_a_manual_run():
+    for send in (lambda: llm.annotate_live(None, None, {}), lambda: llm.submit_batch(None, None, []),
+                 lambda: llm.collect_batch(None, None, "msgbatch_x")):
+        with pytest.raises(llm.ManualOnly, match="by hand only"):
+            send()                                   # before anything is recorded: no connection is touched
+
+
+@pytest.mark.parametrize("tty, typed, sent", [(False, "send", False), (True, "send", True), (True, "yes", False),
+                                              (True, "", False)])
+def test_claude_requests_need_a_person_at_a_terminal(monkeypatch, tty, typed, sent):
+    import builtins
+    import sys
+    from scripts.nq_journal import confirmed_by_hand
+    asked = []
+    monkeypatch.setattr(sys, "stdin", type("Stdin", (), {"isatty": lambda self: tty})())
+    monkeypatch.setattr(builtins, "input", lambda prompt="": asked.append(prompt) or typed)
+    assert confirmed_by_hand("Claude API (claude-opus-5-5, effort xhigh): 3 live request(s).") is sent
+    assert bool(asked) is tty                        # without a terminal nobody is even asked
