@@ -424,12 +424,18 @@ def llm_record() -> Dict[str, Any]:
 # Claude owns only Overnight Structure and Premarket Pattern; every other field and the price location are the
 # rule-based protocol's of the same snapshot. The request is date-blinded (forecaster/llm_arms.blinded_bundle).
 # v1 (registered 2026-10-05) capped the answer at 16,000 tokens: at effort xhigh its one request spent all of them
-# thinking and returned nothing. v2 is v1 with a 64,000-token cap, the request streamed.
-RESTRICTED_PROTOCOL_VERSION = "nq_structure_restricted_v2"
+# thinking and returned nothing. v2 is v1 with a 64,000-token cap, the request streamed (its first answer used
+# 23,239 tokens, 22,319 of them thinking). v3 (the user's choices, 2026-10-05): effort medium, and less evidence -
+# the 5m bars and their swing points only (the 15m bars repeat the 5m ones; the final 2m bars with the moving
+# averages were context only for these two fields) - and the requests live or through the Batch API.
+RESTRICTED_PROTOCOL_VERSION = "nq_structure_restricted_v3"
+RESTRICTED_EVIDENCE = ("bars_5m", "swings_5m")
 RESTRICTED_MAX_TOKENS = 64000
+# The effort of the Claude requests of stage 4's arms C and D (the full nine-field protocol keeps LLM_EFFORT).
+ARMS_EFFORT = "medium"
 RESTRICTED_FIELDS = ["Overnight Structure", "Premarket Pattern"]
 RESTRICTED_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts",
-                                 "runtime", "structure_annotation_restricted_v1.md")
+                                 "runtime", "structure_annotation_restricted_v3.md")
 BLINDING = ("no session date, weekday, contract or absolute price: times are the New York clock (HH:MM, the "
             "overnight runs from 18:00 to the cutoff, so 18:00-23:59 precede 00:00), bar ids name the bar by "
             "that clock (bar:<tf>:<HH:MM>), prices are index points relative to the previous RTH close (the "
@@ -450,17 +456,19 @@ def restricted_record() -> Dict[str, Any]:
     with open(RESTRICTED_PROMPT, "rb") as f:
         prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
     return _record(RESTRICTED_PROTOCOL_VERSION, "annotation", {
-        "annotator": "llm", "model": LLM_MODEL, "effort": LLM_EFFORT, "max_tokens": RESTRICTED_MAX_TOKENS,
-        "request": "streamed (thinking counts against max_tokens; the SDK streams a request this long)",
-        "supersedes": "nq_structure_restricted_v1: the same prompt and schema, capped at 16,000 tokens - too few for "
-                      "effort xhigh, which spent them all thinking",
-        "prompt": {"path": "prompts/runtime/structure_annotation_restricted_v1.md", "sha256": prompt_sha256,
+        "annotator": "llm", "model": LLM_MODEL, "effort": ARMS_EFFORT, "max_tokens": RESTRICTED_MAX_TOKENS,
+        "request": "live, streamed (thinking counts against max_tokens; the SDK streams a request this long) with "
+                   "the server-side refusal fallback - or through the Batch API (half price, no fallback there)",
+        "supersedes": "nq_structure_restricted_v2: effort xhigh, and the 15m bars and the final 2m bars with the "
+                      "moving averages besides; v1 also capped the answer at 16,000 tokens - too few for xhigh, "
+                      "which spent them all thinking",
+        "prompt": {"path": "prompts/runtime/structure_annotation_restricted_v3.md", "sha256": prompt_sha256,
                    "sources": ["A (A1)", "P1 section 4 (Overnight Structure, Premarket Pattern)"]},
         "output_schema": restricted_output_schema(), "fields": list(RESTRICTED_FIELDS),
         "from_the_rules": f"every other field and the price location: {RULES_PROTOCOL_VERSION} of the same snapshot",
         "blinding": BLINDING,
-        "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
-                    "the three moving averages and the confirmed 2/2 swing points on 5m bars, date-blinded",
+        "evidence": "the snapshot's references, the 5m bars of the overnight window and the confirmed 2/2 swing "
+                    "points on them, date-blinded",
         "validation": f"as {LLM_PROTOCOL_VERSION}, over the two fields",
         "accounting": f"as {LLM_PROTOCOL_VERSION}: the request ledger, one attempt per request",
         "matching": f"{MATCHER_VERSION} among the earlier sessions annotated under this protocol only",

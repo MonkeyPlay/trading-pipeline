@@ -218,7 +218,12 @@ def test_long_requests_are_streamed_with_their_cap():
 def test_the_synthesis_is_a_registered_algorithm_on_its_own_schema():
     records = {r["version"]: r for r in fc.all_records()}
     d = records[fc.SYNTHESIS_VERSION]["definition"]
-    assert d["model"] == pre.LLM_MODEL and d["effort"] == pre.LLM_EFFORT and d["schema_version"] == "nq_forecast_schema_v2"
+    assert d["model"] == pre.LLM_MODEL and d["effort"] == "medium" and d["schema_version"] == "nq_forecast_schema_v2"
+    assert pre.restricted_record()["definition"]["effort"] == "medium"
+    assert pre.llm_record()["definition"]["effort"] == pre.LLM_EFFORT == "xhigh"        # the full protocol: unchanged
+    params, _, _ = sl.build_request(snapshot(V, T=4), la.RESTRICTED)
+    assert params["output_config"]["effort"] == "medium"
+    assert la.build_synthesis_request({"x": 1})[0]["output_config"]["effort"] == "medium"
     assert "judgement" in records[fc.SYNTHESIS_SCHEMA_VERSION]["definition"]["estimation_statuses"]
     assert "judgement" not in records[fc.FORECAST_SCHEMA_VERSION]["definition"]["estimation_statuses"]
     assert fc.RULE_ALGORITHMS == (fc.BASELINE_VERSION, fc.PRIOR_VERSION)          # catch-up never issues C or D
@@ -251,3 +256,68 @@ def test_grading_scores_each_arm_against_what_happened_and_the_benchmark():
     assert (b["hits"], d["hits"]) == (0, 1) and d["mean_p"] == pytest.approx(0.6)
     assert d["vs_benchmark"] == pytest.approx(0.2) and b["vs_benchmark"] == pytest.approx(-0.2)
     assert g["chance"]["direction_15m"] == pytest.approx(1 / 3)
+
+
+def test_before_the_outcome_the_arms_are_compared_with_the_benchmark():
+    from forecaster.grading import compare
+    p = lambda cls, dist, status="predicted": {"status": status, "predicted_label": cls if status == "predicted"
+                                               else None, "distribution": dist}
+    runs = {"A": {"predictions": {"direction_15m": p("bullish", {"bullish": "1/2", "bearish": "1/4",
+                                                                 "neutral_band": "1/4"})}},
+            "B": {"predictions": {"direction_15m": p("bearish", {"bullish": "1/5", "bearish": "3/5",
+                                                                 "neutral_band": "1/5"})}},
+            "D": {"predictions": {"direction_15m": p(None, {"bullish": "2/5", "bearish": "2/5",
+                                                            "neutral_band": "1/5"}, "ambiguous_prediction"),
+                                  "first_move_5m": p(None, None, "unavailable")}}}
+    g = compare(runs)
+    assert [t for _, t in g["targets"]] == ["direction_15m"]                 # no arm forecast anything else
+    a, b, d = (g["arms"][k]["cells"]["direction_15m"] for k in "ABD")
+    assert (a["cls"], a["p"], a["agrees"]) == ("bullish", 0.5, None)          # the benchmark itself
+    assert (b["cls"], b["p"], b["agrees"]) == ("bearish", 0.6, False)
+    assert d["cls"] is None and d["top"] == ["bullish", "bearish"] and d["agrees"] is None
+    assert g["arms"]["D"]["cells"]["first_move_5m"]["p"] is None
+    assert (g["arms"]["B"]["agrees"], g["arms"]["B"]["comparable"]) == (0, 1)
+
+
+def test_chosen_days_are_the_scheduled_sessions_among_them():
+    assert la.target_sessions(1, days=["2026-10-02", "2026-10-03", "2026-10-02", "2026-09-30", "not-a-day"]) == \
+        ["2026-09-30", "2026-10-02"]                                         # Saturday, a repeat and junk dropped
+    assert la.target_sessions(5, days=[]) == []                              # chosen, but none: nothing
+
+
+def test_the_llm_job_names_its_days():
+    from dashboard.jobs import llm_command
+    cmd = llm_command(["2026-10-01", "2026-10-02"], "CD", "ab12")
+    assert cmd[-8:] == ["--date", "2026-10-01", "--date", "2026-10-02", "--arms", "CD", "--approval", "ab12"]
+    assert "--approval" not in llm_command(["2026-10-01"], "C")
+
+
+def test_each_arm_sends_only_its_evidence():
+    snap = snapshot(V, T=4)
+    c, ids = la.RESTRICTED.bundle(snap)
+    assert {"bars_5m", "swings_5m"} <= set(c) and not {"bars_15m", "bars_2m_final"} & set(c)
+    assert ids == sl.request_ids(sl.build_request(snap, la.RESTRICTED)[0])       # what a batch collection reads
+    d = la.blinded_bundle(snap, fc.SYNTHESIS_EVIDENCE)["bundle"]
+    assert {"bars_15m", "bars_2m_final"} <= set(d) and not {"bars_5m", "swings_5m"} & set(d)
+    full = canonical_json(la.blinded_bundle(snap)["bundle"])
+    assert len(canonical_json(c)) < 0.8 * len(full) and len(canonical_json(d)) < 0.6 * len(full)
+
+
+def test_the_llm_job_asks_for_the_batch_api_when_chosen():
+    from dashboard.jobs import llm_command
+    assert "--batch" in llm_command(["2026-10-01"], "CD", "ab12", batch=True)
+    assert "--batch" not in llm_command(["2026-10-01"], "CD", "ab12")
+
+
+def test_a_section_of_the_bundle_can_be_cited():
+    bundle = {"references": {"ref:on_high": {}}, "bars_15m": {"rows": [["bar:15m:18:00"]]},
+              "price_location": {"on_high": "Below", "on_low": "Above"}, "eligibility": {"direction_15m": "eligible"}}
+    ids = sl.bundle_ids(bundle)
+    assert {"price_location", "price_location:on_high", "eligibility", "eligibility:direction_15m"} <= ids
+    assert "price_location:vwap" not in ids and "completeness" not in ids          # only what is in the bundle
+    answer = synthesis_answer(_bundle())
+    _item(answer, "first_level_tested")["supporting_evidence_ids"] = ["price_location"]   # 2026-09-30's citation
+    b = _bundle()
+    assert la.validate_synthesis(json.loads(json.dumps(answer)), {f"baseline:{t}" for t in TARGETS} | ids,
+                                 {t: None for t in TARGETS},
+                                 {t: b["baseline"][f"baseline:{t}"]["predicted_class"] for t in TARGETS}) is None

@@ -184,10 +184,20 @@ def evidence_bundle(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], set]:
     return bundle, bundle_ids(bundle)
 
 
+# Sections of a bundle that are evidence as a whole, and each of their entries as <section>:<key>.
+SECTION_IDS = ("session", "completeness", "price_location", "eligibility")
+
+
 def bundle_ids(bundle: Dict[str, Any]) -> set:
-    """The evidence ids of a bundle: its references and its bars."""
-    return set(bundle["references"]) | {r[0] for k in ("bars_5m", "bars_15m", "bars_2m_final")
-                                        for r in bundle[k]["rows"]}
+    """The evidence ids of a bundle: its references, its bars (a trimmed bundle lacks some bar sets) and the
+    sections in SECTION_IDS it holds - every id that points inside the bundle."""
+    ids = set(bundle["references"]) | {r[0] for k in ("bars_5m", "bars_15m", "bars_2m_final")
+                                       for r in (bundle.get(k) or {}).get("rows", [])}
+    for key in SECTION_IDS:
+        if key in bundle:
+            ids.add(key)
+            ids |= {f"{key}:{k}" for k in (bundle[key] if isinstance(bundle[key], dict) else {})}
+    return ids
 
 
 def request_ids(params: Dict[str, Any]) -> set:

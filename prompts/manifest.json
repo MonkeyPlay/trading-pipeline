@@ -154,6 +154,28 @@
       "sha256": "39a1e24bd45c0273937717b744a4df5e9b33321c7d3930cc4e05337269a93c08",
       "bytes": 9938,
       "provenance": "Generated 2026-10-05 from forecast_synthesis_v2.md; nq_synthesis_p1_v3 records its hash, so an edit needs a new algorithm version."
+    },
+    {
+      "id": "nq_structure_restricted_v3",
+      "path": "prompts/runtime/structure_annotation_restricted_v3.md",
+      "title": "Structure annotation, restricted (arm C) - runtime prompt",
+      "derived_from": [
+        "nq_structure_restricted_v1's prompt with the evidence section for the 5m bars and swing points only"
+      ],
+      "sha256": "7e3b2c4472814e9ad432d36d816ecf54ec5cf42512a6ef0e8b7eb11cd0817dc3",
+      "bytes": 8006,
+      "provenance": "Generated 2026-10-05; nq_structure_restricted_v3 records its hash, so an edit needs a new protocol version."
+    },
+    {
+      "id": "nq_synthesis_p1_v4",
+      "path": "prompts/runtime/forecast_synthesis_v4.md",
+      "title": "Forecast synthesis (arm D) - runtime prompt",
+      "derived_from": [
+        "nq_synthesis_p1_v3's prompt with the evidence section for the 15m and final 2m bars only"
+      ],
+      "sha256": "f2be1cb5c5e1668fe6a0cc34d92d64fdc42522af90a038873a39b6f08089ff38",
+      "bytes": 10036,
+      "provenance": "Generated 2026-10-05; nq_synthesis_p1_v4 records its hash, so an edit needs a new algorithm version."
     }
   ]
 }

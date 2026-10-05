@@ -19,8 +19,9 @@ price - times on the New York clock, prices relative to the previous RTH close -
 historical replay cannot draw on a remembered outcome. Evidence ids in an answer are
 mapped back to the snapshot's own ids before anything is stored.
 
-  plan(conn, sessions, arms)   the last ``sessions`` scheduled sessions up to today:
-                               what each needs, how many requests, a rough cost
+  plan(conn, sessions, arms)   the last ``sessions`` scheduled sessions up to today - or
+                               the chosen ``days`` - what each needs, how many requests,
+                               a rough cost
   run(conn, client, ...)       sends what the plan needs (at most ``max_requests``),
                                then matches and issues arm C, and synthesises arm D -
                                each request recorded in the inference ledger first,
@@ -31,8 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -52,11 +54,13 @@ from forecaster.forecast_validation import ForecastInputError
 from forecaster.provenance import code_revision
 
 MODE = "historical_replay"
-# The rough estimate's output tokens (thinking included) per request at effort xhigh. Measured 2026-10-05: one
-# restricted annotation spent all of its 16,000 tokens thinking without answering, so these are guesses above that;
-# the plan also gives the most a run can cost, every request at its cap.
+# The plan estimates a request's output tokens (thinking included) from the arm's answered requests
+# (measured_output_tokens): its current version's, else its earlier versions' - at effort xhigh those thought longer,
+# so the estimate errs high - else these guesses (the first answers at xhigh, 2026-10-05: 23,239 and 6,568). It
+# also gives the most a run can cost, every request at its cap.
 RESTRICTED_OUTPUT_TOKENS = 24000
-SYNTHESIS_OUTPUT_TOKENS = 32000
+SYNTHESIS_OUTPUT_TOKENS = 8000
+RESTRICTED_PROTOCOLS = (pre.RESTRICTED_PROTOCOL_VERSION, "nq_structure_restricted_v2", "nq_structure_restricted_v1")
 
 
 # --------------------------------------------------------------------------
@@ -69,10 +73,14 @@ def _clock(value: str) -> str:
     return t.astimezone(cal.NY_TZ).strftime("%H:%M")
 
 
-def blinded_bundle(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+ALL_EVIDENCE = ("bars_5m", "bars_15m", "bars_2m_final", "swings_5m")
+
+
+def blinded_bundle(snapshot: Dict[str, Any], keep: Sequence[str] = ALL_EVIDENCE) -> Dict[str, Any]:
     """
     The structure annotation's evidence bundle (structure_llm.evidence_bundle) without the date, the contract and
-    absolute prices: ``{'bundle', 'ids', 'id_map' (blinded id -> the snapshot's id), 'anchor' (price, name)}``.
+    absolute prices, with only the bar sets in ``keep`` (each arm's protocol sends its own: RESTRICTED_EVIDENCE,
+    SYNTHESIS_EVIDENCE): ``{'bundle', 'ids', 'id_map' (blinded id -> the snapshot's id), 'anchor' (price, name)}``.
     """
     plain, _ = sl.evidence_bundle(snapshot)
     refs = plain["references"]
@@ -113,6 +121,7 @@ def blinded_bundle(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "swings_5m": [{"bar": bar_id(s["bar"]), "kind": s["kind"], "price": px(s["price"]),
                        "confirmed_at": _clock(s["confirmed_at"])} for s in plain["swings_5m"]],
     }
+    bundle = {k: v for k, v in bundle.items() if k not in ALL_EVIDENCE or k in keep}
     return {"bundle": bundle, "ids": sl.bundle_ids(bundle), "id_map": id_map, "anchor": (float(anchor), anchor_label)}
 
 
@@ -141,11 +150,11 @@ def restricted_annotation(snapshot: Dict[str, Any], answer: Dict[str, Any], mode
 
 
 def _restricted_bundle(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], set]:
-    blind = blinded_bundle(snapshot)
+    blind = blinded_bundle(snapshot, pre.RESTRICTED_EVIDENCE)
     return blind["bundle"], blind["ids"]
 
 
-RESTRICTED = sl.Protocol(pre.RESTRICTED_PROTOCOL_VERSION, pre.LLM_MODEL, pre.LLM_EFFORT, pre.RESTRICTED_MAX_TOKENS,
+RESTRICTED = sl.Protocol(pre.RESTRICTED_PROTOCOL_VERSION, pre.LLM_MODEL, pre.ARMS_EFFORT, pre.RESTRICTED_MAX_TOKENS,
                          pre.RESTRICTED_PROMPT, tuple(pre.RESTRICTED_FIELDS), pre.restricted_output_schema,
                          _restricted_bundle, restricted_annotation)
 
@@ -178,7 +187,7 @@ def synthesis_bundle(snapshot: Dict[str, Any], annotation: Dict[str, Any], aset:
     distribution and class, the eligibility, the vocabulary and the candidate levels. ``{'bundle', 'ids',
     'id_map', 'eligibility', 'baseline_class'}``.
     """
-    blind = blinded_bundle(snapshot)
+    blind = blinded_bundle(snapshot, fc.SYNTHESIS_EVIDENCE)
     bundle = dict(blind["bundle"])
     anchor = blind["anchor"][0]
     targets = [t for _, t in fc.FORECAST_TARGETS]
@@ -206,7 +215,7 @@ def synthesis_bundle(snapshot: Dict[str, Any], annotation: Dict[str, Any], aset:
                               if c.get("status") == "valid" and c.get("value") is not None
                               else {"value": None, "status": c.get("status")})
         for name, c in (evidence.get("candidates") or {}).items()}
-    ids = (blind["ids"] | set(bundle["annotation"]) | {a["id"] for a in bundle["analogues"]}
+    ids = (sl.bundle_ids(bundle) | set(bundle["annotation"]) | {a["id"] for a in bundle["analogues"]}
            | set(bundle["baseline"]) | set(bundle["candidates"]))
     return {"bundle": bundle, "ids": ids, "id_map": blind["id_map"], "eligibility": eligibility,
             "baseline_class": {t: base["predictions"][t]["predicted_label"] for t in targets}}
@@ -222,7 +231,7 @@ def build_synthesis_request(bundle: Dict[str, Any]) -> Tuple[Dict[str, Any], str
         "model": pre.LLM_MODEL, "max_tokens": fc.SYNTHESIS_MAX_TOKENS,
         "system": [{"type": "text", "text": _synthesis_prompt(), "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": "Evidence bundle (JSON):\n" + canonical_json(bundle)}],
-        "output_config": {"effort": pre.LLM_EFFORT,
+        "output_config": {"effort": pre.ARMS_EFFORT,
                           "format": {"type": "json_schema", "schema": fc.synthesis_output_schema()}},
     }
     return params, hashlib.sha256(canonical_json(params).encode()).hexdigest()
@@ -356,41 +365,51 @@ def synthesis_evidence(conn, snapshot, annotation, aset, profile: str, history) 
     return evidence
 
 
-def synthesize(conn, client, day: str, profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:
-    """
-    Arm D for one session: ``{'status': 'sent'|'stored'|'skipped', 'run'?, 'reason'?}``. The request is recorded
-    before it is sent and the run stored with its outcome - issued, invalid (failed validation, the raw text
-    kept) or failed (refused, cut off, an error); evidence already answered by an issued run is not sent again.
-    """
-    sl._require_manual()
+def _prepare(conn, snapshot, annotation, aset, profile: str, history) -> Dict[str, Any]:
+    """Everything a synthesis request of this evidence is built from, and the request itself."""
+    evidence = synthesis_evidence(conn, snapshot, annotation, aset, profile, history)
+    syn = synthesis_bundle(snapshot, annotation, aset, evidence)
+    params, request_hash = build_synthesis_request(syn["bundle"])
+    return {"snapshot": snapshot, "annotation": annotation, "aset": aset, "profile": profile,
+            "key": synthesis_key(snapshot, annotation, aset, profile), "evidence": evidence, "syn": syn,
+            "params": params, "request_hash": request_hash}
+
+
+def _ready(conn, day: str, profile: str, history) -> Dict[str, Any]:
+    """``{'status': 'ready', ...the preparation}`` for a session whose synthesis is due, else ``{'status':
+    'skipped'|'stored', ...}``."""
     found = _b_evidence(conn, day, profile)
     if found is None:
         return {"status": "skipped", "reason": "no arm B evidence yet (snapshot, annotation, analogue set)"}
     snapshot, annotation, aset = found
     if annotation["integrity_status"] != "ok":
         return {"status": "skipped", "reason": "the annotation is contaminated (P1 stop rule)"}
-    key = synthesis_key(snapshot, annotation, aset, profile)
-    stored = store.find_forecast_run(conn, key)
+    stored = store.find_forecast_run(conn, synthesis_key(snapshot, annotation, aset, profile))
     if stored is not None:
         return {"status": "stored", "run": store.get_forecast_run(conn, stored)}
-    started = datetime.now(timezone.utc)
-    history = store.outcome_history(conn, defs.LABEL_VERSION)
-    evidence = synthesis_evidence(conn, snapshot, annotation, aset, profile, history)
-    syn = synthesis_bundle(snapshot, annotation, aset, evidence)
-    params, request_hash = build_synthesis_request(syn["bundle"])
-    request_id = store.save_inference_request(conn, {
-        "snapshot_id": snapshot["snapshot_id"], "protocol_version": fc.SYNTHESIS_VERSION, "model": pre.LLM_MODEL,
-        "request": params, "request_hash": request_hash, "prompt_sha256": sl._sha(params["system"][0]["text"]),
+    return {"status": "ready", **_prepare(conn, snapshot, annotation, aset, profile, history)}
+
+
+def _record(conn, prep: Dict[str, Any], mode: str) -> str:
+    params = prep["params"]
+    return store.save_inference_request(conn, {
+        "snapshot_id": prep["snapshot"]["snapshot_id"], "protocol_version": fc.SYNTHESIS_VERSION,
+        "model": pre.LLM_MODEL, "request": params, "request_hash": prep["request_hash"],
+        "prompt_sha256": sl._sha(params["system"][0]["text"]),
         "schema_sha256": sl._sha(params["output_config"]["format"]["schema"]),
-        "evidence_sha256": sl._sha(params["messages"][0]["content"]), "code_revision": code_revision(),
-        "mode": "live"})
-    attempt: Dict[str, Any] = {"request_id": request_id, "request_hash": request_hash}
-    status, reason, answer = "failed", None, None
-    try:
-        message = sl.send(client, params)
-    except Exception as e:  # the run is kept as failed; nothing is filled in from another run
-        reason = f"{type(e).__name__}: {e}"
-    else:
+        "evidence_sha256": sl._sha(params["messages"][0]["content"]), "code_revision": code_revision(), "mode": mode})
+
+
+def _finish(conn, prep: Dict[str, Any], request_id: str, started: datetime, message=None,
+            error: Optional[str] = None) -> Dict[str, Any]:
+    """Stores the run answering ``request_id``: issued, invalid (failed validation, the raw text kept) or failed
+    (no answer, refused, cut off, an error) - nothing is filled in from another run."""
+    snapshot, annotation, aset, evidence, syn = (prep[k] for k in ("snapshot", "annotation", "aset", "evidence",
+                                                                   "syn"))
+    key, profile, day = prep["key"], prep["profile"], str(snapshot["session_date"])
+    attempt: Dict[str, Any] = {"request_id": request_id, "request_hash": prep["request_hash"]}
+    status, reason, answer = "failed", error, None
+    if message is not None:
         attempt.update(model=getattr(message, "model", pre.LLM_MODEL), stop_reason=message.stop_reason,
                        usage=None if getattr(message, "usage", None) is None else json.loads(message.usage.to_json()))
         text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), None)
@@ -437,15 +456,171 @@ def synthesize(conn, client, day: str, profile: str = defs.DEFAULT_PROFILE) -> D
         "failure_reason": reason, "evidence_digest": _digest(evidence), "outputs": outputs,
         "request_id": request_id}
     run_id, _ = store.save_forecast_run(conn, run, {**evidence, "attempt": attempt}, predictions)
-    return {"status": "sent", "run": store.get_forecast_run(conn, run_id)}
+    return store.get_forecast_run(conn, run_id)
+
+
+def synthesize(conn, client, day: str, profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:
+    """
+    Arm D for one session, live: ``{'status': 'sent'|'stored'|'skipped', 'run'?, 'reason'?}``. The request is
+    recorded before it is sent and the run stored with its outcome; evidence already answered by an issued run is
+    not sent again.
+    """
+    sl._require_manual()
+    prep = _ready(conn, day, profile, store.outcome_history(conn, defs.LABEL_VERSION))
+    if prep["status"] != "ready":
+        return prep
+    started = datetime.now(timezone.utc)
+    request_id = _record(conn, prep, "live")
+    try:
+        message = sl.send(client, prep["params"])
+    except Exception as e:
+        return {"status": "sent", "run": _finish(conn, prep, request_id, started, error=f"{type(e).__name__}: {e}")}
+    return {"status": "sent", "run": _finish(conn, prep, request_id, started, message)}
+
+
+def submit_synthesis_batch(conn, client, days: Sequence[str], profile: str = defs.DEFAULT_PROFILE,
+                           limit: Optional[int] = None) -> Tuple[Optional[str], int]:
+    """
+    Arm D for ``days`` through the Batch API (half price; no refusal fallback there): ``(batch id or None,
+    requests)``. Each request is recorded before the batch is created, its id the custom_id, and the batch id the
+    moment it is known; a batch the API refuses closes its requests as failed runs.
+    """
+    sl._require_manual()
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+    history = store.outcome_history(conn, defs.LABEL_VERSION)
+    preps = []
+    for day in days:
+        if limit is not None and len(preps) >= limit:
+            break
+        prep = _ready(conn, day, profile, history)
+        if prep["status"] == "ready" and not pending_snapshots(conn, "D") & {prep["snapshot"]["snapshot_id"]}:
+            preps.append(prep)
+    if not preps:
+        return None, 0
+    recorded = [(prep, _record(conn, prep, "batch")) for prep in preps]
+    submitted = datetime.now(timezone.utc)
+    try:
+        batch_id = client.messages.batches.create(requests=[
+            Request(custom_id=request_id, params=MessageCreateParamsNonStreaming(**prep["params"]))
+            for prep, request_id in recorded]).id
+    except Exception as e:
+        for prep, request_id in recorded:
+            _finish(conn, prep, request_id, submitted, error=f"batch not created: {type(e).__name__}: {e}")
+        return None, len(recorded)
+    store.save_inference_batch(conn, batch_id, [r for _, r in recorded], submitted)
+    return batch_id, len(recorded)
+
+
+def _prep_for_request(conn, req: Dict[str, Any], profile: str, history) -> Optional[Dict[str, Any]]:
+    """The evidence an archived synthesis request was built from: among the snapshot's rule-based analogue sets,
+    the one whose rebuilt request has the archived hash - None when none has (the request cannot be matched)."""
+    snapshot = store.get_snapshot(conn, req["snapshot_id"])
+    rows = conn.execute(
+        "SELECT s.set_id FROM journal.analogue_sets s JOIN journal.structure_annotations a "
+        "ON a.annotation_id = s.target_annotation_id WHERE s.target_snapshot_id = %s AND a.protocol_version = %s "
+        "ORDER BY s.created_at DESC;", (req["snapshot_id"], pre.RULES_PROTOCOL_VERSION)).fetchall()
+    for row in rows:
+        aset = store.get_analogue_set(conn, str(row["set_id"]))
+        annotation = store.get_annotation(conn, aset["target_annotation_id"])
+        prep = _prepare(conn, snapshot, annotation, aset, profile, history)
+        if prep["request_hash"] == req["request_hash"]:
+            return prep
+    return None
+
+
+def collect_synthesis_batch(conn, client, batch_id: str, profile: str = defs.DEFAULT_PROFILE) -> Dict[str, int]:
+    """
+    Stores a run for every request of an ended, recorded synthesis batch not answered yet (an interrupted
+    collection simply runs again): its answer, or failed when the batch has no result for it. Each answer is
+    matched to the evidence of the request archived when it was sent. Returns status counts.
+    """
+    sl._require_manual()
+    ledger = {r["request_id"]: r for r in store.inference_batch_requests(conn, batch_id)}
+    history = store.outcome_history(conn, defs.LABEL_VERSION)
+    counts: Dict[str, int] = {}
+    seen = set()
+
+    def store_run(req, message=None, error=None):
+        prep = _prep_for_request(conn, req, profile, history)
+        if prep is None:
+            _unmatched_run(conn, req, profile)
+            counts["failed"] = counts.get("failed", 0) + 1
+            return
+        run = _finish(conn, prep, req["request_id"], _as_datetime(req["submitted_at"]), message, error)
+        counts[run["lifecycle_status"]] = counts.get(run["lifecycle_status"], 0) + 1
+
+    for result in client.messages.batches.results(batch_id):
+        req = ledger.get(result.custom_id)
+        if req is None or req["answered"]:
+            continue
+        seen.add(result.custom_id)
+        if result.result.type == "succeeded":
+            store_run(req, message=result.result.message)
+        else:
+            store_run(req, error=f"batch result {result.result.type}")
+    for request_id, req in ledger.items():
+        if not req["answered"] and request_id not in seen:
+            store_run(req, error="no result for this request in the ended batch")
+    return counts
+
+
+def _unmatched_run(conn, req: Dict[str, Any], profile: str) -> None:
+    """Closes a batch request whose evidence cannot be found again as a failed run of its snapshot - so it is not
+    pending for ever - with no annotation, analogue set or predictions."""
+    snapshot = store.get_snapshot(conn, req["snapshot_id"])
+    now = datetime.now(timezone.utc)
+    reason = "the evidence of the archived request was not found again; the answer is not used"
+    store.save_forecast_run(conn, {
+        "idempotency_key": f"unmatched:{req['request_id']}", "symbol": snapshot["symbol"],
+        "session_date": str(snapshot["session_date"]), "contract_id": snapshot["contract_id"], "profile": profile,
+        "snapshot_id": snapshot["snapshot_id"], "annotation_id": None, "analogue_set_id": None,
+        "label_version": defs.LABEL_VERSION, "algorithm_version": fc.SYNTHESIS_VERSION,
+        "schema_version": fc.SYNTHESIS_SCHEMA_VERSION, "issue_policy": fc.ISSUE_POLICIES[MODE],
+        "code_revision": code_revision(), "mode": MODE, "input_cutoff_at": snapshot["cutoff_at"], "deadline_at": None,
+        "generation_started_at": _as_datetime(req["submitted_at"]), "generation_completed_at": now,
+        "lifecycle_status": "failed", "supersedes_run_id": None, "failure_reason": reason,
+        "evidence_digest": _digest({"request": req["request_id"]}), "outputs": {}, "request_id": req["request_id"]},
+        {"attempt": {"request_id": req["request_id"], "request_hash": req["request_hash"]}}, [])
+
+
+def _as_datetime(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    t = datetime.fromisoformat(str(value).replace(" ", "T"))
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def pending_snapshots(conn, arm: str) -> set:
+    """Snapshots with an arm's request recorded but not answered - in a batch still processing, or lost (a live
+    request whose run ended): never sent again until answered or closed."""
+    version = pre.RESTRICTED_PROTOCOL_VERSION if arm == "C" else fc.SYNTHESIS_VERSION
+    return {r["snapshot_id"] for r in store.unresolved_inference_requests(conn, version)}
+
+
+def pending_batches(conn) -> Dict[str, List[str]]:
+    """Per arm the recorded batches with unanswered requests, to collect before anything new is sent."""
+    return {arm: sorted({r["batch_id"] for r in store.unresolved_inference_requests(conn, version) if r["batch_id"]})
+            for arm, version in (("C", pre.RESTRICTED_PROTOCOL_VERSION), ("D", fc.SYNTHESIS_VERSION))}
 
 
 # --------------------------------------------------------------------------
 # Plan and run
 # --------------------------------------------------------------------------
 
-def target_sessions(sessions: int, now: Optional[datetime] = None) -> List[str]:
-    """The last ``sessions`` scheduled sessions up to today (New York), oldest first."""
+def target_sessions(sessions: int, now: Optional[datetime] = None,
+                    days: Optional[Sequence[str]] = None) -> List[str]:
+    """The chosen ``days`` that are scheduled sessions, or else the last ``sessions`` scheduled sessions up to today
+    (New York); oldest first."""
+    if days is not None:
+        chosen = set()
+        for d in days:
+            try:
+                if cal.session(d).is_open:
+                    chosen.add(cal.session(d).session_date.isoformat())
+            except (cal.CalendarCoverageError, ValueError):
+                continue
+        return sorted(chosen)
     today = (now or datetime.now(timezone.utc)).astimezone(cal.NY_TZ).date()
     days: List[str] = []
     s = cal.session(today)
@@ -455,14 +630,90 @@ def target_sessions(sessions: int, now: Optional[datetime] = None) -> List[str]:
     return sorted(days[:sessions])
 
 
+def _median(values: List[int]) -> int:
+    values = sorted(values)
+    return values[len(values) // 2]
+
+
+def measured_output_tokens(conn, arm: str) -> Tuple[int, str]:
+    """``(tokens, basis)``: the median output tokens of the arm's answered requests - its current version's, else
+    its earlier versions' (an upper estimate where they thought at a higher effort) - else the guess."""
+    if arm == "C":
+        versions, guess = RESTRICTED_PROTOCOLS, RESTRICTED_OUTPUT_TOKENS
+        sql = ("SELECT usage FROM journal.annotation_attempts WHERE protocol_version = %s AND status = 'ok' "
+               "AND usage IS NOT NULL;")
+        read = lambda row: _load(row["usage"])
+    else:
+        versions, guess = (fc.SYNTHESIS_VERSION,) + tuple(reversed(fc.ARM_HISTORY["D"])), SYNTHESIS_OUTPUT_TOKENS
+        sql = ("SELECT f.evidence FROM journal.forecast_evidence f JOIN journal.forecast_runs r USING (run_id) "
+               "WHERE r.algorithm_version = %s AND r.lifecycle_status = 'issued' AND r.request_id IS NOT NULL;")
+        read = lambda row: (_load(row["evidence"]).get("attempt") or {}).get("usage")
+    for version in versions:
+        tokens = [int(u["output_tokens"]) for u in (read(r) for r in conn.execute(sql, (version,)).fetchall())
+                  if u and u.get("output_tokens")]
+        if tokens:
+            earlier = "" if version == versions[0] else " (an earlier version: likely high)"
+            return _median(tokens), f"the median of {len(tokens)} {version} request(s){earlier}"
+    return guess, "a guess - no request answered yet"
+
+
+def _load(value):
+    return json.loads(value) if isinstance(value, str) else (value or {})
+
+
+def _input_chars_per_token(conn, arm: str) -> Tuple[float, str]:
+    """Characters per input token of the arm's answered requests (system prompt plus evidence, any version), so
+    the plan sizes a request from its text; dense numeric JSON runs near 1.6. ``(ratio, basis)``."""
+    if arm == "C":
+        rows = conn.execute(
+            "SELECT r.request, t.usage FROM journal.annotation_attempts t JOIN journal.inference_requests r "
+            "ON r.request_id = t.request_id WHERE t.status = 'ok' AND t.usage IS NOT NULL AND "
+            "r.protocol_version LIKE 'nq_structure_restricted_%%';").fetchall()
+        pairs = [(_load(row["request"]), _load(row["usage"])) for row in rows]
+    else:
+        rows = conn.execute(
+            "SELECT r.request, f.evidence FROM journal.forecast_runs x JOIN journal.inference_requests r "
+            "ON r.request_id = x.request_id JOIN journal.forecast_evidence f ON f.run_id = x.run_id "
+            "WHERE x.lifecycle_status = 'issued';").fetchall()
+        pairs = [(_load(row["request"]), (_load(row["evidence"]).get("attempt") or {}).get("usage")) for row in rows]
+    chars = tokens = 0
+    for request, usage in pairs:
+        if not usage:
+            continue
+        chars += len(request["system"][0]["text"]) + len(request["messages"][0]["content"])
+        tokens += (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0) + \
+            (usage.get("cache_read_input_tokens") or 0)
+    if tokens:
+        return chars / tokens, f"{chars / tokens:.2f} characters per input token, measured"
+    return 1.7, "1.7 characters per input token, a guess"
+
+
+def _cost(conn, arm: str, request_chars: List[int], cap: int, batch: bool) -> Dict[str, Any]:
+    """The rough cost of an arm's requests (list prices; input at the base price, the Batch API halving all)."""
+    ratio, input_basis = _input_chars_per_token(conn, arm)
+    output, output_basis = measured_output_tokens(conn, arm)
+    tokens_in = sum(request_chars) / ratio
+    factor = 0.5 if batch else 1.0
+    return {"usd": factor * (tokens_in * 4 + output * len(request_chars) * 20) / 1e6,
+            "usd_max": factor * (tokens_in * 4 + cap * len(request_chars) * 20) / 1e6,
+            "basis": f"per request: output {output:,} tokens ({output_basis}), input "
+                     f"{tokens_in / max(1, len(request_chars)):,.0f} tokens ({input_basis})"}
+
+
 def plan(conn, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profile: str = defs.DEFAULT_PROFILE,
-         now: Optional[datetime] = None) -> Dict[str, Any]:
-    """What a run over the last ``sessions`` sessions would do, without sending anything (see the module
-    docstring): per session the arms' state, the requests, a rough cost and arm C's annotated pool."""
+         now: Optional[datetime] = None, days: Optional[Sequence[str]] = None, batch: bool = False) -> Dict[str, Any]:
+    """
+    What a run over the last ``sessions`` sessions - or the chosen ``days`` - would do, without sending anything
+    (see the module docstring): per session the arms' state (a request recorded but not answered is pending, never
+    sent again), the requests, a rough cost - halved through the Batch API - with its basis, the recorded batches
+    to collect, and arm C's pool.
+    """
     now = now or datetime.now(timezone.utc)
     version = defs.PROFILES[profile].snapshot_version
+    pending = {arm: pending_snapshots(conn, arm) for arm in arms}
     rows, need_c, need_d = [], [], []
-    for day in target_sessions(sessions, now):
+    history = store.outcome_history(conn, defs.LABEL_VERSION) if "D" in arms else None
+    for day in target_sessions(sessions, now, days):
         snaps = store.list_snapshots(conn, day, day, version)
         if not snaps:
             rows.append({"session_date": day, "skip": journal.snapshot_pending(conn, day, profile, now)
@@ -470,75 +721,154 @@ def plan(conn, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profile: str
             continue
         snap, row = snaps[0], {"session_date": day}
         if "C" in arms:
-            ann = store.latest_annotation(conn, snap["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION)
-            row["C"] = "annotated" if ann is not None else "request"
-            if ann is None:
+            if store.latest_annotation(conn, snap["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is not None:
+                row["C"] = "annotated"
+            elif snap["snapshot_id"] in pending["C"]:
+                row["C"] = "pending - its answer is collected first"
+            else:
+                row["C"] = "request"
                 need_c.append(snap)
         if "D" in arms:
-            found = _b_evidence(conn, day, profile)
-            if found is None:
-                row["D"] = "no arm B evidence yet - run the forecaster"
+            prep = _ready(conn, day, profile, history)
+            if prep["status"] == "skipped":
+                row["D"] = prep["reason"]
+            elif prep["status"] == "stored":
+                row["D"] = "issued"
+            elif snap["snapshot_id"] in pending["D"]:
+                row["D"] = "pending - its answer is collected first"
             else:
-                key = synthesis_key(*found, profile)
-                row["D"] = "issued" if store.find_forecast_run(conn, key) else "request"
-                if row["D"] == "request":
-                    need_d.append(found)
+                row["D"] = "request"
+                need_d.append(prep)
         rows.append(row)
-    usd = 0.0
-    usd_max = (len(need_c) * pre.RESTRICTED_MAX_TOKENS + len(need_d) * fc.SYNTHESIS_MAX_TOKENS) / 1e6 * 20
+    usd = usd_max = 0.0
+    basis = {}
+    marker = len("Evidence bundle (JSON):\n")
     if need_c:
-        e = sl.estimate(need_c, RESTRICTED, RESTRICTED_OUTPUT_TOKENS)
-        usd += e["usd_live"]
-        usd_max += e["input_tokens"] / 1e6 * 4
+        prompt = len(sl._system_prompt(RESTRICTED))
+        c = _cost(conn, "C", [prompt + marker + len(canonical_json(RESTRICTED.bundle(s)[0])) for s in need_c],
+                  pre.RESTRICTED_MAX_TOKENS, batch)
+        usd, usd_max, basis["C"] = usd + c["usd"], usd_max + c["usd_max"], c["basis"]
     if need_d:
-        history = store.outcome_history(conn, defs.LABEL_VERSION)
-        chars = 0
-        for snapshot, annotation, aset in need_d:
-            evidence = synthesis_evidence(conn, snapshot, annotation, aset, profile, history)
-            chars += len(canonical_json(synthesis_bundle(snapshot, annotation, aset, evidence)["bundle"]))
-        chars += len(_synthesis_prompt()) * len(need_d)
-        usd += chars / 3.5 / 1e6 * 4 + SYNTHESIS_OUTPUT_TOKENS * len(need_d) / 1e6 * 20
-        usd_max += chars / 3.5 / 1e6 * 4
+        d = _cost(conn, "D", [len(p["params"]["system"][0]["text"]) + len(p["params"]["messages"][0]["content"])
+                              for p in need_d], fc.SYNTHESIS_MAX_TOKENS, batch)
+        usd, usd_max, basis["D"] = usd + d["usd"], usd_max + d["usd_max"], d["basis"]
     pool = sum(1 for s in store.list_snapshots(conn, "2000-01-01", "2100-01-01", version)
                if store.latest_annotation(conn, s["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is not None)
+    batches = {arm: ids for arm, ids in pending_batches(conn).items() if arm in arms and ids}
     return {"sessions": rows, "arms": list(arms), "requests": len(need_c) + len(need_d),
             "requests_c": len(need_c), "requests_d": len(need_d), "usd": round(usd, 2),
-            "usd_max": round(usd_max, 2), "restricted_pool": pool,
-            "model": pre.LLM_MODEL, "effort": pre.LLM_EFFORT}
+            "usd_max": round(usd_max, 2), "batch": batch, "pending_batches": batches, "restricted_pool": pool,
+            "model": pre.LLM_MODEL, "effort": pre.ARMS_EFFORT, "estimate_basis": basis}
+
+
+def _wait(client, batch_id: str, until: datetime, sleep: Callable[[float], None], log) -> bool:
+    """Polls a batch until it has ended (True) or ``until`` passes (False)."""
+    started = datetime.now(timezone.utc)
+    while client.messages.batches.retrieve(batch_id).processing_status != "ended":
+        if datetime.now(timezone.utc) >= until:
+            log(f"  batch {batch_id} is still processing - the next run collects it")
+            return False
+        delay = sl.batch_poll_delay(started)
+        log(f"  batch {batch_id} processing; checking again in {delay:.0f} s")
+        sleep(delay)
+    return True
+
+
+def _collect(conn, client, arm: str, batch_id: str, profile: str, log) -> None:
+    counts = (sl.collect_batch(conn, client, batch_id, RESTRICTED) if arm == "C" else
+              collect_synthesis_batch(conn, client, batch_id, profile))
+    log(f"  collected arm {arm} batch {batch_id}: " + (", ".join(f"{k} {v}" for k, v in counts.items()) or "nothing"))
 
 
 def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profile: str = defs.DEFAULT_PROFILE,
         max_requests: Optional[int] = None, log: Callable[[str], None] = print,
-        now: Optional[datetime] = None) -> Dict[str, Any]:
+        now: Optional[datetime] = None, days: Optional[Sequence[str]] = None, batch: bool = False,
+        wait_minutes: float = 30, sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     """
-    Arms C and D over the last ``sessions`` sessions, oldest first: the restricted annotations still missing,
-    then arm C's analogue sets and runs, then arm D's syntheses - at most ``max_requests`` requests in all.
-    Requests need structure_llm.manual_requests (annotate_live and synthesize check it).
+    Arms C and D over the last ``sessions`` sessions - or the chosen ``days`` - oldest first: first the recorded
+    batches of earlier runs that have ended are collected; then the restricted annotations still missing, sent
+    live or as one batch; then arm D's syntheses, likewise; a batch is waited for at most ``wait_minutes`` (one
+    still processing is collected by a later run); then arm C's analogue sets and runs. At most ``max_requests``
+    requests in all; a request recorded but not answered is never sent again. Requests need
+    structure_llm.manual_requests (every sending and collecting function checks it).
     """
     version = defs.PROFILES[profile].snapshot_version
-    days = [d for d in target_sessions(sessions, now) if store.list_snapshots(conn, d, d, version)]
+    days = [d for d in target_sessions(sessions, now, days) if store.list_snapshots(conn, d, d, version)]
     sent, counts = 0, {}
+    until = datetime.now(timezone.utc) + timedelta(minutes=wait_minutes)
 
-    def budget() -> bool:
-        return max_requests is None or sent < max_requests
+    def budget() -> int:
+        return 10 ** 9 if max_requests is None else max(0, max_requests - sent)
 
-    def tally(key):
-        counts[key] = counts.get(key, 0) + 1
+    def tally(key, n=1):
+        counts[key] = counts.get(key, 0) + n
 
+    if client is not None:                              # earlier runs' batches first
+        for arm, ids in pending_batches(conn).items():
+            for batch_id in ids if arm in arms else []:
+                if client.messages.batches.retrieve(batch_id).processing_status == "ended":
+                    _collect(conn, client, arm, batch_id, profile, log)
+                else:
+                    log(f"  arm {arm}'s batch {batch_id} from an earlier run is still processing")
+    submitted = []
     if "C" in arms:
-        for day in days:
-            snap = store.list_snapshots(conn, day, day, version)[0]
-            if store.latest_annotation(conn, snap["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is not None:
-                continue
-            if not budget():
-                log(f"  {day} C: not sent - the approved {max_requests} request(s) are used")
-                tally("C not sent")
-                continue
+        waiting = pending_snapshots(conn, "C")
+        todo = [s for s in (store.list_snapshots(conn, d, d, version)[0] for d in days)
+                if s["snapshot_id"] not in waiting
+                and store.latest_annotation(conn, s["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is None]
+        if len(todo) > budget():
+            log(f"  C: {len(todo) - budget()} session(s) not sent - the approved request(s) are used")
+            todo = todo[:budget()]
+        if batch and todo:
+            batch_id = sl.submit_batch(conn, client, todo, RESTRICTED)
+            sent += len(todo)
+            tally("C requests in a batch", len(todo))
+            log(f"  C: {len(todo)} annotation request(s) in batch {batch_id}")
+            if batch_id:
+                submitted.append(("C", batch_id))
+        for snap in ([] if batch else todo):
             attempt = sl.annotate_live(conn, client, snap, RESTRICTED)
             sent += attempt["status"] != "contaminated"
             tally(f"C annotation {attempt['status']}")
-            log(f"  {day} C annotation: {attempt['status']}" + (f" - {attempt['error']}" if attempt.get("error")
-                                                                  else ""))
+            log(f"  {snap['session_date']} C annotation: {attempt['status']}"
+                + (f" - {attempt['error']}" if attempt.get("error") else ""))
+    if "D" in arms:
+        if batch:
+            batch_id, n = (submit_synthesis_batch(conn, client, days, profile, budget()) if budget() else (None, 0))
+            sent += n
+            if n:
+                tally("D requests in a batch", n)
+                log(f"  D: {n} synthesis request(s) in batch {batch_id}")
+            if batch_id:
+                submitted.append(("D", batch_id))
+        else:
+            waiting = pending_snapshots(conn, "D")
+            history = store.outcome_history(conn, defs.LABEL_VERSION)
+            for day in days:
+                prep = _ready(conn, day, profile, history)
+                if prep["status"] == "stored":
+                    log(f"  {day} D: already issued on this evidence")
+                    continue
+                if prep["status"] == "skipped":
+                    log(f"  {day} D: skipped - {prep['reason']}")
+                    continue
+                if prep["snapshot"]["snapshot_id"] in waiting:
+                    log(f"  {day} D: a request is pending - not sent again")
+                    continue
+                if not budget():
+                    log(f"  {day} D: not sent - the approved request(s) are used")
+                    tally("D not sent")
+                    continue
+                out = synthesize(conn, client, day, profile)
+                sent += out["status"] == "sent"
+                r = out["run"]
+                tally(f"D run {r['lifecycle_status']}")
+                log(f"  {day} D run {r['run_id'][:8]}: {r['lifecycle_status']}"
+                    + (f" - {r['failure_reason']}" if r["failure_reason"] else ""))
+    for arm, batch_id in submitted:
+        if _wait(client, batch_id, until, sleep, log):
+            _collect(conn, client, arm, batch_id, profile, log)
+    if "C" in arms:
         journal.match(conn, profile, pre.RESTRICTED_PROTOCOL_VERSION)
         for day in days:
             try:
@@ -548,34 +878,11 @@ def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profi
                 log(f"  {day} C run: rejected - {e}")
                 continue
             if result is None:
-                log(f"  {day} C run: no restricted annotation")
+                log(f"  {day} C run: no restricted annotation yet")
                 continue
             r, created = result
             members = len((r.get("evidence") or {}).get("members") or [])
             tally(f"C run {r['lifecycle_status']}")
             log(f"  {day} C run {r['run_id'][:8]}: {r['lifecycle_status']}{' (new)' if created else ''}, "
                 f"{members} analogue(s)" + (f" - {r['failure_reason']}" if r["failure_reason"] else ""))
-    if "D" in arms:
-        for day in days:
-            found = _b_evidence(conn, day, profile)
-            if found is not None and store.find_forecast_run(conn, synthesis_key(*found, profile)):
-                log(f"  {day} D: already issued on this evidence")
-                continue
-            if not budget():
-                log(f"  {day} D: not sent - the approved {max_requests} request(s) are used")
-                tally("D not sent")
-                continue
-            try:
-                out = synthesize(conn, client, day, profile)
-            except ForecastInputError as e:
-                log(f"  {day} D: rejected - {e}")
-                continue
-            if out["status"] == "skipped":
-                log(f"  {day} D: skipped - {out['reason']}")
-                continue
-            sent += out["status"] == "sent"
-            r = out["run"]
-            tally(f"D run {r['lifecycle_status']}")
-            log(f"  {day} D run {r['run_id'][:8]}: {r['lifecycle_status']}"
-                + (f" - {r['failure_reason']}" if r["failure_reason"] else ""))
     return {"sessions": days, "requests_sent": sent, "counts": counts}

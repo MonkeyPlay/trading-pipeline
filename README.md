@@ -132,7 +132,7 @@ the command line:
 |---|---|---|
 | **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection |
 | **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - and outcomes once a session is final. No Claude requests |
-| **Run LLM forecast** | `python scripts/nq_journal.py llm-forecast --sessions N --arms CD` | Arms C (restricted LLM) and D (synthesis) for the last N sessions up to today (default 1: today), arm C or D or both. Claude requests: a confirmation first shows each session, the requests and a rough cost, and only its **Send** button lets the job send them (a one-time approval, [forecaster/approvals.py](forecaster/approvals.py)). Evidence already answered is never sent again |
+| **Run LLM forecast** | `python scripts/nq_journal.py llm-forecast --date D ... --arms CD` | Arms C (restricted LLM) and D (synthesis) for the last N sessions up to today (default 1: today) or for **chosen days** (a calendar of the journal's sessions: single days, or ranges with its switch), arm C or D or both. The Forecast page's **Run C and D for <day>** does the same for the session it shows. **Batch API** sends them at half price, answers within 24 h (usually far sooner): the job waits up to 30 minutes and the next run collects a batch still processing. Claude requests: a confirmation first shows each session, the requests and a rough cost, and only its **Send** button lets the job send them (a one-time approval, [forecaster/approvals.py](forecaster/approvals.py)). Evidence already answered is never sent again |
 | **Forecast now** | the collector, then `python scripts/nq_journal.py preview` | The next session's forecast from the data so far, at any time from its Globex open (18:00 ET the evening before) until its official snapshot is due at 09:31 ET: the latest bars, then the evidence as of now, its rule-based annotation, analogues and both arms - in memory, never stored. Shown on the Forecast page's **Forecast now** tab, which has the same button. The preview step runs even when collecting failed, from the bars already stored |
 | **Live forecast** | `python scripts/nq_journal.py live` | Today's pre-open live capture and its forecasts ([below](#both-together)); offered on a session day before 09:30 ET only - it then waits for the 09:29 cutoff |
 
@@ -154,12 +154,15 @@ Pages:
   — two tabs. **Stored runs**: one stored forecast run, by its id: provenance, the chart drawn
   from the snapshot's frozen bars, per-target distributions with their denominators, P1's 47
   fields, and the realised outcome only when asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
-  **Arms for this session** are buttons A (prior, the benchmark), B (baseline), C (restricted
-  LLM) and D (synthesis): the one shown highlighted, the session's others outlined, the
-  missing ones disabled. With the realised outcome shown, **Grading** compares every arm's
-  current run with what happened: a radar of the probability each arm gave the realised class
-  per target (arm A dashed, chance dotted) and a scorecard - hits, mean p(realised) and the
-  difference to arm A ([forecaster/grading.py](forecaster/grading.py)).
+  **Arms for the session** (at the top): one tile per arm - A prior (the benchmark), B
+  baseline, C restricted LLM, D synthesis - saying whether it ran (issued, failed, no run)
+  and what it rests on (analogues, the C pool, D's confidence); the arm shown is highlighted
+  and a click shows another. Below the tiles a radar compares the arms with the benchmark
+  (arm A dashed, chance dotted) ([forecaster/grading.py](forecaster/grading.py)): before the
+  outcome, how sure each arm is of its predicted class per target, with a table of the classes
+  marking each that differs from arm A's; with the realised outcome shown and recorded, the
+  grading - the probability each arm gave what happened, hits, mean p(realised) and the
+  difference to arm A.
   **Forecast now**: the latest preview (its own button, as in Update data) - as of when, how
   complete its pre-open is, what is not known yet, its analogues, both arms and the 47 fields;
   never stored ([forecaster/preview.py](forecaster/preview.py)).

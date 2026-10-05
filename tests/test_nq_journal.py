@@ -907,6 +907,9 @@ def test_arms_c_and_d_are_sent_by_hand_issued_and_never_sent_twice(market):
     assert not any(re.search(r"\d{4}-\d{2}-\d{2}", c["messages"][0]["content"]) for c in client.calls)
 
     assert la.plan(conn, 2, now=noon)["requests"] == 0                  # everything answered: nothing to send
+    # estimates now come from the requests answered (the fake's usage: 500 output tokens each)
+    assert la.measured_output_tokens(conn, "C") == (500, f"the median of 2 {pre.RESTRICTED_PROTOCOL_VERSION} request(s)")
+    assert la.measured_output_tokens(conn, "D") == (500, f"the median of 2 {fc.SYNTHESIS_VERSION} request(s)")
     with llm.manual_requests():
         assert la.run(conn, client, 2, now=noon)["requests_sent"] == 0
     assert len(client.calls) == 4
@@ -918,6 +921,85 @@ def test_arms_c_and_d_are_sent_by_hand_issued_and_never_sent_twice(market):
         assert bad["run"]["evidence"]["attempt"]["raw_text"]
         assert la.synthesize(conn, client, "2026-06-10")["run"]["lifecycle_status"] == "issued"
         assert la.synthesize(conn, client, "2026-06-10")["status"] == "stored"
+
+    # chosen days: the plan covers exactly the sessions among them; the CLI estimates them, and without a valid
+    # approval (no terminal here) it sends nothing
+    from scripts.nq_journal import main
+    chosen = la.plan(conn, days=["2026-06-08", "2026-06-13", DAY])            # 06-13 is a Saturday
+    assert [r["session_date"] for r in chosen["sessions"]] == ["2026-06-08", DAY]
+    assert chosen["requests_c"] == 1 and chosen["requests_d"] == 1            # DAY's arms are issued already
+    before = requests()
+    assert main(["--db", DSN, "llm-forecast", "--date", "2026-06-08", "--estimate"]) == 0
+    assert main(["--db", DSN, "llm-forecast", "--start", "2026-06-08", "--end", "2026-06-09",
+                 "--approval", "0123abcd"]) == 1
+    assert requests() == before
+
+
+class _ArmsBatchClient(_ArmsClient):
+    """Arms C and D through the Batch API, in memory: batches end when ``ended`` is set; their results answer each
+    request as _ArmsClient would."""
+    def __init__(self):
+        super().__init__()
+        self.batches, self.ended = {}, True
+        outer = self
+
+        class _Batches:
+            def create(self, requests):
+                batch_id = f"msgbatch_{len(outer.batches) + 1}"
+                outer.batches[batch_id] = list(requests)
+                return type("Batch", (), {"id": batch_id})()
+
+            def retrieve(self, batch_id):
+                return type("Batch", (), {"processing_status": "ended" if outer.ended else "in_progress"})()
+
+            def results(self, batch_id):
+                for r in outer.batches[batch_id]:
+                    message = outer.beta.messages.stream(**r["params"]).get_final_message()
+                    yield type("Result", (), {"custom_id": r["custom_id"], "result": type(
+                        "R", (), {"type": "succeeded", "message": message})()})()
+        self.messages = type("M", (), {"batches": _Batches()})()
+
+
+@needs_db
+def test_arms_c_and_d_through_the_batch_api_are_collected_and_never_sent_twice(market):
+    from contracts import nq_forecast as fc
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster import llm_arms as la
+    from forecaster import structure_llm as llm
+    conn = market[0]
+    days = ["2026-06-03", "2026-06-04"]
+    plan = la.plan(conn, days=days, batch=True)
+    live = la.plan(conn, days=days)
+    assert plan["requests"] == 4 and plan["usd"] == pytest.approx(live["usd"] / 2, abs=0.01)
+    client = _ArmsBatchClient()
+    client.ended = False                                         # still processing when the wait runs out
+    with llm.manual_requests():
+        first = la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)
+    assert first["requests_sent"] == 4 and len(client.batches) == 2
+    pending = la.plan(conn, days=days, batch=True)
+    assert pending["requests"] == 0 and set(pending["pending_batches"]) == {"C", "D"}
+    assert all(r["C"].startswith("pending") and r["D"].startswith("pending") for r in pending["sessions"])
+    with llm.manual_requests():                                  # still processing: nothing is sent again
+        assert la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)[
+            "requests_sent"] == 0
+    assert len(client.batches) == 2
+
+    client.ended = True                                          # the next run collects them first
+    with llm.manual_requests():
+        la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)
+    assert len(client.batches) == 2 and la.pending_batches(conn) == {"C": [], "D": []}
+    for day in days:
+        runs = {r["algorithm_version"]: r for r in store.list_forecast_runs(conn, day, day)}
+        assert runs[fc.SYNTHESIS_VERSION]["lifecycle_status"] == "issued"
+        assert runs[fc.RESTRICTED_VERSION]["lifecycle_status"] == "issued"
+        d = store.get_forecast_run(conn, runs[fc.SYNTHESIS_VERSION]["run_id"])
+        request = conn.execute("SELECT mode FROM journal.inference_requests WHERE request_id = %s;",
+                               (d["request_id"],)).fetchone()
+        assert request["mode"] == "batch"
+    assert la.plan(conn, days=days)["requests"] == 0
+    ratio, basis = la._input_chars_per_token(conn, "D")
+    assert "measured" in basis and ratio > 0
 
 
 @needs_db

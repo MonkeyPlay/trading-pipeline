@@ -49,7 +49,7 @@ from database import journal_store as store
 from features import calendar as cal
 from forecaster import preview as pv
 from forecaster.forecast_display import target_rows
-from forecaster.grading import BENCHMARK, current_runs, grade
+from forecaster.grading import BENCHMARK, compare, current_runs, grade
 from forecaster.outcome_display import p2_record
 from forecaster.preopen_display import p1_record
 
@@ -119,6 +119,7 @@ class ForecastPage:
         self.outcome_shown = False
         self.view = "preview" if view == "preview" else "stored"
         self.arm: Optional[str] = None           # the arm shown for the selected session
+        self.current: Dict[str, Dict[str, Any]] = {}   # per arm the session's newest issued run, in full
         self.panel = panel                       # the header's job control: its Forecast now starts the preview
         self.preview: Optional[Dict[str, Any]] = None
 
@@ -187,18 +188,24 @@ class ForecastPage:
                                         on_change=lambda e: self.pick_day(e.value)).classes("w-52")
             self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
             ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
-        with ui.row().classes("w-full items-center gap-2"):
-            ui.label("Arms for this session").classes("text-xs").style(_MUTED)
-            self.arm_row = ui.row().classes("items-center gap-1")
+        with ui.card().classes("w-full gap-3").style("background:#1c212e"):
+            with ui.row().classes("w-full items-center gap-3"):
+                self.arm_title = ui.label().classes("text-base font-medium")
+                ui.label("one tile per arm: the one shown below is highlighted - click another to show it").classes(
+                    "text-xs").style(_MUTED)
+                ui.space()
+                self.llm_day_button = ui.button("Run C and D for this day", icon="psychology",
+                                                on_click=self._run_llm_for_day).props("dense outline no-caps")
+            self.arm_row = ui.element("div").classes("w-full grid gap-3").style(
+                "grid-template-columns:repeat(4,minmax(0,1fr))")
+            ui.separator().style("background:#2a2e39")
+            self.grading = ui.column().classes("w-full gap-2")
         self.provenance = ui.column().classes("w-full gap-0")
         with ui.row().classes("w-full no-wrap gap-4 items-start"):
             with ui.column().classes("grow gap-1 min-w-0"):
                 self.chart = LightweightChart(height=520)
             with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
                 self.targets = ui.column().classes("w-full gap-0")
-        with ui.card().classes("w-full").style("background:#1c212e"):
-            ui.label("Grading: the arms against the realised outcome").classes("text-sm font-medium")
-            self.grading = ui.column().classes("w-full gap-2")
         self.outcome = ui.column().classes("w-full gap-0")
         with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
                 "background:#1c212e"):
@@ -211,8 +218,8 @@ class ForecastPage:
                 f"{str(r['created_at'])[:16]} UTC")
 
     def pick_day(self, day: Optional[str], run_id: Optional[str] = None) -> None:
-        """The session's arms (the buttons), then the runs of the arm shown - the requested run's, the arm shown
-        before when the session has it, else arm B, else the first the session has."""
+        """The session's arms (the tiles and their comparison), then the runs of the arm shown - the requested
+        run's, the arm shown before when the session has it, else arm B, else the first the session has."""
         if not day:
             return
         runs = self.by_day.get(day, [])
@@ -222,7 +229,9 @@ class ForecastPage:
             self.arm = fc.arm_of(requested["algorithm_version"])
         elif self.arm not in have:
             self.arm = "B" if "B" in have else next((a for a in fc.ARMS if a in have), None)
-        self._render_arms(have)
+        self.current = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in current_runs(runs).items()}
+        self._render_arms(day, runs)
+        self._render_grading()
         mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == self.arm]
         self.run_select.set_options({r["run_id"]: self._run_label(r) for r in mine},
                                     value=run_id if requested is not None else (mine[0]["run_id"] if mine else None))
@@ -231,22 +240,63 @@ class ForecastPage:
         self.arm = arm
         self.pick_day(self.day_select.value)
 
-    def _render_arms(self, have) -> None:
-        """One button per arm: the one shown highlighted, the session's others outlined, the rest disabled."""
+    def _render_arms(self, day: str, runs: List[Dict[str, Any]]) -> None:
+        """One tile per arm: whether it ran for the session (issued, failed or no run) and what it rests on; the
+        arm shown below highlighted. A tile with runs shows that arm when clicked."""
+        shown = f"arm {self.arm} · {fc.ARM_NAMES[self.arm]}" if self.arm else "no run"
+        self.arm_title.set_text(f"Arms for {day} - shown: {shown}")
+        done = all(a in self.current for a in "CD")
+        self.llm_day_button.set_text("C and D issued for this day" if done else f"Run C and D for {day}")
+        self.llm_day_button.set_enabled(not done and self.panel is not None)
         self.arm_row.clear()
         with self.arm_row:
-            for arm, version in fc.ARMS.items():
-                label = f"{arm} · {fc.ARM_NAMES[arm]}"
-                b = ui.button(label, on_click=lambda a=arm: self.pick_arm(a)).props("dense no-caps size=sm")
-                if arm == self.arm:
-                    b.props("unelevated color=primary")
-                    b.tooltip(f"Shown: arm {arm}, {version}")
-                elif arm in have:
-                    b.props("outline color=grey-5").tooltip(f"Show arm {arm} ({version})")
-                else:
-                    b.props("flat color=grey-8").disable()
-                    b.tooltip(f"No arm {arm} run for this session"
-                              + (" - Update data, Run LLM forecast" if arm in "CD" else ""))
+            for arm in fc.ARMS:
+                mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == arm]
+                is_shown = arm == self.arm
+                tile = ui.element("div").classes("rounded px-3 py-2 flex flex-col gap-1"
+                                                 + (" cursor-pointer" if mine else ""))
+                tile.style(f"border-top:3px {'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]};"
+                           f"background:{'rgba(41,98,255,0.16)' if is_shown else '#131722'};"
+                           f"outline:{'1px solid #2962ff' if is_shown else 'none'};{'' if mine else 'opacity:0.55'}")
+                if mine:
+                    tile.on("click", lambda a=arm: self.pick_arm(a))
+                with tile:
+                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                        ui.label(f"{arm} · {fc.ARM_NAMES[arm]}").classes("text-sm font-medium")
+                        if arm == BENCHMARK:
+                            ui.label("benchmark").classes("text-xs").style(_MUTED)
+                        ui.space()
+                        if is_shown:
+                            ui.badge("shown", color="primary")
+                    status, detail = self._arm_status(arm, mine, self.current.get(arm))
+                    ui.label(status).classes("text-xs")
+                    ui.label(detail).classes("text-xs break-words").style(_MUTED)
+
+    async def _run_llm_for_day(self) -> None:
+        """Arms C and D for the session shown: the same plan and confirmation as Update data (Claude requests are
+        sent only after its Send)."""
+        if self.panel is None:
+            ui.notify("Arms C and D run from the Update data control in the header.", type="warning")
+            return
+        await self.panel.llm_forecast(days=[self.day_select.value], arms="CD", batch=False)
+
+    @staticmethod
+    def _arm_status(arm: str, mine: List[Dict[str, Any]], current: Optional[Dict[str, Any]]):
+        """``(status, detail)`` of one arm's tile."""
+        if current is not None:
+            ev = current.get("evidence") or {}
+            n = len(ev.get("members") or [])
+            detail = {"A": f"the prior of {(ev.get('prior') or {}).get('sessions', '?')} earlier session(s)",
+                      "B": f"{n} rule-based analogue(s)",
+                      "C": f"{n} analogue(s) from a pool of {ev.get('pool_size', 0)} annotated the same way",
+                      "D": f"confidence {(current.get('outputs') or {}).get('confidence', '?')} of 5, from arm B's "
+                           f"evidence"}[arm]
+            return f"issued {str(current['issued_at'])[11:16]} UTC · {current['algorithm_version']}", detail
+        if mine:
+            return (f"{mine[0]['lifecycle_status']} - {len(mine)} attempt(s), none issued",
+                    (mine[0]["failure_reason"] or "")[:110])
+        return "no run for this session", ("Run C and D for this day (above), or Update data" if arm in "CD" else
+                                           "Update data, Run forecaster")
 
     def toggle_outcome(self, event) -> None:
         self.outcome_shown = bool(event.value)
@@ -265,7 +315,6 @@ class ForecastPage:
         self._render_targets()
         self._render_record()
         self._render_outcome()
-        self._render_grading()
 
     # -- rendering --------------------------------------------------------------
 
@@ -409,48 +458,109 @@ class ForecastPage:
             _record_grid(r["snapshot"], r["annotation"], r["analogue_set"], run)
 
     def _render_grading(self) -> None:
-        """Every arm's current run of the session against its realised outcome (forecaster/grading.py): a radar of
-        p(realised) per target with the benchmark (arm A) dashed and chance dotted, and the scorecard beside it."""
+        """
+        The arms of the session side by side (forecaster/grading.py): before the outcome is shown and recorded,
+        their forecasts - how sure each arm is of its predicted class, against the benchmark; with it, their
+        grades - the probability each gave what happened, hits, and the difference to the benchmark.
+        """
         self.grading.clear()
         with self.grading:
-            if not self.outcome_shown:
-                ui.label("Hidden with the realised outcome: switch on Show realised outcome.").classes(
-                    "text-xs").style(_MUTED)
+            if not self.current:
+                ui.label("No issued forecast to compare for this session.").classes("text-xs").style(_MUTED)
                 return
-            outcome = store.latest_outcome(self.conn, self.run["snapshot_id"], self.run["label_version"])
-            if outcome is None:
-                ui.label("Graded once the session is final, two hours after its close.").classes("text-xs").style(
-                    _MUTED)
-                return
-            runs = current_runs(self.by_day.get(self.run["session_date"], []))
-            if not runs:
-                ui.label("No issued run to grade.").classes("text-xs").style(_MUTED)
-                return
-            full = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in runs.items()}
-            g = grade(full, outcome["labels"])
-            with ui.row().classes("w-full no-wrap gap-6 items-start"):
-                if len(g["targets"]) >= 3:
-                    ui.echart(self._radar_options(g)).style("width:540px;height:460px").classes("shrink-0")
-                with ui.column().classes("grow gap-2 min-w-0 max-w-[52rem]"):
-                    self._scorecard(g)
-            ui.label(f"p(realised): the probability the arm gave the class that happened; a hit: its predicted "
-                     f"class was it. Arm {BENCHMARK} (the earlier-session prior) is the benchmark; chance is 1 / the "
-                     f"number of classes. One session is a view, not a score - experiments score many "
-                     f"(Evaluation).").classes("text-[10px]").style(_MUTED)
+            first = next(iter(self.current.values()))
+            outcome = (store.latest_outcome(self.conn, first["snapshot_id"], first["label_version"])
+                       if self.outcome_shown else None)
+            if outcome is not None:
+                self._render_scored(outcome)
+            else:
+                self._render_compared()
 
-    def _radar_options(self, g: Dict[str, Any]) -> Dict[str, Any]:
+    def _render_compared(self) -> None:
+        g = compare(self.current)
+        ui.label(f"Forecasts compared: how sure each arm is of its predicted class, against the benchmark (arm "
+                 f"{BENCHMARK})").classes("text-sm font-medium")
+        if not g["targets"]:
+            ui.label("No arm forecast any target for this session.").classes("text-xs").style(_MUTED)
+            return
         targets = [t for _, t in g["targets"]]
+        with ui.row().classes("w-full no-wrap gap-6 items-start"):
+            if len(targets) >= 3:
+                ui.echart(self._radar_options(targets, {a: [x["cells"][t]["p"] for t in targets]
+                                                        for a, x in g["arms"].items()},
+                                              [g["chance"][t] for t in targets])).style(
+                    "width:540px;height:460px").classes("shrink-0")
+            with ui.column().classes("grow gap-1 min-w-0 max-w-[60rem]"):
+                arms = list(g["arms"])
+                with ui.grid(columns=f"minmax(0,1.1fr) repeat({len(arms)}, minmax(0,1fr))").classes(
+                        "w-full gap-x-3 gap-y-1"):
+                    ui.label("target").classes(_CELL).style(_MUTED)
+                    for arm in arms:
+                        a = g["arms"][arm]
+                        with ui.column().classes(_CELL + " gap-0"):
+                            with ui.row().classes("items-center gap-2 no-wrap"):
+                                ui.element("span").style(
+                                    f"display:inline-block;width:14px;height:0;border-top:2px "
+                                    f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
+                                ui.label(f"{arm} · {fc.ARM_NAMES[arm]}")
+                            ui.label("benchmark" if arm == BENCHMARK else
+                                     f"same class as {BENCHMARK} on {a['agrees']} of {a['comparable']}").classes(
+                                "text-[10px]").style(_MUTED)
+                    for _, t in g["targets"]:
+                        ui.label(_SHORT[t]).classes(_CELL).style(_MUTED)
+                        for arm in arms:
+                            c = g["arms"][arm]["cells"][t]
+                            if c["p"] is None:
+                                ui.label("-").classes(_CELL).style(_MUTED).tooltip(c.get("why") or "")
+                                continue
+                            name = (defs.display(t, c["cls"], "predicted") if c["cls"] else
+                                    "tie: " + " / ".join(defs.display(t, x, "predicted") for x in c["top"]))
+                            with ui.row().classes(_CELL + " items-center gap-1 no-wrap"):
+                                ui.label(f"{name} {100 * c['p']:.0f}%").classes("break-words")
+                                if c["agrees"] is False:
+                                    ui.label(f"≠{BENCHMARK}").classes("text-[10px] px-1 rounded").style(
+                                        "border:1px solid #787b86;color:#d1d4dc").tooltip(
+                                        f"a different class from arm {BENCHMARK}'s")
+        why = ("Show realised outcome to grade the arms against what happened." if not self.outcome_shown else
+               "The realised outcome is recorded once the session is final, two hours after its close; then the "
+               "arms are graded here.")
+        ui.label(f"Each axis: the probability an arm gives its own predicted class (the top of a tie). Arm "
+                 f"{BENCHMARK}, the earlier-session prior, is the benchmark (dashed); chance is 1 / the number of "
+                 f"classes (dotted). Higher is surer, not better - only the outcome says which was right. "
+                 f"{why}").classes("text-[10px]").style(_MUTED)
+
+    def _render_scored(self, outcome: Dict[str, Any]) -> None:
+        g = grade(self.current, outcome["labels"])
+        ui.label(f"Graded against the realised outcome (revision {outcome['outcome_revision']}): the probability "
+                 f"each arm gave what happened").classes("text-sm font-medium")
+        targets = [t for _, t in g["targets"]]
+        with ui.row().classes("w-full no-wrap gap-6 items-start"):
+            if len(targets) >= 3:
+                ui.echart(self._radar_options(targets, {a: [x["cells"][t]["p"] for t in targets]
+                                                        for a, x in g["arms"].items()},
+                                              [g["chance"][t] for t in targets])).style(
+                    "width:540px;height:460px").classes("shrink-0")
+            with ui.column().classes("grow gap-2 min-w-0 max-w-[52rem]"):
+                self._scorecard(g)
+        ui.label(f"p(realised): the probability the arm gave the class that happened; a hit: its predicted class "
+                 f"was it. Arm {BENCHMARK} (the earlier-session prior) is the benchmark; chance is 1 / the number of "
+                 f"classes. One session is a view, not a score - experiments score many (Evaluation).").classes(
+            "text-[10px]").style(_MUTED)
+
+    def _radar_options(self, targets: List[str], values: Dict[str, List[Optional[float]]],
+                       chance: List[float]) -> Dict[str, Any]:
+        """A radar over ``targets`` (0-100 %): one polygon per arm, the benchmark dashed, chance dotted."""
         series = []
-        for arm, a in g["arms"].items():
+        for arm, vals in values.items():
             color, bench = _ARM_COLOR[arm], arm == BENCHMARK
             series.append({
                 "name": f"{arm} · {fc.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
-                "value": [round(100 * (a["cells"][t]["p"] or 0), 1) for t in targets],
+                "value": [round(100 * (v or 0), 1) for v in vals],
                 "symbol": "circle", "symbolSize": 8,
                 "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
                 "itemStyle": {"color": color, "borderColor": "#1c212e", "borderWidth": 2},
                 "areaStyle": {"color": color, "opacity": 0 if bench else 0.08}})
-        series.append({"name": "chance", "value": [round(100 * g["chance"][t], 1) for t in targets],
+        series.append({"name": "chance", "value": [round(100 * c, 1) for c in chance],
                        "symbol": "none", "lineStyle": {"width": 1, "type": "dotted", "color": "#5d606b"},
                        "itemStyle": {"color": "#5d606b"}, "areaStyle": {"opacity": 0}})
         return {

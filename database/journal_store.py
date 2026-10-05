@@ -441,11 +441,12 @@ def _request_rows(rows) -> List[Dict[str, Any]]:
 
 
 def inference_batch_requests(conn: Database, batch_id: str) -> List[Dict[str, Any]]:
-    """The requests of one recorded batch, as sent, each with ``answered`` (an attempt exists) and its batch's
-    ``submitted_at``."""
+    """The requests of one recorded batch, as sent, each with ``answered`` (an annotation attempt, or the forecast
+    run of a synthesis request, exists) and its batch's ``submitted_at``."""
     return _request_rows(conn.execute(
-        "SELECT r.*, b.submitted_at, EXISTS (SELECT 1 FROM journal.annotation_attempts t "
-        "WHERE t.request_id = r.request_id) AS answered FROM journal.inference_batch_requests m "
+        "SELECT r.*, b.submitted_at, (EXISTS (SELECT 1 FROM journal.annotation_attempts t "
+        "WHERE t.request_id = r.request_id) OR EXISTS (SELECT 1 FROM journal.forecast_runs f "
+        "WHERE f.request_id = r.request_id)) AS answered FROM journal.inference_batch_requests m "
         "JOIN journal.inference_requests r ON r.request_id = m.request_id JOIN journal.inference_batches b "
         "ON b.batch_id = m.batch_id WHERE m.batch_id = %s ORDER BY r.created_at;", (batch_id,)).fetchall())
 

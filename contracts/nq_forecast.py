@@ -45,12 +45,16 @@ PRIOR_VERSION = "nq_prior_p1_v1"
 # protocol v2 for C; for D a schema without nullable fields ("" stands for none), 64,000 tokens, streamed - which
 # the API refused too: its compiled grammar was too large (seven differently shaped target objects, 33 named
 # probability fields). Synthesis v3 flattens it: a list of one item shape, probabilities a list of class/value pairs.
-RESTRICTED_VERSION = "nq_restricted_p1_v2"       # arm C: the baseline over the restricted Claude annotation
-SYNTHESIS_VERSION = "nq_synthesis_p1_v3"         # arm D: Claude's forecast synthesis (Appendix A, A2)
+# Then (the user's choices, 2026-10-05) both arms at effort medium, with less evidence, live or through the Batch
+# API: C v3 over the restricted protocol v3; synthesis v4 without the 5m bars and their swing points (it keeps the
+# 15m bars and the final 2m bars with the moving averages beside the frozen annotation, analogues and baseline).
+SYNTHESIS_EVIDENCE = ("bars_15m", "bars_2m_final")
+RESTRICTED_VERSION = "nq_restricted_p1_v3"       # arm C: the baseline over the restricted Claude annotation
+SYNTHESIS_VERSION = "nq_synthesis_p1_v4"         # arm D: Claude's forecast synthesis (Appendix A, A2)
 SYNTHESIS_SCHEMA_VERSION = "nq_forecast_schema_v2"
 SYNTHESIS_MAX_TOKENS = 64000                     # thinking included; the request is streamed
 SYNTHESIS_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
-                                "forecast_synthesis_v3.md")
+                                "forecast_synthesis_v4.md")
 # nq_issue_live_v1 (registered 2026-10-04) never issued a run; v2 adds the capture rules of 3D.
 ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v2"}
 LIVE_DEADLINE_ET = time(9, 29, 50)
@@ -232,7 +236,8 @@ RESTRICTED = {
     "inputs": f"an explicit snapshot, its {pre.RESTRICTED_PROTOCOL_VERSION} annotation (Claude owns Overnight "
               f"Structure and Premarket Pattern, the rules the rest) and that annotation's analogue set, matched "
               f"among the earlier sessions annotated under the same protocol",
-    "supersedes": "nq_restricted_p1_v1: the same over nq_structure_restricted_v1, which never produced an annotation",
+    "supersedes": "nq_restricted_p1_v2: the same over nq_structure_restricted_v2 (effort xhigh); v1 over "
+                  "nq_structure_restricted_v1, which never produced an annotation",
 }
 # The deterministic algorithms (forecaster/forecast_baseline.py); arm D is the synthesis, below.
 ALGORITHMS = {BASELINE_VERSION: BASELINE, PRIOR_VERSION: PRIOR, RESTRICTED_VERSION: RESTRICTED}
@@ -242,7 +247,8 @@ RULE_ALGORITHMS = (BASELINE_VERSION, PRIOR_VERSION)
 ARMS = {"A": PRIOR_VERSION, "B": BASELINE_VERSION, "C": RESTRICTED_VERSION, "D": SYNTHESIS_VERSION}
 ARM_NAMES = {"A": "prior", "B": "baseline", "C": "restricted LLM", "D": "synthesis"}
 # Earlier versions of an arm: their runs stay that arm's on the Forecast page.
-ARM_HISTORY = {"C": ("nq_restricted_p1_v1",), "D": ("nq_synthesis_p1_v1", "nq_synthesis_p1_v2")}
+ARM_HISTORY = {"C": ("nq_restricted_p1_v1", "nq_restricted_p1_v2"),
+               "D": ("nq_synthesis_p1_v1", "nq_synthesis_p1_v2", "nq_synthesis_p1_v3")}
 
 
 def arm_of(algorithm: str) -> Optional[str]:
@@ -288,16 +294,19 @@ def synthesis_definition() -> Dict[str, Any]:
         prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
     return {
         "name": "arm D (guideline revision 2, 4B): Claude's forecast synthesis (Appendix A, A2)",
-        "model": pre.LLM_MODEL, "effort": pre.LLM_EFFORT, "max_tokens": SYNTHESIS_MAX_TOKENS,
-        "prompt": {"path": "prompts/runtime/forecast_synthesis_v3.md", "sha256": prompt_sha256,
+        "model": pre.LLM_MODEL, "effort": pre.ARMS_EFFORT, "max_tokens": SYNTHESIS_MAX_TOKENS,
+        "prompt": {"path": "prompts/runtime/forecast_synthesis_v4.md", "sha256": prompt_sha256,
                    "sources": ["A (A2)", f"{defs.LABEL_VERSION} target rules"]},
         "output_schema": synthesis_output_schema(),
-        "inputs": f"arm B's explicit evidence: the snapshot, its {pre.RULES_PROTOCOL_VERSION} annotation and that "
-                  f"annotation's analogue set with the analogues' frozen outcome labels, the prior and the "
-                  f"smoothed baseline per target, each target's eligibility and vocabulary - date-blinded "
-                  f"({pre.BLINDING}); analogues are named analogue:<rank>",
+        "inputs": f"arm B's explicit evidence: the snapshot (its references, 15m bars and final 2m bars with the "
+                  f"moving averages), its {pre.RULES_PROTOCOL_VERSION} annotation and that annotation's analogue "
+                  f"set with the analogues' frozen outcome labels, the prior and the smoothed baseline per target, "
+                  f"each target's eligibility and vocabulary - date-blinded ({pre.BLINDING}); analogues are named "
+                  f"analogue:<rank>",
         "schema_version": SYNTHESIS_SCHEMA_VERSION,
-        "request": "streamed (thinking counts against max_tokens; the SDK streams a request this long)",
+        "request": "live, streamed (thinking counts against max_tokens; the SDK streams a request this long) with "
+                   "the server-side refusal fallback - or through the Batch API (half price, no fallback there); a "
+                   "batch answer is matched to its evidence by the archived request's hash",
         "shape": "predictions a list of one item per target; probabilities a list of class/value pairs - flat, so "
                  "the API can compile the schema",
         "none": "the schema has no nullable field: \"\" for no predicted_class, reason or departure, an empty "
@@ -318,8 +327,10 @@ def synthesis_definition() -> Dict[str, Any]:
         "confidence": "P1 field 36: the synthesis' integer 1-5 for evidence and conviction (A2), not calibration",
         "reference_targets": "the application's, from the frozen candidates (as the baseline), never the model's",
         "issue": "only by a run started by hand; the same evidence is never sent twice once a run is issued",
-        "supersedes": "nq_synthesis_p1_v2: one object per target with named probability fields - the API refused "
-                      "its compiled grammar as too large; v1: 29 nullable fields and 20,000 tokens",
+        "supersedes": "nq_synthesis_p1_v3: effort xhigh (its first answer used 6,568 tokens) and the 5m bars and "
+                      "swing points besides; v2: one "
+                      "object per target with named probability fields - the API refused its compiled grammar as "
+                      "too large; v1: 29 nullable fields and 20,000 tokens",
     }
 
 ISSUE_POLICY_DEFINITIONS = {

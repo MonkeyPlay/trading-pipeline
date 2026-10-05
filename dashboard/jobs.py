@@ -16,9 +16,9 @@ dashboard's database connection or its event loop:
                far, any time from its Globex open - never stored in the journal
                (forecaster/preview.py); the preview step runs even when the
                collection failed, from the bars already stored
-  llm          python scripts/nq_journal.py llm-forecast --sessions N --approval T
-               arms C and D (Claude) over the last N sessions, after the
-               dashboard's confirmation issued the one-time approval T
+  llm          python scripts/nq_journal.py llm-forecast --date D ... --approval T
+               arms C and D (Claude) on the chosen sessions, after the
+               dashboard's confirmation issued the one-time approval T for them
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
@@ -72,11 +72,13 @@ def preview_command() -> List[str]:
     return [sys.executable, os.path.join("scripts", "nq_journal.py"), "preview"]
 
 
-def llm_command(sessions: int, arms: str, approval: Optional[str] = None) -> List[str]:
-    """Arms C and D over the last ``sessions`` sessions (forecaster/llm_arms.py); Claude requests need the
-    dashboard's one-time ``approval`` (forecaster/approvals.py) - without one only what needs no request runs."""
-    return ([sys.executable, os.path.join("scripts", "nq_journal.py"), "llm-forecast", "--sessions", str(int(sessions)),
-             "--arms", arms] + (["--approval", approval] if approval else []))
+def llm_command(days: List[str], arms: str, approval: Optional[str] = None, batch: bool = False) -> List[str]:
+    """Arms C and D on the given session ``days`` (forecaster/llm_arms.py); Claude requests need the dashboard's
+    one-time ``approval`` for exactly those days (forecaster/approvals.py) - without one only what needs no request
+    runs."""
+    dates = [x for d in days for x in ("--date", d)]
+    return ([sys.executable, os.path.join("scripts", "nq_journal.py"), "llm-forecast", *dates, "--arms", arms]
+            + (["--batch"] if batch else []) + (["--approval", approval] if approval else []))
 
 
 def live_window(now: datetime) -> Tuple[bool, str]:

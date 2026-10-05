@@ -107,16 +107,33 @@ class PipelinePanel:
                     "no-caps")
                 with ui.row().classes("w-full items-center gap-4 no-wrap"):
                     ui.label("Arms C (restricted LLM: Claude reads the overnight and premarket structure, matched "
-                             "and smoothed like B) and D (synthesis: Claude forecasts from arm B's evidence) for the "
-                             "last sessions up to today, date-blinded. Claude requests: you see what would be sent "
-                             "and its rough cost, and confirm, before anything is sent.").classes(
-                        "text-sm grow").style(_MUTED)
-                    with ui.column().classes("gap-0 shrink-0"):
-                        self.llm_sessions = ui.number("Sessions", value=1, min=1, max=300, step=1, format="%d").props(
-                            "dense").classes("w-20")
-                        with ui.row().classes("gap-0 no-wrap"):
+                             "and smoothed like B) and D (synthesis: Claude forecasts from arm B's evidence), "
+                             "date-blinded, for the last sessions up to today or for chosen days (the Forecast page "
+                             "also runs them for its session). Claude requests: you see what would be sent and its "
+                             "rough cost, and confirm, before anything is sent.").classes("text-sm grow").style(
+                        _MUTED)
+                    with ui.column().classes("gap-1 shrink-0"):
+                        self.llm_mode = ui.toggle({"last": "Last sessions", "days": "Chosen days"}, value="last",
+                                                  on_change=self._llm_mode).props("dense no-caps size=sm")
+                        with ui.row().classes("items-center gap-2 no-wrap"):
+                            self.llm_sessions = ui.number("Sessions", value=1, min=1, max=300, step=1,
+                                                          format="%d").props("dense").classes("w-20")
+                            with ui.button("Choose days", icon="event").props("dense flat no-caps") as self.llm_pick:
+                                with ui.menu().props("anchor='bottom left' self='top left'"), \
+                                        ui.column().classes("gap-0 p-1"):
+                                    ui.switch("pick ranges (two clicks: first and last day)",
+                                              on_change=self._llm_ranges).props("dense").classes("text-xs px-2")
+                                    self.llm_dates = ui.date(value=[]).props(
+                                        "multiple first-day-of-week=1 minimal")
                             self.llm_c = ui.checkbox("C", value=True).props("dense")
                             self.llm_d = ui.checkbox("D", value=True).props("dense")
+                        self.llm_batch = ui.checkbox("Batch API: half price, answers within 24 h", value=False).props(
+                            "dense").classes("text-xs").tooltip(
+                            "Usually done within minutes to an hour; the job waits up to 30 minutes, and a batch "
+                            "still processing is collected by the next run")
+                        self.llm_days_note = ui.label("").classes("text-xs").style(_MUTED)
+                        self.llm_dates.on_value_change(lambda e: self._llm_days_note())
+                        self.llm_pick.set_visibility(False)
                 self.live_button = ui.button("Live forecast", icon="schedule", on_click=self.live).props("no-caps")
                 with ui.column().classes("gap-0"):
                     ui.label("Captures today's NQ session live at the 09:29 ET cutoff and issues its forecasts, due "
@@ -161,22 +178,78 @@ class PipelinePanel:
             return
         self._start("preview", PREVIEW, [("collector", collector_command(self._days())), ("preview", preview_command())])
 
-    async def llm_forecast(self) -> None:
-        """The plan of arms C and D over the chosen sessions, then the confirmation; only its Send button issues
-        the one-time approval the job needs to send Claude requests (forecaster/approvals.py)."""
+    def _llm_mode(self, event=None) -> None:
+        """Last sessions: a count; chosen days: a calendar of the sessions the journal holds (days and ranges)."""
+        chosen = self.llm_mode.value == "days"
+        self.llm_sessions.set_visibility(not chosen)
+        self.llm_pick.set_visibility(chosen)
+        if chosen and self.conn is not None and not self.llm_dates._props.get("options"):
+            from database import journal_store as store
+            version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
+            days = [str(x["session_date"]) for x in store.list_snapshots(self.conn, "2000-01-01", "2100-01-01",
+                                                                           version)]
+            self.llm_dates._props["options"] = [d.replace("-", "/") for d in days]
+            if days:
+                self.llm_dates.props(f'navigation-min-year-month="{days[0][:7].replace("-", "/")}" '
+                                     f'navigation-max-year-month="{days[-1][:7].replace("-", "/")}" '
+                                     f'default-year-month="{days[-1][:7].replace("-", "/")}"')
+            self.llm_dates.update()
+        self._llm_days_note()
+
+    def _llm_ranges(self, event) -> None:
+        """Single days (a click picks or drops one) or ranges (two clicks); switching starts the choice afresh."""
+        if event.value:
+            self.llm_dates.props("range")
+        else:
+            self.llm_dates.props(remove="range")
+        self.llm_dates.set_value([])
+
+    def _chosen_days(self) -> List[str]:
+        """The calendar's days and ranges as session dates, oldest first (a range covers its scheduled sessions)."""
+        out = set()
+        for item in self.llm_dates.value or []:
+            if isinstance(item, dict):
+                out.update(s.session_date.isoformat() for s in cal.sessions_between(
+                    str(item["from"]).replace("/", "-"), str(item["to"]).replace("/", "-")))
+            elif item:
+                out.add(str(item).replace("/", "-"))
+        return sorted(out)
+
+    def _llm_days_note(self) -> None:
+        days = self._chosen_days() if self.llm_mode.value == "days" else []
+        listed = (", ".join(days) if len(days) <= 4 else f"{days[0]} ... {days[-1]}") if days else ""
+        self.llm_days_note.set_text("" if self.llm_mode.value != "days" else
+                                    f"{len(days)} day(s) chosen" + (f": {listed}" if days else ""))
+
+    async def llm_forecast(self, days: Optional[List[str]] = None, arms: Optional[str] = None,
+                           batch: Optional[bool] = None) -> None:
+        """
+        The plan of arms C and D over ``days`` (from the Forecast page) or the row's choice - the last sessions or
+        the chosen days - then the confirmation; only its Send button issues the one-time approval, for exactly
+        those days, that the job needs to send Claude requests (forecaster/approvals.py).
+        """
         from forecaster import approvals
         from forecaster import llm_arms as la
-        arms = "".join(a for a, box in (("C", self.llm_c), ("D", self.llm_d)) if box.value)
+        arms = arms or "".join(a for a, box in (("C", self.llm_c), ("D", self.llm_d)) if box.value)
+        batch = bool(self.llm_batch.value) if batch is None else batch
         if not arms:
             ui.notify("Choose arm C, arm D or both.", type="warning")
             return
         if self.conn is None:
             ui.notify("No database connection on this page.", type="warning")
             return
-        sessions = max(1, int(self.llm_sessions.value or 1))
+        if days is None and self.llm_mode.value == "days":
+            days = self._chosen_days()
+            if not days:
+                ui.notify("Choose the days first.", type="warning")
+                return
+        if days is None:
+            days = la.target_sessions(max(1, int(self.llm_sessions.value or 1)))
+        else:
+            days = la.target_sessions(1, days=days)
         self.llm_button.props("loading")
         try:
-            plan = await run.io_bound(la.plan, self.conn, sessions, tuple(arms))
+            plan = await run.io_bound(la.plan, self.conn, 1, tuple(arms), defs.DEFAULT_PROFILE, None, days, batch)
         except Exception as e:
             ui.notify(f"Could not plan the LLM forecast: {e}", type="negative")
             return
@@ -185,17 +258,21 @@ class PipelinePanel:
 
         def start(approval=None):
             confirm.close()
-            self._start("llm", LLM, [("llm-forecast", llm_command(sessions, arms, approval))])
+            self._start("llm", LLM, [("llm-forecast", llm_command(days, arms, approval, batch))])
 
         def send():
-            token = approvals.issue({"command": "llm-forecast", "sessions": sessions, "arms": arms,
-                                     "profile": defs.DEFAULT_PROFILE, "max_requests": plan["requests"]})
+            token = approvals.issue({"command": "llm-forecast", "sessions": days, "arms": arms,
+                                     "profile": defs.DEFAULT_PROFILE, "batch": batch,
+                                     "max_requests": plan["requests"]})
             start(token)
 
         with ui.dialog() as confirm, ui.card().classes("w-[44rem] max-w-full gap-2").style(f"background:{_PANEL}"):
             n = plan["requests"]
-            ui.label("Send Claude requests?" if n else "Nothing to send").classes("text-lg font-medium")
-            with ui.grid(columns="8rem" + " minmax(0,1fr)" * len(arms)).classes("w-full gap-x-3 gap-y-0"):
+            pending = plan.get("pending_batches") or {}
+            ui.label("Send Claude requests?" if n else "Collect the recorded batches?" if pending else
+                     "Nothing to send").classes("text-lg font-medium")
+            with ui.element("div").classes("w-full").style("max-height:20rem;overflow-y:auto"), \
+                    ui.grid(columns="8rem" + " minmax(0,1fr)" * len(arms)).classes("w-full gap-x-3 gap-y-0"):
                 ui.label("session").classes("text-xs").style(_MUTED)
                 for a in arms:
                     ui.label(f"arm {a}").classes("text-xs").style(_MUTED)
@@ -205,10 +282,16 @@ class PipelinePanel:
                         text = row.get(a) or f"skipped - {row.get('skip')}"
                         ui.label(text).classes("text-sm break-words").style(
                             "color:#ffa726" if text == "request" else _MUTED)
-            ui.label(f"{n} request(s) to {plan['model']} (effort {plan['effort']}): {plan['requests_c']} restricted "
+            ui.label(f"{n} request(s) to {plan['model']} (effort {plan['effort']}"
+                     f"{', through the Batch API at half price' if batch else ''}): {plan['requests_c']} restricted "
                      f"annotation(s), {plan['requests_d']} synthesis(es) - roughly ${plan['usd']} at list prices, "
-                     f"at most ${plan['usd_max']} if every request used its whole token cap (effort xhigh thinks "
-                     f"at length, and the thinking is billed).").classes("text-sm")
+                     f"at most ${plan['usd_max']} if every request used its whole token cap (the thinking is "
+                     f"billed).").classes("text-sm")
+            for a, b in (plan.get("estimate_basis") or {}).items():
+                ui.label(f"Arm {a}: {b}.").classes("text-xs").style(_MUTED)
+            for a, ids in pending.items():
+                ui.label(f"Arm {a}: {len(ids)} batch(es) recorded by an earlier run are collected first (answers "
+                         f"already paid for; nothing is sent again).").classes("text-xs")
             if "C" in arms:
                 ui.label(f"Arm C's pool: {plan['restricted_pool']} session(s) annotated by "
                          f"{pre.RESTRICTED_PROTOCOL_VERSION}. Its analogues come only from those; with few, arm C "
@@ -219,6 +302,8 @@ class PipelinePanel:
                 ui.button("Cancel", on_click=confirm.close).props("flat no-caps")
                 if n:
                     ui.button(f"Send {n} request(s)", icon="send", on_click=send).props("no-caps color=warning")
+                elif pending:
+                    ui.button("Collect", icon="download", on_click=send).props("no-caps")
                 elif "C" in arms:
                     ui.button("Issue arm C runs from stored annotations", on_click=lambda: start()).props("no-caps")
         confirm.open()

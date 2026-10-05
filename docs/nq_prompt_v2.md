@@ -76,13 +76,16 @@ version identifier.
 | `nq_forecast_schema_v1` | forecast_schema | P1's 47 properties as local specs (key, type, unit, vocabulary, owner, window, version, missing policy), prediction and lifecycle statuses, probability units - current |
 | `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A, stage 4 arm B): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
 | `nq_prior_p1_v1` | forecast_algorithm | the earlier-session prior alone (stage 4 arm A): the same prior manifest, no structure, no analogues - current |
-| `nq_restricted_p1_v2` | forecast_algorithm | stage 4 arm C: the baseline over the analogue set of `nq_structure_restricted_v2` - current |
+| `nq_restricted_p1_v3` | forecast_algorithm | stage 4 arm C: the baseline over the analogue set of `nq_structure_restricted_v3` (effort medium) - current |
+| `nq_restricted_p1_v2` | forecast_algorithm | the same over `nq_structure_restricted_v2` (effort xhigh) |
 | `nq_restricted_p1_v1` | forecast_algorithm | the same over `nq_structure_restricted_v1`; registered, never issued |
-| `nq_synthesis_p1_v3` | forecast_algorithm | stage 4 arm D: Claude's forecast synthesis (Appendix A, A2) from arm B's evidence, `claude-opus-5-5` at `xhigh`, 64,000 tokens streamed; a flat response schema (a list of one item per target, probabilities as class/value pairs, no nullable field) validated locally - current |
+| `nq_synthesis_p1_v4` | forecast_algorithm | stage 4 arm D: v3 at effort `medium`, without the 5m bars and swing points (15m and final 2m bars kept beside the frozen annotation, analogues and baseline), live or through the Batch API (the user's choices, 2026-10-05) - current |
+| `nq_synthesis_p1_v3` | forecast_algorithm | Claude's forecast synthesis (Appendix A, A2) from arm B's evidence, `claude-opus-5-5` at `xhigh`, 64,000 tokens streamed; a flat response schema (a list of one item per target, probabilities as class/value pairs, no nullable field) validated locally; its first answer used 6,568 output tokens |
 | `nq_synthesis_p1_v2` | forecast_algorithm | the same with one object per target and named probability fields: the API refused its compiled grammar as too large; one failed run (2026-10-05) |
 | `nq_synthesis_p1_v1` | forecast_algorithm | the same with 29 nullable fields - the API refused its schema (at most 16) - and 20,000 tokens; one failed run (2026-10-05) |
 | `nq_forecast_schema_v2` | forecast_schema | v1 with the judgement estimation status and the synthesis' Forecast Confidence (1-5); arm D's runs only |
-| `nq_structure_restricted_v2` | annotation | arm C: Claude owns Overnight Structure and Premarket Pattern (date-blinded request), the rules the rest; 64,000 tokens, streamed - current |
+| `nq_structure_restricted_v3` | annotation | arm C: v2 at effort `medium`, with the 5m bars and swing points only (the 15m and final 2m bars dropped), live or through the Batch API (the user's choices, 2026-10-05) - current |
+| `nq_structure_restricted_v2` | annotation | Claude owns Overnight Structure and Premarket Pattern (date-blinded request), the rules the rest; 64,000 tokens, streamed, effort `xhigh` (its first answer used 23,239 output tokens) |
 | `nq_structure_restricted_v1` | annotation | the same capped at 16,000 tokens: at `xhigh` its one request (2026-10-05) spent them all thinking and returned nothing |
 | `nq_issue_replay_v1` | issue_policy | historical replay: research on reconstructed evidence, issued at the database clock, never timely live |
 | `nq_issue_live_v2` | issue_policy | live (3D): v1 plus the capture rules - bars requested after the cutoff until the bar ending at it arrives (at most 20 s), receipts with the database time, age-0 freshness, point-in-time verification, restart on the frozen snapshot, both arms - current |
@@ -788,17 +791,17 @@ is not live operation (guideline 4E: a shadow period comes first).
   catch-up issues both). C and D need Claude, so they are issued only by a run started by
   hand (below).
 - **Arm C, restricted LLM** ([forecaster/llm_arms.py](../forecaster/llm_arms.py),
-  sequence item 6): protocol `nq_structure_restricted_v2` - Claude classifies only
+  sequence item 6): protocol `nq_structure_restricted_v3` - Claude classifies only
   Overnight Structure and Premarket Pattern
-  ([prompt](../prompts/runtime/structure_annotation_restricted_v1.md), A1 and P1 section 4
+  ([prompt](../prompts/runtime/structure_annotation_restricted_v3.md), A1 and P1 section 4
   verbatim), every other field and the price location are `nq_structure_rules_v4`'s; the
   same request ledger, validation and one attempt per request as the full Claude protocol.
   Its analogue set is matched among the earlier sessions annotated under the same protocol
-  only, then smoothed like B (`nq_restricted_p1_v2`). So arm C needs its pool annotated:
+  only, then smoothed like B (`nq_restricted_p1_v3`). So arm C needs its pool annotated:
   with none it has no analogues and is the prior alone. The pool is cheapest through the
   Batch API: `annotate-llm --restricted --start ... --end ... --batch`.
-- **Arm D, synthesis** (`nq_synthesis_p1_v3`, Appendix A, A2,
-  [prompt](../prompts/runtime/forecast_synthesis_v3.md) with every target's registered
+- **Arm D, synthesis** (`nq_synthesis_p1_v4`, Appendix A, A2,
+  [prompt](../prompts/runtime/forecast_synthesis_v4.md) with every target's registered
   rule): Claude forecasts each target from arm B's frozen evidence - the snapshot, the
   rule-based annotation, the analogues with their eligible outcomes, the prior and the
   smoothed baseline, each target's eligibility and the candidate levels - returning
@@ -809,13 +812,27 @@ is not live operation (guideline 4E: a shadow period comes first).
   request in the ledger (`forecast_runs.request_id`, migration 0017), probabilities as exact
   fractions with estimation status `judgement`. An invalid answer is an invalid run with
   its raw text; issued evidence is never sent again.
-- **Token caps and cost (effort `xhigh`):** the thinking counts against `max_tokens` and is
-  billed. v1 capped arm C at 16,000 and its first request spent all of them thinking; both
-  arms now allow 64,000 and stream (the SDK sends nothing that long otherwise). The plan
-  estimates 24,000 output tokens per restricted annotation (its first answer, 2026-10-05,
-  used 23,239, 22,319 of them thinking) and 32,000 per synthesis - about $0.5 and $0.7 at
-  list prices - and gives the most a run can cost, every request at its cap.
-  A lower effort is a new protocol / algorithm version.
+- **Evidence per arm:** arm C sends the references, the 5m bars and their swing points (the
+  15m bars repeat the 5m ones; the final 2m bars with the moving averages were context only
+  for its two fields); arm D the references, the 15m bars and the final 2m bars with the
+  moving averages beside the frozen annotation, analogues and baseline (its input about 30%
+  smaller than with every bar set).
+- **Batch API:** `llm-forecast --batch` (the dashboard's Batch API box) sends each arm's
+  requests as one batch - half price, no refusal fallback there - and waits up to
+  `--wait-minutes` (30); a batch still processing stays recorded, its sessions shown as
+  pending and never sent again, and the next run collects it first (a confirmation is asked
+  for that too). A synthesis answer is matched to its evidence by the archived request's hash.
+- **Effort, token caps and cost:** both arms ask at effort `medium` (`ARMS_EFFORT`, since
+  2026-10-05; the full nine-field protocol keeps `xhigh`). The thinking counts against
+  `max_tokens` and is billed: v1 capped arm C at 16,000 and at `xhigh` its first request
+  spent all of them thinking; both arms allow 64,000 and stream (the SDK sends nothing that
+  long otherwise). At `xhigh` a restricted annotation used 23,239 output tokens and a
+  synthesis 6,568. The plan estimates a request's output from the arm's answered requests
+  (the median, the current version first, else earlier versions - an upper estimate - else a
+  guess) and its input from its text at the characters per token measured on earlier requests
+  (about 1.8 for this numeric JSON), halves both through the Batch API, and gives the most a
+  run can cost, every request at its cap. Another effort is a new protocol / algorithm
+  version.
 - **The API's schema limits:** structured outputs compile at most 16 nullable or union-typed
   parameters and 24 optional ones, and refuse a grammar that compiles too large (internal,
   grows with the named properties and nesting); `tests/test_llm_arms.py` counts the unions of
@@ -826,15 +843,19 @@ is not live operation (guideline 4E: a shadow period comes first).
 - **Blinding:** both arms' requests name no session date, weekday, contract or absolute
   price - times on the New York clock, prices relative to the previous RTH close - so a
   historical replay cannot draw on a remembered outcome; evidence ids are mapped back.
-- **Started by hand:** `python scripts/nq_journal.py llm-forecast --sessions N [--arms C|D|CD]`
-  shows the plan (per session what it needs, the requests, a rough cost, arm C's pool) and
-  sends after typing "send"; the dashboard's **Run LLM forecast** (sessions default 1,
-  today) shows the same plan and sends only after its confirmation, through a one-time
-  approval the job redeems ([forecaster/approvals.py](../forecaster/approvals.py)).
-- **Grading (dashboard):** for one session, each arm's current issued run against the
-  realised outcome - the probability given to the realised class per target, hits, and
-  the difference to arm A, as a radar and a scorecard ([forecaster/grading.py](../forecaster/grading.py));
-  a view of one session, hidden with the outcome, not a score.
+- **Started by hand:** `python scripts/nq_journal.py llm-forecast --sessions N [--arms C|D|CD]`,
+  or for chosen days `--date D` (repeatable) and `--start S --end E`, shows the plan (per
+  session what it needs, the requests, a rough cost, arm C's pool) and sends after typing
+  "send"; the dashboard's **Run LLM forecast** (the last sessions, default 1: today, or chosen
+  days on a calendar) and the Forecast page's **Run C and D for <day>** show the same plan and
+  send only after its confirmation, through a one-time approval for exactly those days that
+  the job redeems ([forecaster/approvals.py](../forecaster/approvals.py)).
+- **Arms and grading (dashboard):** the Forecast page's arm tiles show, per session, which
+  arms ran and which is shown; below them a radar against arm A
+  ([forecaster/grading.py](../forecaster/grading.py)) - before the outcome the probability each
+  arm gives its own predicted class (`compare`, with the classes that differ from arm A's
+  marked), with the realised outcome shown the probability each gave what happened, hits and
+  the difference to arm A (`grade`). A view of one session, not a score.
 - **Manifest (4A):** `experiment-register` stores the manifest as a definition of kind
   `experiment` before any score exists - session range, profile, every version, the
   arms, the official-run rule (`first` issued run, `latest` at freezing, or

@@ -30,6 +30,8 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py preview                                    # forecast now: a preview, never stored
     python scripts/nq_journal.py llm-forecast --sessions 1 --estimate      # arms C and D: the plan and its cost
     python scripts/nq_journal.py llm-forecast --sessions 1                 # ... sent after typing "send"
+    python scripts/nq_journal.py llm-forecast --date 2026-10-01 --date 2026-10-02   # chosen days
+    python scripts/nq_journal.py llm-forecast --start 2026-09-21 --end 2026-10-02 --arms C
     python scripts/nq_journal.py annotate-llm --restricted --start 2025-09-01 --end 2026-10-02 --batch  # C's pool
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
@@ -161,12 +163,16 @@ def cmd_annotate_llm(conn, args):
           + (f"; {len(batches)} recorded batch(es) to collect first" if batches else "") + ".")
     if todo:
         if args.restricted:
-            from forecaster.llm_arms import RESTRICTED_OUTPUT_TOKENS
-            e = llm.estimate(todo, protocol, RESTRICTED_OUTPUT_TOKENS)
+            from contracts.nq_prompt_v2 import canonical_json
+            from forecaster.llm_arms import _cost
+            chars = [len(llm._system_prompt(protocol)) + 24 + len(canonical_json(protocol.bundle(x)[0])) for x in todo]
+            live = _cost(conn, "C", chars, preopen.RESTRICTED_MAX_TOKENS, False)
+            print(f"  ~${live['usd']:.2f} live, ~${live['usd'] / 2:.2f} with --batch ({protocol.model}, effort "
+                  f"{protocol.effort}); {live['basis']}")
         else:
             e = llm.estimate(todo, protocol)
-        print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
-              f"live, ~${e['usd_batch']} with --batch ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT})")
+            print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
+                  f"live, ~${e['usd_batch']} with --batch ({protocol.model}, effort {protocol.effort})")
     if args.estimate or not (todo or batches):
         return 0
     what = ([f"{len(todo)} {'batch' if args.batch else 'live'} request(s)"] if todo else []) + \
@@ -249,23 +255,41 @@ def cmd_llm_forecast(conn, args):
     if not arms:
         print("--arms names no arm (C, D, or CD).")
         return 1
-    plan = la.plan(conn, args.sessions, arms, args.profile)
-    print(f"Arms {' and '.join(arms)} over the last {args.sessions} session(s) ({plan['model']}, effort "
-          f"{plan['effort']}):")
+    chosen = None
+    if args.date or args.start or args.end:
+        if bool(args.start) != bool(args.end):
+            print("give --start and --end together")
+            return 1
+        chosen = list(args.date or []) + ([s.session_date.isoformat() for s in cal.sessions_between(args.start,
+                                                                                                    args.end)]
+                                          if args.start else [])
+    days = la.target_sessions(args.sessions, days=chosen)
+    if not days:
+        print("No scheduled session among the chosen days.")
+        return 1
+    plan = la.plan(conn, args.sessions, arms, args.profile, days=days, batch=args.batch)
+    print(f"Arms {' and '.join(arms)} over {len(days)} session(s), {days[0]} to {days[-1]} ({plan['model']}, "
+          f"effort {plan['effort']}{', Batch API' if args.batch else ''}):")
     for row in plan["sessions"]:
         print(f"  {row['session_date']}: " + (f"skipped - {row['skip']}" if row.get("skip") else
                                              ", ".join(f"{a} {row[a]}" for a in arms if a in row)))
     if "C" in arms:
         print(f"  arm C's pool: {plan['restricted_pool']} session(s) annotated by {preopen.RESTRICTED_PROTOCOL_VERSION}"
               f" - analogues come only from earlier ones; with none, arm C is the prior alone")
-    print(f"  {plan['requests']} Claude request(s), roughly ${plan['usd']} at list prices (a rough estimate; at most "
-          f"${plan['usd_max']} if every request used its whole token cap)")
+    print(f"  {plan['requests']} Claude request(s), roughly ${plan['usd']} at list prices"
+          + (" (Batch API: half price)" if args.batch else "")
+          + f" - a rough estimate; at most ${plan['usd_max']} if every request used its whole token cap")
+    for arm, basis in plan["estimate_basis"].items():
+        print(f"  arm {arm}: {basis}")
+    for arm, ids in plan["pending_batches"].items():
+        print(f"  arm {arm}: {len(ids)} recorded batch(es) to collect first: {', '.join(ids)}")
     if args.estimate:
         return 0
-    if plan["requests"] == 0:                         # nothing to send: arm C's runs from the stored annotations
-        summary = la.run(conn, None, args.sessions, arms, args.profile, max_requests=0)
+    if plan["requests"] == 0 and not plan["pending_batches"]:   # nothing to send or collect: C's runs only
+        la.run(conn, None, args.sessions, arms, args.profile, max_requests=0, days=days)
         return 0
-    scope = {"command": "llm-forecast", "sessions": args.sessions, "arms": "".join(arms), "profile": args.profile}
+    scope = {"command": "llm-forecast", "sessions": days, "arms": "".join(arms), "profile": args.profile,
+             "batch": bool(args.batch)}
     if args.approval:
         approved, why = approvals.redeem(args.approval, scope)
         print(why + ("" if approved else ". Nothing was sent."))
@@ -273,7 +297,10 @@ def cmd_llm_forecast(conn, args):
             return 1
         cap = int(approved.get("max_requests") or 0)
     else:
-        if not confirmed_by_hand(f"Send {plan['requests']} Claude request(s) for arms {' and '.join(arms)}?"):
+        what = (f"Send {plan['requests']} Claude request(s) for arms {' and '.join(arms)}"
+                + (" through the Batch API" if args.batch else "") if plan["requests"] else
+                "Collect the recorded batches (nothing new is sent)")
+        if not confirmed_by_hand(f"{what}?"):
             return 1
         cap = plan["requests"]
     with llm.manual_requests():
@@ -284,7 +311,8 @@ def cmd_llm_forecast(conn, args):
         except Exception as e:
             print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
             return 1
-        summary = la.run(conn, client, args.sessions, arms, args.profile, max_requests=cap)
+        summary = la.run(conn, client, args.sessions, arms, args.profile, max_requests=cap, days=days,
+                         batch=args.batch, wait_minutes=args.wait_minutes)
     print(f"{summary['requests_sent']} request(s) sent; " + ", ".join(f"{k}: {v}" for k, v in summary["counts"].items()))
     bad = [k for k in summary["counts"] if any(w in k for w in ("failed", "invalid", "error", "refused"))]
     return 1 if bad else 0
@@ -695,9 +723,17 @@ def main(argv=None):
     p = sub.add_parser("llm-forecast", help="Arms C (restricted LLM) and D (synthesis) over the last sessions "
                                             "(Claude requests, confirmed by hand)")
     p.add_argument("--sessions", type=int, default=1, help="The last N scheduled sessions up to today (default 1)")
+    p.add_argument("--date", action="append", help="A chosen session (repeatable); with --start/--end instead of "
+                                                   "--sessions")
+    p.add_argument("--start", help="First chosen session (with --end)")
+    p.add_argument("--end", help="Last chosen session (with --start)")
     p.add_argument("--arms", default="CD", help="C, D or CD (default)")
     p.add_argument("--estimate", action="store_true", help="Only show the plan and its rough cost")
     p.add_argument("--approval", default=None, help="A dashboard approval token (forecaster/approvals.py)")
+    p.add_argument("--batch", action="store_true",
+                   help="Send through the Batch API: half price, answers within 24 h (usually far sooner)")
+    p.add_argument("--wait-minutes", type=float, default=30,
+                   help="How long to wait for a batch (default 30); one still processing is collected next time")
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p = sub.add_parser("analogues", help="One session's analogues (outcome-blind unless --outcomes)")
     common(p, ranged=False)

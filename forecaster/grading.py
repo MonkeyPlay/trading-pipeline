@@ -13,6 +13,10 @@ session's realised outcome (its latest outcome revision).
                graded
   chance       1 / the number of classes, per target, for orientation
 
+Before the outcome is known (or shown), ``compare`` sets the arms' forecasts side by
+side instead: per target each arm's predicted class, the probability it gives it (the
+top probability of a tie), and whether it agrees with the benchmark's class.
+
 A view of one session, not a score: stage 4's experiments score registered runs over
 many sessions (forecaster/experiments.py), with log loss and Brier.
 """
@@ -71,3 +75,36 @@ def grade(runs: Dict[str, Dict[str, Any]], labels: Dict[str, Dict[str, Any]]) ->
     return {"targets": graded, "ungraded": ungraded, "arms": arms,
             "realised": {t: labels[t]["label"] for _, t in graded},
             "chance": {t: 1 / len(defs.TARGETS[t]["labels"]) for _, t in graded}}
+
+
+def compare(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """The arms' forecasts of one session side by side, no outcome needed (see the module docstring)."""
+    arms: Dict[str, Dict[str, Any]] = {}
+    for arm in sorted(runs):
+        cells = {}
+        for _, t in fc.FORECAST_TARGETS:
+            p = (runs[arm].get("predictions") or {}).get(t) or {}
+            dist = p.get("distribution")
+            if not dist:
+                cells[t] = {"cls": None, "p": None, "status": p.get("status") or "missing",
+                            "why": p.get("reason") or "no distribution"}
+                continue
+            values = {c: Fraction(v) for c, v in dist.items()}
+            top = max(values.values())
+            cells[t] = {"cls": p.get("predicted_label") if p.get("status") == "predicted" else None,
+                        "top": [c for c, v in values.items() if v == top], "p": float(top), "status": p.get("status")}
+        arms[arm] = {"cells": cells}
+    bench = arms.get(BENCHMARK)
+    for arm, a in arms.items():
+        agree = 0
+        for _, t in fc.FORECAST_TARGETS:
+            c, b = a["cells"][t], (bench or {}).get("cells", {}).get(t)
+            c["agrees"] = (None if arm == BENCHMARK or not b or c["cls"] is None or b["cls"] is None
+                           else c["cls"] == b["cls"])
+            agree += bool(c["agrees"])
+        a["agrees"] = agree
+        a["comparable"] = sum(c["agrees"] is not None for c in a["cells"].values())
+    targets = [(name, t) for name, t in fc.FORECAST_TARGETS if any(a["cells"][t]["p"] is not None
+                                                                   for a in arms.values())]
+    return {"targets": targets, "arms": arms,
+            "chance": {t: 1 / len(defs.TARGETS[t]["labels"]) for _, t in targets}}
