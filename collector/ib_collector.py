@@ -63,7 +63,7 @@ from database.queries import (
     clear_active_contracts,
     register_asset_sources,
 )
-from features.session_windows import convert_utc_to_ny, classify_session_scope, get_trading_day_date
+from features.session_windows import NY_TZ, convert_utc_to_ny, classify_session_scope, get_trading_day_date
 from collector.pacing import IBKRPacer, format_ibkr_datetime
 from collector.coverage import (
     plan_trading_days, days_to_fetch, summarise, expected_trading_days, previous_trading_day,
@@ -483,8 +483,13 @@ def _log_plan(plan):
 
 
 def _resolve_window(days_to_download, start=None, end=None):
-    """The [start, end] calendar window to consider, as dates."""
-    today = datetime.now(timezone.utc).date()
+    """
+    The [start, end] calendar window to consider, as dates. It ends by default at the trading day in progress -
+    from 18:00 ET the next one, whose overnight has begun (before midnight UTC too), so its bars can be collected
+    from the Globex open on.
+    """
+    now = datetime.now(timezone.utc)
+    today = max(now.date(), date.fromisoformat(get_trading_day_date(now.astimezone(NY_TZ))))
     end_day = date.fromisoformat(end) if end else today
     start_day = date.fromisoformat(start) if start else end_day - timedelta(days=days_to_download)
     if start_day > end_day:

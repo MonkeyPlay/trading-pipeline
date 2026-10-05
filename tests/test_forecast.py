@@ -53,7 +53,8 @@ def test_the_contract_is_p1s_47_properties_with_explicit_units():
     kinds = {r["version"]: r["kind"] for r in fc.all_records()}
     assert kinds == {fc.FORECAST_SCHEMA_VERSION: "forecast_schema", fc.BASELINE_VERSION: "forecast_algorithm",
                      fc.PRIOR_VERSION: "forecast_algorithm", "nq_issue_replay_v1": "issue_policy",
-                     "nq_issue_live_v2": "issue_policy"}
+                     "nq_issue_live_v2": "issue_policy", fc.SYNTHESIS_SCHEMA_VERSION: "forecast_schema",
+                     fc.RESTRICTED_VERSION: "forecast_algorithm", fc.SYNTHESIS_VERSION: "forecast_algorithm"}
     live = fc.ISSUE_POLICY_DEFINITIONS["live"]
     assert live["deadline_et"] == "09:29:50" and "age 0" in live["freshness"] and "verified" in live["verification"]
 

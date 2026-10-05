@@ -75,7 +75,7 @@ def chrome(active: str, conn) -> PipelinePanel:
             button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
-        panel = PipelinePanel()
+        panel = PipelinePanel(conn)
         panel.build()
         status = ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
     panel.on_update.append(lambda: status.set_text(_db_status(conn)))
@@ -97,10 +97,10 @@ def evaluation() -> None:
 
 
 @ui.page("/forecast")
-def forecast(run: str = None) -> None:
+def forecast(run: str = None, view: str = None) -> None:
     conn = connection()
     panel = chrome("Forecast", conn)
-    panel.on_update.append(show_forecast_page(conn, run).reload)
+    panel.on_update.append(show_forecast_page(conn, run, view, panel).reload)
 
 
 def main() -> None:

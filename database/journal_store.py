@@ -89,7 +89,10 @@ def save_snapshot(conn: Database, snap) -> Tuple[str, bool]:
     """
     Stores a ``features.nq_evidence.Snapshot``. Returns ``(snapshot_id, created)``;
     a snapshot with the same source payload already stored is returned instead.
+    A preview's snapshot (an earlier cutoff, forecaster/preview.py) is never stored.
     """
+    if snap.payload["cutoff"].get("preview"):
+        raise ValueError(f"a preview snapshot of {snap.session_date} is never stored in the journal")
     with conn:
         row = conn.execute(
             "INSERT INTO journal.snapshots (snapshot_id, symbol, contract_id, session_date, snapshot_version, "
@@ -448,15 +451,16 @@ def inference_batch_requests(conn: Database, batch_id: str) -> List[Dict[str, An
 
 
 def unresolved_inference_requests(conn: Database, protocol_version: str) -> List[Dict[str, Any]]:
-    """Requests of the protocol without an attempt - in flight, in an unfinished batch, or lost when a run ended
-    mid-request - with their ``batch_id`` (None: a live request, or a batch whose id was never recorded) and
-    session date, oldest first."""
+    """Requests of the protocol without an attempt - an annotation attempt, or the forecast run a synthesis request
+    produced (migration 0017) - in flight, in an unfinished batch, or lost when a run ended mid-request - with their
+    ``batch_id`` (None: a live request, or a batch whose id was never recorded) and session date, oldest first."""
     return _request_rows(conn.execute(
         "SELECT r.*, m.batch_id, s.session_date FROM journal.inference_requests r "
         "JOIN journal.snapshots s ON s.snapshot_id = r.snapshot_id "
         "LEFT JOIN journal.inference_batch_requests m ON m.request_id = r.request_id "
         "WHERE r.protocol_version = %s AND NOT EXISTS (SELECT 1 FROM journal.annotation_attempts t "
-        "WHERE t.request_id = r.request_id) ORDER BY r.created_at;", (protocol_version,)).fetchall())
+        "WHERE t.request_id = r.request_id) AND NOT EXISTS (SELECT 1 FROM journal.forecast_runs f "
+        "WHERE f.request_id = r.request_id) ORDER BY r.created_at;", (protocol_version,)).fetchall())
 
 
 # --------------------------------------------------------------------------
@@ -546,7 +550,7 @@ _RUN_COLUMNS = ("run_id", "idempotency_key", "symbol", "session_date", "contract
                 "annotation_id", "analogue_set_id", "label_version", "algorithm_version", "schema_version",
                 "issue_policy", "code_revision", "mode", "input_cutoff_at", "deadline_at", "generation_started_at",
                 "generation_completed_at", "lifecycle_status", "supersedes_run_id", "failure_reason",
-                "evidence_digest", "outputs")
+                "evidence_digest", "outputs", "request_id")
 _PREDICTION_COLUMNS = ("target", "status", "predicted_label", "estimation_status", "distribution", "eligible",
                        "without_label", "prior_sessions", "prior_without_label", "reason")
 
@@ -592,8 +596,8 @@ def add_forecast_event(conn: Database, run_id: str, event: str, detail: Optional
 
 def _run(row) -> Dict[str, Any]:
     d = dict(zip(row.keys(), row))
-    for k in ("run_id", "snapshot_id", "annotation_id", "analogue_set_id", "supersedes_run_id"):
-        d[k] = None if d[k] is None else str(d[k])
+    for k in ("run_id", "snapshot_id", "annotation_id", "analogue_set_id", "supersedes_run_id", "request_id"):
+        d[k] = None if d.get(k) is None else str(d[k])
     d["session_date"], d["outputs"] = str(d["session_date"]), _load(d["outputs"])
     return d
 

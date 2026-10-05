@@ -146,6 +146,18 @@ def previous_session(d) -> Session:
         d -= timedelta(days=1)
 
 
+def next_session(d) -> Optional[Session]:
+    """The first scheduled session strictly after ``d``; None past the calendar's coverage."""
+    d = _as_date(d)
+    while True:
+        d += timedelta(days=1)
+        if not is_covered(d):
+            return None
+        s = session(d)
+        if s.is_open:
+            return s
+
+
 def sessions_before(d, n: int) -> List[Session]:
     """The ``n`` scheduled sessions strictly before ``d``, oldest first.
 

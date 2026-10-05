@@ -116,7 +116,7 @@ def baseline_forecast(evidence: Dict[str, Any], algorithm: str = fc.BASELINE_VER
     or the earlier-session prior alone, which ignores the analogues), and the run-level outputs."""
     if algorithm not in fc.ALGORITHMS:
         raise ValueError(f"unknown forecast algorithm {algorithm!r}")
-    members = evidence["members"] if algorithm == fc.BASELINE_VERSION else []
+    members = [] if algorithm == fc.PRIOR_VERSION else evidence["members"]     # arm C smooths like arm B
     predictions = {}
     for _, target in fc.FORECAST_TARGETS:
         est = distribution(target, [m["labels"].get(target) for m in members],

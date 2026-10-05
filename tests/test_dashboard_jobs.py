@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from dashboard.jobs import MAX_LINES, Job, JobRunner, live_window
+from dashboard.jobs import MAX_LINES, Job, JobRunner, Step, live_window
 from features import calendar as cal
 
 
@@ -35,8 +35,8 @@ def test_a_job_keeps_its_output_and_exit_status(tmp_path):
 
     async def run():
         runner = JobRunner(cwd=str(tmp_path), log_file=str(log))
-        runner.start("collector", "Collector", _python("import sys; print('one'); print('two', file=sys.stderr); "
-                                                       "sys.exit(3)"))
+        runner.start("collector", "Collector", [("collector", _python("import sys; print('one'); "
+                                                                      "print('two', file=sys.stderr); sys.exit(3)"))])
         assert runner.busy
         return await _finished(runner)
 
@@ -44,22 +44,23 @@ def test_a_job_keeps_its_output_and_exit_status(tmp_path):
     assert list(job.lines) == ["one", "two"] and job.line_count == 2
     assert job.returncode == 3 and job.outcome == "failed (exit 3)"
     text = log.read_text().splitlines()
-    assert "Dashboard: Collector started" in text[0] and text[1:3] == ["one", "two"]
+    assert "Dashboard: Collector started" in text[0] and "Dashboard: python -c" in text[1]
+    assert text[2:4] == ["one", "two"]
     assert text[-1].endswith("Dashboard: Collector failed (exit 3).")
 
 
 def test_one_job_at_a_time_and_stop(tmp_path):
     async def run():
         runner = JobRunner(cwd=str(tmp_path), log_file=None)
-        runner.start("live", "Live", _python("import time; print('waiting', flush=True); time.sleep(60)"))
+        runner.start("live", "Live", [("live", _python("import time; print('waiting', flush=True); time.sleep(60)"))])
         with pytest.raises(RuntimeError, match="still running"):
-            runner.start("forecaster", "Forecaster", _python("pass"))
+            runner.start("forecaster", "Forecaster", [("forecaster", _python("pass"))])
         while not runner.job.line_count:                 # the child is up
             await asyncio.sleep(0.05)
         assert runner.stop()
         job = await _finished(runner)
         assert not runner.stop()                         # nothing left to stop
-        runner.start("forecaster", "Forecaster", _python("print('next')"))
+        runner.start("forecaster", "Forecaster", [("forecaster", _python("print('next')"))])
         return job, await _finished(runner)
 
     stopped, after = asyncio.run(run())
@@ -70,7 +71,7 @@ def test_one_job_at_a_time_and_stop(tmp_path):
 def test_a_command_that_cannot_start_fails(tmp_path):
     async def run():
         runner = JobRunner(cwd=str(tmp_path), log_file=None)
-        runner.start("collector", "Collector", [str(tmp_path / "no-such-program")])
+        runner.start("collector", "Collector", [("collector", [str(tmp_path / "no-such-program")])])
         return await _finished(runner)
 
     job = asyncio.run(run())
@@ -78,7 +79,7 @@ def test_a_command_that_cannot_start_fails(tmp_path):
 
 
 def test_a_page_asks_for_the_lines_it_has_not_shown():
-    job = Job("collector", "Collector", [], datetime.now())
+    job = Job("collector", "Collector", [Step("collector", [])], datetime.now())
     for i in range(MAX_LINES + 10):
         job.lines.append(str(i))
         job.line_count += 1
@@ -99,7 +100,38 @@ def test_the_live_capture_is_offered_before_the_open_only():
 def test_a_job_has_no_terminal(tmp_path):
     async def run():
         runner = JobRunner(cwd=str(tmp_path), log_file=None)
-        runner.start("forecaster", "Forecaster", _python("import sys; print(repr(sys.stdin.read()), sys.stdin.isatty())"))
+        runner.start("forecaster", "Forecaster",
+                     [("forecaster", _python("import sys; print(repr(sys.stdin.read()), sys.stdin.isatty())"))])
         return await _finished(runner)
 
     assert list(asyncio.run(run()).lines) == ["'' False"]     # nothing can ask a person, or wait for one
+
+
+def test_a_job_runs_its_steps_in_turn_even_after_a_failed_one(tmp_path):
+    async def run():
+        runner = JobRunner(cwd=str(tmp_path), log_file=None)
+        runner.start("preview", "Forecast now", [("collector", _python("import sys; print('no IB'); sys.exit(2)")),
+                                                 ("preview", _python("print('preview from the stored bars')"))])
+        return await _finished(runner)
+
+    job = asyncio.run(run())
+    assert list(job.lines) == ["Dashboard: step 1/2, collector", "no IB", "Dashboard: step 2/2, preview",
+                               "preview from the stored bars"]
+    assert [s.returncode for s in job.steps] == [2, 0]
+    assert job.returncode == 2 and job.outcome == "collector failed (exit 2)"
+
+
+def test_stop_skips_the_steps_after_the_running_one(tmp_path):
+    async def run():
+        runner = JobRunner(cwd=str(tmp_path), log_file=None)
+        runner.start("preview", "Forecast now", [("collector", _python("import time; print('up', flush=True); "
+                                                                       "time.sleep(60)")),
+                                                 ("preview", _python("print('should not run')"))])
+        while not runner.job.line_count >= 2:
+            await asyncio.sleep(0.05)
+        assert runner.stop()
+        return await _finished(runner)
+
+    job = asyncio.run(run())
+    assert job.stopped and job.steps[1].returncode is None and "should not run" not in job.lines
+    assert job.outcome.startswith("stopped")

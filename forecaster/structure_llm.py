@@ -58,8 +58,9 @@ import hashlib
 import json
 import math
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from contracts import nq_preopen as pre
 from contracts.nq_prompt_v2 import canonical_json
@@ -69,6 +70,25 @@ from forecaster.provenance import code_revision
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FINAL_2M_BARS = 45
+
+
+@dataclass(frozen=True)
+class Protocol:
+    """
+    A Claude annotation protocol: its registered version and request settings, the fields Claude owns, how its
+    evidence is bundled (``bundle(snapshot) -> (bundle, ids)``) and how a valid answer becomes an annotation
+    (``annotation(snapshot, answer, model)``). FULL is nq_structure_llm_v4; arm C's restricted protocol is in
+    forecaster/llm_arms.py. Every function below takes one, FULL when none is given.
+    """
+    version: str
+    model: str
+    effort: str
+    max_tokens: int
+    prompt_path: str
+    fields: Tuple[str, ...]
+    schema: Callable[[], Dict[str, Any]]
+    bundle: Callable[[Dict[str, Any]], Tuple[Dict[str, Any], set]]
+    annotation: Callable[[Dict[str, Any], Dict[str, Any], str], Dict[str, Any]]
 
 _manual = False
 
@@ -86,6 +106,15 @@ def manual_requests():
         yield
     finally:
         _manual = False
+
+
+def send(client, params: Dict[str, Any]):
+    """
+    One live request, streamed - at a high effort the thinking counts against max_tokens, and the SDK only sends a
+    request that long as a stream - with the server-side refusal fallback; returns the final message.
+    """
+    with client.beta.messages.stream(**params, betas=[FALLBACK_BETA], fallbacks="default") as stream:
+        return stream.get_final_message()
 
 
 def _require_manual() -> None:
@@ -166,43 +195,47 @@ def request_ids(params: Dict[str, Any]) -> set:
     return bundle_ids(json.loads(params["messages"][0]["content"].split("\n", 1)[1]))
 
 
-def _system_prompt() -> str:
-    with open(pre.LLM_PROMPT, encoding="utf-8") as f:
+def _system_prompt(protocol: Optional[Protocol] = None) -> str:
+    with open((protocol or FULL).prompt_path, encoding="utf-8") as f:
         return f.read()
 
 
-def build_request(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], str, set]:
+def build_request(snapshot: Dict[str, Any], protocol: Optional[Protocol] = None) -> Tuple[Dict[str, Any], str, set]:
     """``(params, request_hash, evidence ids)`` of one snapshot's Messages API request."""
-    bundle, ids = evidence_bundle(snapshot)
+    protocol = protocol or FULL
+    bundle, ids = protocol.bundle(snapshot)
     params = {
-        "model": pre.LLM_MODEL,
-        "max_tokens": pre.LLM_MAX_TOKENS,
+        "model": protocol.model,
+        "max_tokens": protocol.max_tokens,
         # the system prompt is the same for every session: cached
-        "system": [{"type": "text", "text": _system_prompt(), "cache_control": {"type": "ephemeral"}}],
+        "system": [{"type": "text", "text": _system_prompt(protocol), "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": "Evidence bundle (JSON):\n" + canonical_json(bundle)}],
-        "output_config": {"effort": pre.LLM_EFFORT,
-                          "format": {"type": "json_schema", "schema": pre.llm_output_schema()}},
+        "output_config": {"effort": protocol.effort,
+                          "format": {"type": "json_schema", "schema": protocol.schema()}},
     }
     return params, hashlib.sha256(canonical_json(params).encode()).hexdigest(), ids
 
 
-def _ledger_record(snapshot: Dict[str, Any], params: Dict[str, Any], request_hash: str, mode: str) -> Dict[str, Any]:
-    return {"snapshot_id": snapshot["snapshot_id"], "protocol_version": pre.LLM_PROTOCOL_VERSION,
-            "model": pre.LLM_MODEL, "request": params, "request_hash": request_hash,
+def _ledger_record(snapshot: Dict[str, Any], params: Dict[str, Any], request_hash: str, mode: str,
+                   protocol: Optional[Protocol] = None) -> Dict[str, Any]:
+    protocol = protocol or FULL
+    return {"snapshot_id": snapshot["snapshot_id"], "protocol_version": protocol.version,
+            "model": protocol.model, "request": params, "request_hash": request_hash,
             "prompt_sha256": _sha(params["system"][0]["text"]),
             "schema_sha256": _sha(params["output_config"]["format"]["schema"]),
             "evidence_sha256": _sha(params["messages"][0]["content"]), "code_revision": code_revision(),
             "mode": mode}
 
 
-def validate(answer: Any, ids: set) -> Optional[str]:
+def validate(answer: Any, ids: set, protocol: Optional[Protocol] = None) -> Optional[str]:
     """The first problem with Claude's answer (see the module docstring), or None."""
     from jsonschema import Draft202012Validator
     from jsonschema.exceptions import best_match
-    e = best_match(Draft202012Validator(pre.llm_output_schema()).iter_errors(answer))
+    protocol = protocol or FULL
+    e = best_match(Draft202012Validator(protocol.schema()).iter_errors(answer))
     if e is not None:
         return f"schema: {'/'.join(str(p) for p in e.absolute_path) or '(answer)'}: {e.message}"
-    for name in pre.LLM_FIELDS:
+    for name in protocol.fields:
         f = answer["fields"][name]
         if (f["value"] is None) != (f["status"] == "unavailable"):
             return f"{name}: status {f['status']} does not fit value {f['value']!r}"
@@ -239,29 +272,33 @@ def to_annotation(snapshot: Dict[str, Any], answer: Dict[str, Any], model: str) 
     })
 
 
-def _contaminated(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _contaminated(snapshot: Dict[str, Any], protocol: Optional[Protocol] = None) -> Optional[Dict[str, Any]]:
+    protocol = protocol or FULL
     p = snapshot["payload"]
     bad = sr.after_cutoff(p, sr._ts(p["cutoff"]["input_cutoff_at"]))
     if not bad:
         return None
-    return sr.seal({"protocol_version": pre.LLM_PROTOCOL_VERSION, "annotator": "llm",
+    return sr.seal({"protocol_version": protocol.version, "annotator": "llm",
                     "integrity_status": "contaminated", "fields": {}, "price_location": {},
-                    "measurements": {"model": pre.LLM_MODEL, "after_cutoff": bad[:20], "not_sent": True}})
+                    "measurements": {"model": protocol.model, "after_cutoff": bad[:20], "not_sent": True}})
 
 
-def _attempt(snapshot_id: str, request_id: str, request_hash: str, started_at: datetime, **kw) -> Dict[str, Any]:
-    return {"snapshot_id": snapshot_id, "protocol_version": pre.LLM_PROTOCOL_VERSION, "model": pre.LLM_MODEL,
+def _attempt(snapshot_id: str, request_id: str, request_hash: str, started_at: datetime,
+             protocol: Optional[Protocol] = None, **kw) -> Dict[str, Any]:
+    protocol = protocol or FULL
+    return {"snapshot_id": snapshot_id, "protocol_version": protocol.version, "model": protocol.model,
             "request_id": request_id, "request_hash": request_hash, "started_at": started_at,
             "finished_at": datetime.now(timezone.utc), **kw}
 
 
 def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, ids: set,
-                   started_at: datetime, request_id: str) -> Dict[str, Any]:
+                   started_at: datetime, request_id: str, protocol: Optional[Protocol] = None) -> Dict[str, Any]:
     """Stores the attempt for one response to ledger request ``request_id`` (and the annotation when valid);
     returns the attempt record."""
+    protocol = protocol or FULL
     usage = None if getattr(message, "usage", None) is None else json.loads(message.usage.to_json())
-    attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started_at,
-                       model=getattr(message, "model", pre.LLM_MODEL), usage=usage)
+    attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started_at, protocol,
+                       model=getattr(message, "model", protocol.model), usage=usage)
     text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), None)
     answer = None
     if message.stop_reason == "refusal":
@@ -279,16 +316,17 @@ def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, i
     if answer is not None:
         attempt["response"] = answer
         problem = None
-        if attempt["model"] != pre.LLM_MODEL:
-            problem = f"served by {attempt['model']}, not {pre.LLM_MODEL} (a fallback answer is not this protocol)"
+        if attempt["model"] != protocol.model:
+            problem = (f"served by {attempt['model']}, not {protocol.model} (a fallback answer is not this "
+                       f"protocol)")
         elif isinstance(answer, dict) and answer.get("integrity_status") == "contaminated":
             problem = "Claude reported contamination the application's check does not find"
         else:
-            problem = validate(answer, ids)
+            problem = validate(answer, ids, protocol)
         if problem:
             attempt.update(status="invalid", error=problem)
         else:
-            annotation = to_annotation(snapshot, answer, attempt["model"])
+            annotation = protocol.annotation(snapshot, answer, attempt["model"])
     with conn:                                     # an annotation and its attempt together, or neither
         if annotation is not None:
             attempt["annotation_id"], _ = store.save_annotation(conn, snapshot["snapshot_id"], annotation,
@@ -298,28 +336,30 @@ def handle_message(conn, snapshot: Dict[str, Any], message, request_hash: str, i
     return attempt
 
 
-def annotate_live(conn, client, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def annotate_live(conn, client, snapshot: Dict[str, Any], protocol: Optional[Protocol] = None) -> Dict[str, Any]:
     """One request now, with the server-side refusal fallback; returns the stored attempt (or the contaminated
     annotation's record when nothing was sent)."""
     _require_manual()
-    contaminated = _contaminated(snapshot)
+    protocol = protocol or FULL
+    contaminated = _contaminated(snapshot, protocol)
     if contaminated is not None:
-        annotation_id, _ = store.save_annotation(conn, snapshot["snapshot_id"], contaminated, model=pre.LLM_MODEL)
+        annotation_id, _ = store.save_annotation(conn, snapshot["snapshot_id"], contaminated, model=protocol.model)
         return {"status": "contaminated", "annotation_id": annotation_id}
-    params, request_hash, ids = build_request(snapshot)
-    request_id = store.save_inference_request(conn, _ledger_record(snapshot, params, request_hash, "live"))
+    params, request_hash, ids = build_request(snapshot, protocol)
+    request_id = store.save_inference_request(conn, _ledger_record(snapshot, params, request_hash, "live", protocol))
     started = datetime.now(timezone.utc)
     try:
-        message = client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
+        message = send(client, params)
     except Exception as e:  # the attempt is kept; nothing is filled in from another run
-        attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started, status="error",
+        attempt = _attempt(snapshot["snapshot_id"], request_id, request_hash, started, protocol, status="error",
                            error=f"{type(e).__name__}: {e}")
         attempt["attempt_id"] = store.save_annotation_attempt(conn, attempt)
         return attempt
-    return handle_message(conn, snapshot, message, request_hash, ids, started, request_id)
+    return handle_message(conn, snapshot, message, request_hash, ids, started, request_id, protocol)
 
 
-def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[str]:
+def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]],
+                 protocol: Optional[Protocol] = None) -> Optional[str]:
     """
     Submits one request per snapshot to the Batch API (no fallback: the Batch API rejects it). Each request is in
     the ledger before the batch is created, its id the custom_id; the batch id is recorded the moment it is known.
@@ -327,16 +367,18 @@ def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[
     closed as error attempts).
     """
     _require_manual()
+    protocol = protocol or FULL
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
     requests, ledger = [], []
     for snap in snapshots:
-        contaminated = _contaminated(snap)
+        contaminated = _contaminated(snap, protocol)
         if contaminated is not None:                   # never sent, stored as such (as annotate_live does)
-            store.save_annotation(conn, snap["snapshot_id"], contaminated, model=pre.LLM_MODEL)
+            store.save_annotation(conn, snap["snapshot_id"], contaminated, model=protocol.model)
         else:
-            params, request_hash, _ = build_request(snap)
-            request_id = store.save_inference_request(conn, _ledger_record(snap, params, request_hash, "batch"))
+            params, request_hash, _ = build_request(snap, protocol)
+            request_id = store.save_inference_request(conn, _ledger_record(snap, params, request_hash, "batch",
+                                                                           protocol))
             requests.append(Request(custom_id=request_id, params=MessageCreateParamsNonStreaming(**params)))
             ledger.append((request_id, snap["snapshot_id"], request_hash))
     if not requests:
@@ -346,7 +388,7 @@ def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[
         batch_id = client.messages.batches.create(requests=requests).id
     except Exception as e:
         for request_id, snapshot_id, request_hash in ledger:
-            store.save_annotation_attempt(conn, _attempt(snapshot_id, request_id, request_hash, submitted,
+            store.save_annotation_attempt(conn, _attempt(snapshot_id, request_id, request_hash, submitted, protocol,
                                                          status="error",
                                                          error=f"batch not created: {type(e).__name__}: {e}"))
         return None
@@ -354,7 +396,7 @@ def submit_batch(conn, client, snapshots: Iterable[Dict[str, Any]]) -> Optional[
     return batch_id
 
 
-def collect_batch(conn, client, batch_id: str) -> Dict[str, int]:
+def collect_batch(conn, client, batch_id: str, protocol: Optional[Protocol] = None) -> Dict[str, int]:
     """
     Stores every result of an ended, recorded batch as an attempt (and its annotation when valid), skipping requests
     already answered, so an interrupted collection can simply run again. Each answer is validated against the
@@ -362,6 +404,7 @@ def collect_batch(conn, client, batch_id: str) -> Dict[str, int]:
     result for is closed as an error. Returns status counts.
     """
     _require_manual()
+    protocol = protocol or FULL
     ledger = {r["request_id"]: r for r in store.inference_batch_requests(conn, batch_id)}
     counts: Dict[str, int] = {}
 
@@ -377,43 +420,45 @@ def collect_batch(conn, client, batch_id: str) -> Dict[str, int]:
         snap = store.get_snapshot(conn, req["snapshot_id"])
         if result.result.type == "succeeded":
             attempt = handle_message(conn, snap, result.result.message, req["request_hash"],
-                                     request_ids(req["request"]), req["submitted_at"], req["request_id"])
+                                     request_ids(req["request"]), req["submitted_at"], req["request_id"], protocol)
         else:
             attempt = _attempt(snap["snapshot_id"], req["request_id"], req["request_hash"], req["submitted_at"],
-                               status="error", error=f"batch result {result.result.type}")
+                               protocol, status="error", error=f"batch result {result.result.type}")
             store.save_annotation_attempt(conn, attempt)
         count(attempt["status"])
     for request_id, req in ledger.items():
         if not req["answered"] and request_id not in seen:
             store.save_annotation_attempt(conn, _attempt(req["snapshot_id"], request_id, req["request_hash"],
-                                                         req["submitted_at"], status="error",
+                                                         req["submitted_at"], protocol, status="error",
                                                          error="no result for this request in the ended batch"))
             count("error")
     return counts
 
 
-def close_unresolved(conn, requests: Iterable[Dict[str, Any]]) -> int:
+def close_unresolved(conn, requests: Iterable[Dict[str, Any]], protocol: Optional[Protocol] = None) -> int:
     """Closes requests whose answer can never be fetched (a live request, or a batch whose id was not recorded,
     from a run that ended mid-request) as error attempts, so their snapshots can be requested again. The user's
     decision: such a request may have been billed."""
     n = 0
     for req in requests:
         store.save_annotation_attempt(conn, _attempt(
-            req["snapshot_id"], req["request_id"], req["request_hash"], req["created_at"], status="error",
+            req["snapshot_id"], req["request_id"], req["request_hash"], req["created_at"], protocol, status="error",
             error=f"no answer stored: the {req['mode']} request's run ended before it was recorded; it may have "
                   f"been billed"))
         n += 1
     return n
 
 
-def estimate(snapshots: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+def estimate(snapshots: Iterable[Dict[str, Any]], protocol: Optional[Protocol] = None,
+             output_tokens: int = 4000) -> Dict[str, Any]:
     """A rough size and cost estimate before spending anything: ~3.5 characters per token, Opus 5.5 list prices
-    ($4 / $20 per million input / output tokens; the Batch API halves them), ~4,000 output tokens per session."""
+    ($4 / $20 per million input / output tokens; the Batch API halves them), ``output_tokens`` per session."""
+    protocol = protocol or FULL
     snaps = list(snapshots)
-    system = len(_system_prompt())
-    chars = sum(len(canonical_json(evidence_bundle(s)[0])) for s in snaps) + system * len(snaps)
+    system = len(_system_prompt(protocol))
+    chars = sum(len(canonical_json(protocol.bundle(s)[0])) for s in snaps) + system * len(snaps)
     tokens_in = chars / 3.5
-    tokens_out = 4000 * len(snaps)
+    tokens_out = output_tokens * len(snaps)
     usd = tokens_in / 1e6 * 4 + tokens_out / 1e6 * 20
     return {"sessions": len(snaps), "input_tokens": int(tokens_in), "output_tokens": tokens_out,
             "usd_live": round(usd, 2), "usd_batch": round(usd / 2, 2)}
@@ -422,3 +467,7 @@ def estimate(snapshots: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 def batch_poll_delay(started: datetime) -> float:
     """Seconds to wait before polling a batch again: every 30 s for the first 10 minutes, then every 2 minutes."""
     return 30.0 if datetime.now(timezone.utc) - started < timedelta(minutes=10) else 120.0
+
+
+FULL = Protocol(pre.LLM_PROTOCOL_VERSION, pre.LLM_MODEL, pre.LLM_EFFORT, pre.LLM_MAX_TOKENS, pre.LLM_PROMPT,
+                tuple(pre.LLM_FIELDS), pre.llm_output_schema, evidence_bundle, to_annotation)

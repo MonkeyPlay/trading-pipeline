@@ -5,9 +5,10 @@ from Interactive Brokers into a day-partitioned TimescaleDB store and serves the
 in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. Besides Interactive
 Brokers, two outside services are used, both by the NQ pre-open journal
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): SEC EDGAR, for the earnings filings behind
-Event Risk, and optionally the Claude API, for a structure annotation that runs only when
-started by hand in a terminal - it asks you to type "send" first, and nothing else can start
-it - with `ANTHROPIC_API_KEY` set. Everything else is computed locally.
+Event Risk, and optionally the Claude API, for the structure annotation and forecast arms C
+and D, which run only when started by hand - in a terminal after typing "send", or in the
+dashboard after its confirmation; nothing else can start them - with `ANTHROPIC_API_KEY` set.
+Everything else is computed locally.
 
 Ten instruments are collected out of the box:
 
@@ -131,9 +132,11 @@ the command line:
 |---|---|---|
 | **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection |
 | **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - and outcomes once a session is final. No Claude requests |
+| **Run LLM forecast** | `python scripts/nq_journal.py llm-forecast --sessions N --arms CD` | Arms C (restricted LLM) and D (synthesis) for the last N sessions up to today (default 1: today), arm C or D or both. Claude requests: a confirmation first shows each session, the requests and a rough cost, and only its **Send** button lets the job send them (a one-time approval, [forecaster/approvals.py](forecaster/approvals.py)). Evidence already answered is never sent again |
+| **Forecast now** | the collector, then `python scripts/nq_journal.py preview` | The next session's forecast from the data so far, at any time from its Globex open (18:00 ET the evening before) until its official snapshot is due at 09:31 ET: the latest bars, then the evidence as of now, its rule-based annotation, analogues and both arms - in memory, never stored. Shown on the Forecast page's **Forecast now** tab, which has the same button. The preview step runs even when collecting failed, from the bars already stored |
 | **Live forecast** | `python scripts/nq_journal.py live` | Today's pre-open live capture and its forecasts ([below](#both-together)); offered on a session day before 09:30 ET only - it then waits for the 09:29 cutoff |
 
-One job runs at a time. It belongs to the dashboard process, not to the browser tab: every
+One job runs at a time (a job can have steps: Forecast now collects, then previews). It belongs to the dashboard process, not to the browser tab: every
 page shows it and its output, the header shows its name and running time, closing the tab
 does not stop it (**Stop** interrupts it as Ctrl-C would), and the output is appended to
 `logs/pipeline_run.log`. When it ends, the pages that saw it running read the database
@@ -147,10 +150,19 @@ Pages:
   registered experiments (guideline stage 4): each manifest, its stored scorings (paired arm
   differences with intervals, every target, where the differences sit) and its frozen cases,
   each linked to its forecast run.
-- **Forecast** (`/forecast`, `/forecast?run=<id>`, [dashboard/views/forecast.py](dashboard/views/forecast.py))
-  — one stored baseline forecast run, by its id: provenance, the chart drawn from the snapshot's
-  frozen bars, per-target distributions with their denominators, P1's 47 fields, and the realised
-  outcome only when asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
+- **Forecast** (`/forecast`, `/forecast?run=<id>`, `/forecast?view=preview`, [dashboard/views/forecast.py](dashboard/views/forecast.py))
+  — two tabs. **Stored runs**: one stored forecast run, by its id: provenance, the chart drawn
+  from the snapshot's frozen bars, per-target distributions with their denominators, P1's 47
+  fields, and the realised outcome only when asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
+  **Arms for this session** are buttons A (prior, the benchmark), B (baseline), C (restricted
+  LLM) and D (synthesis): the one shown highlighted, the session's others outlined, the
+  missing ones disabled. With the realised outcome shown, **Grading** compares every arm's
+  current run with what happened: a radar of the probability each arm gave the realised class
+  per target (arm A dashed, chance dotted) and a scorecard - hits, mean p(realised) and the
+  difference to arm A ([forecaster/grading.py](forecaster/grading.py)).
+  **Forecast now**: the latest preview (its own button, as in Update data) - as of when, how
+  complete its pre-open is, what is not known yet, its analogues, both arms and the 47 fields;
+  never stored ([forecaster/preview.py](forecaster/preview.py)).
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
   around the first hour. Three selectors, in order: the **session day** (a calendar, weeks
   from Monday, on which only the days with stored bars can be picked; the arrows either side
@@ -375,7 +387,9 @@ index membership and per-constituent data, which nothing here records.
 trading day's RTH high, low and close, and the overnight high and low - the day's bars
 before 09:30 ET only. The chart draws the previous close and the overnight extremes.
 
-The trading day starts at **18:00 ET the prior evening** (the Globex open), not midnight.
+The trading day starts at **18:00 ET the prior evening** (the Globex open), not midnight. The
+collector's window ends at the trading day in progress, so from 18:00 ET it collects the next
+session's overnight bars too.
 [features/session_windows.py](features/session_windows.py) owns that rule and classifies
 each bar `RTH` (09:30–16:00 ET) or `ETH`.
 

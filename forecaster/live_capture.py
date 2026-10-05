@@ -183,7 +183,7 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
         aset = None
     event("matched", set_id=None if aset is None else aset["set_id"],
           analogues=None if aset is None else len(aset["members"]))
-    for algorithm in fc.ALGORITHMS:
+    for algorithm in fc.RULE_ALGORITHMS:
         run, created = run_forecast(conn, snapshot["snapshot_id"], annotation_id, aset["set_id"] if aset else None,
                                     profile, mode="live", algorithm=algorithm)
         event("forecast", run_id=run["run_id"], algorithm=algorithm, status=run["lifecycle_status"],

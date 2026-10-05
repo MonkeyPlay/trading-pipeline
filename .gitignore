@@ -18,6 +18,8 @@ data/*.db-shm
 data/*.db-wal
 data/backups/
 data/models/
+data/preview/
+data/approvals/
 
 # Logs
 logs/

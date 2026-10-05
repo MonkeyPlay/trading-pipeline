@@ -90,6 +90,9 @@ def freeze_forecast_evidence(conn, snapshot: Dict[str, Any], annotation: Dict[st
     cutoff price and frozen candidate levels. Raises ForecastInputError when the ids do not fit together.
     """
     check_inputs(snapshot, annotation, analogue_set, profile, mode)
+    if (algorithm == fc.RESTRICTED_VERSION) != (annotation["protocol_version"] == pre.RESTRICTED_PROTOCOL_VERSION):
+        raise ForecastInputError(f"{algorithm} needs {'a' if algorithm == fc.RESTRICTED_VERSION else 'no'} "
+                                 f"{pre.RESTRICTED_PROTOCOL_VERSION} annotation, not {annotation['protocol_version']}")
     p = snapshot["payload"]
     cp = (p.get("references") or {}).get("cutoff_price") or {}
     evidence: Dict[str, Any] = {
@@ -272,7 +275,7 @@ def forecast_session(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
 
 
 def forecast_all(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION,
-                 algorithms=tuple(fc.ALGORITHMS)) -> int:
+                 algorithms=fc.RULE_ALGORITHMS) -> int:
     """Historical-replay forecasts of every annotated snapshot of the profile under every algorithm (stage 4's arms
     A and B); returns how many runs are new."""
     history = store.outcome_history(conn, defs.LABEL_VERSION)

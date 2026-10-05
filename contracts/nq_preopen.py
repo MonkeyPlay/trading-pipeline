@@ -415,3 +415,55 @@ def llm_record() -> Dict[str, Any]:
                       "nq_structure_llm_v2: the same prompt and schema, the evidence without completeness "
                       "metadata, validated less strictly and without the request ledger",
     })
+
+
+# --------------------------------------------------------------------------
+# Arm C: the restricted Claude annotation (guideline revision 2, sequence item 6, 4B)
+# --------------------------------------------------------------------------
+
+# Claude owns only Overnight Structure and Premarket Pattern; every other field and the price location are the
+# rule-based protocol's of the same snapshot. The request is date-blinded (forecaster/llm_arms.blinded_bundle).
+# v1 (registered 2026-10-05) capped the answer at 16,000 tokens: at effort xhigh its one request spent all of them
+# thinking and returned nothing. v2 is v1 with a 64,000-token cap, the request streamed.
+RESTRICTED_PROTOCOL_VERSION = "nq_structure_restricted_v2"
+RESTRICTED_MAX_TOKENS = 64000
+RESTRICTED_FIELDS = ["Overnight Structure", "Premarket Pattern"]
+RESTRICTED_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts",
+                                 "runtime", "structure_annotation_restricted_v1.md")
+BLINDING = ("no session date, weekday, contract or absolute price: times are the New York clock (HH:MM, the "
+            "overnight runs from 18:00 to the cutoff, so 18:00-23:59 precede 00:00), bar ids name the bar by "
+            "that clock (bar:<tf>:<HH:MM>), prices are index points relative to the previous RTH close (the "
+            "overnight open when that is unavailable); evidence ids in an answer are mapped back to the "
+            "snapshot's own ids before anything is stored")
+
+
+def restricted_output_schema() -> Dict[str, Any]:
+    """The structure_annotation schema reduced to the restricted protocol's two fields."""
+    schema = llm_output_schema()
+    fields = schema["properties"]["fields"]
+    fields["required"] = list(RESTRICTED_FIELDS)
+    fields["properties"] = {f: fields["properties"][f] for f in RESTRICTED_FIELDS}
+    return schema
+
+
+def restricted_record() -> Dict[str, Any]:
+    with open(RESTRICTED_PROMPT, "rb") as f:
+        prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
+    return _record(RESTRICTED_PROTOCOL_VERSION, "annotation", {
+        "annotator": "llm", "model": LLM_MODEL, "effort": LLM_EFFORT, "max_tokens": RESTRICTED_MAX_TOKENS,
+        "request": "streamed (thinking counts against max_tokens; the SDK streams a request this long)",
+        "supersedes": "nq_structure_restricted_v1: the same prompt and schema, capped at 16,000 tokens - too few for "
+                      "effort xhigh, which spent them all thinking",
+        "prompt": {"path": "prompts/runtime/structure_annotation_restricted_v1.md", "sha256": prompt_sha256,
+                   "sources": ["A (A1)", "P1 section 4 (Overnight Structure, Premarket Pattern)"]},
+        "output_schema": restricted_output_schema(), "fields": list(RESTRICTED_FIELDS),
+        "from_the_rules": f"every other field and the price location: {RULES_PROTOCOL_VERSION} of the same snapshot",
+        "blinding": BLINDING,
+        "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
+                    "the three moving averages and the confirmed 2/2 swing points on 5m bars, date-blinded",
+        "validation": f"as {LLM_PROTOCOL_VERSION}, over the two fields",
+        "accounting": f"as {LLM_PROTOCOL_VERSION}: the request ledger, one attempt per request",
+        "matching": f"{MATCHER_VERSION} among the earlier sessions annotated under this protocol only",
+        "question": "guideline 4B arm C: does Claude's reading of the overnight and premarket structure improve "
+                    "the analogue forecast over the rules alone (arm B)?",
+    })

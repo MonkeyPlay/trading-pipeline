@@ -76,6 +76,14 @@ version identifier.
 | `nq_forecast_schema_v1` | forecast_schema | P1's 47 properties as local specs (key, type, unit, vocabulary, owner, window, version, missing policy), prediction and lifecycle statuses, probability units - current |
 | `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A, stage 4 arm B): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
 | `nq_prior_p1_v1` | forecast_algorithm | the earlier-session prior alone (stage 4 arm A): the same prior manifest, no structure, no analogues - current |
+| `nq_restricted_p1_v2` | forecast_algorithm | stage 4 arm C: the baseline over the analogue set of `nq_structure_restricted_v2` - current |
+| `nq_restricted_p1_v1` | forecast_algorithm | the same over `nq_structure_restricted_v1`; registered, never issued |
+| `nq_synthesis_p1_v3` | forecast_algorithm | stage 4 arm D: Claude's forecast synthesis (Appendix A, A2) from arm B's evidence, `claude-opus-5-5` at `xhigh`, 64,000 tokens streamed; a flat response schema (a list of one item per target, probabilities as class/value pairs, no nullable field) validated locally - current |
+| `nq_synthesis_p1_v2` | forecast_algorithm | the same with one object per target and named probability fields: the API refused its compiled grammar as too large; one failed run (2026-10-05) |
+| `nq_synthesis_p1_v1` | forecast_algorithm | the same with 29 nullable fields - the API refused its schema (at most 16) - and 20,000 tokens; one failed run (2026-10-05) |
+| `nq_forecast_schema_v2` | forecast_schema | v1 with the judgement estimation status and the synthesis' Forecast Confidence (1-5); arm D's runs only |
+| `nq_structure_restricted_v2` | annotation | arm C: Claude owns Overnight Structure and Premarket Pattern (date-blinded request), the rules the rest; 64,000 tokens, streamed - current |
+| `nq_structure_restricted_v1` | annotation | the same capped at 16,000 tokens: at `xhigh` its one request (2026-10-05) spent them all thinking and returned nothing |
 | `nq_issue_replay_v1` | issue_policy | historical replay: research on reconstructed evidence, issued at the database clock, never timely live |
 | `nq_issue_live_v2` | issue_policy | live (3D): v1 plus the capture rules - bars requested after the cutoff until the bar ending at it arrives (at most 20 s), receipts with the database time, age-0 freshness, point-in-time verification, restart on the frozen snapshot, both arms - current |
 | `nq_issue_live_v1` | issue_policy | live: a live_capture snapshot issued by 09:29:50 ET by the database clock, acknowledged after commit; registered, never used |
@@ -693,6 +701,27 @@ then the stored run.
   47-field record, and - only when asked - the realised outcome beside it (a view,
   not a score).
 
+### Forecast now: a preview (not stored)
+
+[forecaster/preview.py](../forecaster/preview.py); `python scripts/nq_journal.py preview`,
+or **Forecast now** in the dashboard (collects the latest bars first). The next session's
+forecast from the data stored so far, at any time from its Globex open (18:00 ET the evening
+before) until its official snapshot is due (09:31 ET): today's session until then, the next
+one from 18:01 ET (its first overnight bar); in between there is nothing to preview. The
+preview builds the snapshot as of now, to the minute (`build_snapshot(..., as_of=...)`, the
+profile's cutoff once that has passed), annotates it by the rules, matches it against the
+stored sessions (outcomes as known now) and runs both arms through the same evidence freeze,
+baseline and validation as a stored run - all in memory. Nothing enters the journal: the
+payload is marked `preview` (data mode `preview`) and `save_snapshot` refuses it; the result is
+one file, `data/preview/forecast_preview.json`, replaced by the next preview.
+
+Before the cutoff its evidence is incomplete by design and says so: an input not known yet
+is unavailable (before 08:00 the premarket has not started; the Long MA needs 200 minutes of
+overnight; a level that is unavailable cannot be named as the first level), never filled in,
+and the analogues are found on what is known. So a preview can differ from the official
+forecast; with the whole pre-open (from 09:29) it equals it. A preview is not a forecast run:
+no run id, no issue policy, no place in an experiment.
+
 ### Live capture (3D)
 
 [forecaster/live_capture.py](../forecaster/live_capture.py), issue policy
@@ -756,7 +785,56 @@ is not live operation (guideline 4E: a shadow period comes first).
 - **Arms (4B):** A `nq_prior_p1_v1`, the earlier-session prior alone; B
   `nq_baseline_p1_v1`, rules-only structure, the P1 matcher and the smoothed analogue
   forecast. Both are issued from the same snapshot, annotation and analogue set (the
-  catch-up issues both). C (a restricted LLM) and D (synthesis) are not built.
+  catch-up issues both). C and D need Claude, so they are issued only by a run started by
+  hand (below).
+- **Arm C, restricted LLM** ([forecaster/llm_arms.py](../forecaster/llm_arms.py),
+  sequence item 6): protocol `nq_structure_restricted_v2` - Claude classifies only
+  Overnight Structure and Premarket Pattern
+  ([prompt](../prompts/runtime/structure_annotation_restricted_v1.md), A1 and P1 section 4
+  verbatim), every other field and the price location are `nq_structure_rules_v4`'s; the
+  same request ledger, validation and one attempt per request as the full Claude protocol.
+  Its analogue set is matched among the earlier sessions annotated under the same protocol
+  only, then smoothed like B (`nq_restricted_p1_v2`). So arm C needs its pool annotated:
+  with none it has no analogues and is the prior alone. The pool is cheapest through the
+  Batch API: `annotate-llm --restricted --start ... --end ... --batch`.
+- **Arm D, synthesis** (`nq_synthesis_p1_v3`, Appendix A, A2,
+  [prompt](../prompts/runtime/forecast_synthesis_v3.md) with every target's registered
+  rule): Claude forecasts each target from arm B's frozen evidence - the snapshot, the
+  rule-based annotation, the analogues with their eligible outcomes, the prior and the
+  smoothed baseline, each target's eligibility and the candidate levels - returning
+  probabilities, a class, evidence ids, a departure when it differs from the baseline, and
+  a confidence 1-5. Validated locally before anything is stored (exact decimals summing to
+  1, the class the single most probable, ineligible targets unavailable, evidence ids in the
+  bundle, the answer from the model itself); stored as a run on arm B's evidence ids, its
+  request in the ledger (`forecast_runs.request_id`, migration 0017), probabilities as exact
+  fractions with estimation status `judgement`. An invalid answer is an invalid run with
+  its raw text; issued evidence is never sent again.
+- **Token caps and cost (effort `xhigh`):** the thinking counts against `max_tokens` and is
+  billed. v1 capped arm C at 16,000 and its first request spent all of them thinking; both
+  arms now allow 64,000 and stream (the SDK sends nothing that long otherwise). The plan
+  estimates 24,000 output tokens per restricted annotation (its first answer, 2026-10-05,
+  used 23,239, 22,319 of them thinking) and 32,000 per synthesis - about $0.5 and $0.7 at
+  list prices - and gives the most a run can cost, every request at its cap.
+  A lower effort is a new protocol / algorithm version.
+- **The API's schema limits:** structured outputs compile at most 16 nullable or union-typed
+  parameters and 24 optional ones, and refuse a grammar that compiles too large (internal,
+  grows with the named properties and nesting); `tests/test_llm_arms.py` counts the unions of
+  every schema sent and keeps the synthesis schema flat (at most 16 properties). The
+  synthesis' one item per target and each class once are checked locally. The full nine-field
+  protocol `nq_structure_llm_v4` has 18 and would be refused - it needs a new version before
+  `annotate-llm` (without `--restricted`) can run.
+- **Blinding:** both arms' requests name no session date, weekday, contract or absolute
+  price - times on the New York clock, prices relative to the previous RTH close - so a
+  historical replay cannot draw on a remembered outcome; evidence ids are mapped back.
+- **Started by hand:** `python scripts/nq_journal.py llm-forecast --sessions N [--arms C|D|CD]`
+  shows the plan (per session what it needs, the requests, a rough cost, arm C's pool) and
+  sends after typing "send"; the dashboard's **Run LLM forecast** (sessions default 1,
+  today) shows the same plan and sends only after its confirmation, through a one-time
+  approval the job redeems ([forecaster/approvals.py](../forecaster/approvals.py)).
+- **Grading (dashboard):** for one session, each arm's current issued run against the
+  realised outcome - the probability given to the realised class per target, hits, and
+  the difference to arm A, as a radar and a scorecard ([forecaster/grading.py](../forecaster/grading.py));
+  a view of one session, hidden with the outcome, not a score.
 - **Manifest (4A):** `experiment-register` stores the manifest as a definition of kind
   `experiment` before any score exists - session range, profile, every version, the
   arms, the official-run rule (`first` issued run, `latest` at freezing, or
@@ -796,9 +874,8 @@ python scripts/nq_journal.py experiment-list
 - **Shadow operation:** the live job scheduled and run on trading days, then a
   prospective experiment (`--purpose test --official-run first_timely`) over sessions
   after it starts.
-- **Optional restricted LLM (sequence item 6):** a new protocol owning only
-  Overnight Structure and Premarket Pattern, with date-blinded requests; running
-  any Claude protocol needs `ANTHROPIC_API_KEY`.
+- **Experiments over arms C and D:** `experiment-register` still registers arms A and B; a
+  manifest with C and D (and a decision on how sessions without their runs count) is next.
 - **Forecast Confidence:** a registered evidence-quality convention (your decision).
 - **Review:** the review pages were removed (2026-10-04), so the guideline's human
   review (1E, 2A) has no form; the stored verdicts came from a form that preselected

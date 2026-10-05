@@ -28,6 +28,8 @@ call site - the units are part of each PropertySpec.
 
 from __future__ import annotations
 
+import hashlib
+import os
 from dataclasses import asdict, dataclass
 from datetime import time
 from typing import Any, Dict, List, Optional
@@ -38,6 +40,17 @@ from contracts import nq_prompt_v2 as defs
 FORECAST_SCHEMA_VERSION = "nq_forecast_schema_v1"
 BASELINE_VERSION = "nq_baseline_p1_v1"
 PRIOR_VERSION = "nq_prior_p1_v1"
+# v1 of both (registered 2026-10-05) never produced a run: arm C's annotation protocol v1 ran out of tokens, and
+# the synthesis v1's response schema had 29 nullable fields where the API allows 16 (a 400). v2: the restricted
+# protocol v2 for C; for D a schema without nullable fields ("" stands for none), 64,000 tokens, streamed - which
+# the API refused too: its compiled grammar was too large (seven differently shaped target objects, 33 named
+# probability fields). Synthesis v3 flattens it: a list of one item shape, probabilities a list of class/value pairs.
+RESTRICTED_VERSION = "nq_restricted_p1_v2"       # arm C: the baseline over the restricted Claude annotation
+SYNTHESIS_VERSION = "nq_synthesis_p1_v3"         # arm D: Claude's forecast synthesis (Appendix A, A2)
+SYNTHESIS_SCHEMA_VERSION = "nq_forecast_schema_v2"
+SYNTHESIS_MAX_TOKENS = 64000                     # thinking included; the request is streamed
+SYNTHESIS_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
+                                "forecast_synthesis_v3.md")
 # nq_issue_live_v1 (registered 2026-10-04) never issued a run; v2 adds the capture rules of 3D.
 ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v2"}
 LIVE_DEADLINE_ET = time(9, 29, 50)
@@ -48,6 +61,8 @@ LIVE_FRESHNESS_BUDGET_S = 20      # until the bar ending at the cutoff arrives, 
 LIFECYCLE_STATUSES = ("issued", "unavailable", "late", "failed", "invalid")
 PREDICTION_STATUSES = ("predicted", "ambiguous_prediction", "unavailable")
 ESTIMATION_STATUSES = ("analogues", "prior_only", "none")
+# nq_forecast_schema_v2 (arm D): a distribution the synthesis judged, not estimated from analogue counts
+ESTIMATION_STATUSES_V2 = ESTIMATION_STATUSES + ("judgement",)
 
 # P1 section 9's predicted properties, in its order, and the label target each one predicts.
 FORECAST_TARGETS: List[tuple] = [
@@ -211,7 +226,101 @@ PRIOR = {
     "confidence": BASELINE["confidence"],
     "first_level_precedence": list(defs.FIRST_LEVEL_PRECEDENCE),
 }
-ALGORITHMS = {BASELINE_VERSION: BASELINE, PRIOR_VERSION: PRIOR}
+RESTRICTED = {
+    **{k: v for k, v in BASELINE.items() if k != "inputs"},
+    "name": "arm C (guideline revision 2, 4B): the deterministic baseline over the restricted Claude annotation",
+    "inputs": f"an explicit snapshot, its {pre.RESTRICTED_PROTOCOL_VERSION} annotation (Claude owns Overnight "
+              f"Structure and Premarket Pattern, the rules the rest) and that annotation's analogue set, matched "
+              f"among the earlier sessions annotated under the same protocol",
+    "supersedes": "nq_restricted_p1_v1: the same over nq_structure_restricted_v1, which never produced an annotation",
+}
+# The deterministic algorithms (forecaster/forecast_baseline.py); arm D is the synthesis, below.
+ALGORITHMS = {BASELINE_VERSION: BASELINE, PRIOR_VERSION: PRIOR, RESTRICTED_VERSION: RESTRICTED}
+# What catch-up, the live capture and the preview issue from the rule-based annotation: arms A and B. Arms C and D
+# need Claude, so they are issued only by a run started by hand (forecaster/llm_arms.py).
+RULE_ALGORITHMS = (BASELINE_VERSION, PRIOR_VERSION)
+ARMS = {"A": PRIOR_VERSION, "B": BASELINE_VERSION, "C": RESTRICTED_VERSION, "D": SYNTHESIS_VERSION}
+ARM_NAMES = {"A": "prior", "B": "baseline", "C": "restricted LLM", "D": "synthesis"}
+# Earlier versions of an arm: their runs stay that arm's on the Forecast page.
+ARM_HISTORY = {"C": ("nq_restricted_p1_v1",), "D": ("nq_synthesis_p1_v1", "nq_synthesis_p1_v2")}
+
+
+def arm_of(algorithm: str) -> Optional[str]:
+    """The stage-4 arm letter of an algorithm version (current or earlier), None for another."""
+    return next((a for a, v in ARMS.items() if v == algorithm or algorithm in ARM_HISTORY.get(a, ())), None)
+
+
+SYNTHESIS_STATUSES = ("predicted", "tie", "unavailable")
+
+
+def synthesis_output_schema() -> Dict[str, Any]:
+    """
+    The forecast_response schema (Appendix A, A2) the synthesis must return (structured outputs), kept flat for the
+    API's grammar compiler: predictions a list of one item shape (each target once), probabilities a list of
+    class/value pairs, no nullable field - "" for no class, reason or departure, an empty list for no
+    probabilities. The vocabularies, one item per target and exact sums are checked locally (llm_arms).
+    """
+    item = {"type": "object", "additionalProperties": False,
+            "required": ["target", "status", "predicted_class", "probabilities", "reason", "supporting_evidence_ids",
+                         "conflicting_evidence_ids", "departure"],
+            "properties": {
+                "target": {"type": "string", "enum": [t for _, t in FORECAST_TARGETS]},
+                "status": {"type": "string", "enum": list(SYNTHESIS_STATUSES)},
+                "predicted_class": {"type": "string"},
+                "probabilities": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False, "required": ["class", "p"],
+                    "properties": {"class": {"type": "string"}, "p": {"type": "string"}}}},
+                "reason": {"type": "string"},
+                "supporting_evidence_ids": {"type": "array", "items": {"type": "string"}},
+                "conflicting_evidence_ids": {"type": "array", "items": {"type": "string"}},
+                "departure": {"type": "string"}}}
+    return {"type": "object", "additionalProperties": False,
+            "required": ["integrity_status", "predictions", "confidence", "confidence_basis"],
+            "properties": {
+                "integrity_status": {"type": "string", "enum": ["ok", "contaminated", "identity_unresolved"]},
+                "predictions": {"type": "array", "items": item},
+                "confidence": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
+                "confidence_basis": {"type": "string"}}}
+
+
+def synthesis_definition() -> Dict[str, Any]:
+    with open(SYNTHESIS_PROMPT, "rb") as f:
+        prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
+    return {
+        "name": "arm D (guideline revision 2, 4B): Claude's forecast synthesis (Appendix A, A2)",
+        "model": pre.LLM_MODEL, "effort": pre.LLM_EFFORT, "max_tokens": SYNTHESIS_MAX_TOKENS,
+        "prompt": {"path": "prompts/runtime/forecast_synthesis_v3.md", "sha256": prompt_sha256,
+                   "sources": ["A (A2)", f"{defs.LABEL_VERSION} target rules"]},
+        "output_schema": synthesis_output_schema(),
+        "inputs": f"arm B's explicit evidence: the snapshot, its {pre.RULES_PROTOCOL_VERSION} annotation and that "
+                  f"annotation's analogue set with the analogues' frozen outcome labels, the prior and the "
+                  f"smoothed baseline per target, each target's eligibility and vocabulary - date-blinded "
+                  f"({pre.BLINDING}); analogues are named analogue:<rank>",
+        "schema_version": SYNTHESIS_SCHEMA_VERSION,
+        "request": "streamed (thinking counts against max_tokens; the SDK streams a request this long)",
+        "shape": "predictions a list of one item per target; probabilities a list of class/value pairs - flat, so "
+                 "the API can compile the schema",
+        "none": "the schema has no nullable field: \"\" for no predicted_class, reason or departure, an empty "
+                "list for no probabilities",
+        "validation": "locally, before anything is stored: the answer against output_schema; the application's own "
+                      "integrity check decides contamination; every target exactly once, every class of its "
+                      "vocabulary exactly once; per target, predicted: a class and probabilities; "
+                      "tie: probabilities whose top is shared, no class, a reason; unavailable: neither, a reason; "
+                      "probabilities finite decimals in [0, 1] over exactly the target's classes, summing to "
+                      "exactly 1, the class the single most probable; a target the application finds ineligible "
+                      "is unavailable; every evidence id inside the bundle; a class other than the baseline's "
+                      "has a departure; confidence 1-5 with predictions; the answer from the model itself (a "
+                      "fallback model's answer is an invalid run, never this arm)",
+        "storage": "a forecast run of this algorithm on arm B's evidence ids, its request in the inference ledger "
+                   "(forecast_runs.request_id); probabilities stored as exact fractions, estimation status "
+                   "judgement, the denominators of the analogue set's summary; tie -> ambiguous_prediction; an "
+                   "invalid or failed answer is a run with that status and its raw text in the evidence",
+        "confidence": "P1 field 36: the synthesis' integer 1-5 for evidence and conviction (A2), not calibration",
+        "reference_targets": "the application's, from the frozen candidates (as the baseline), never the model's",
+        "issue": "only by a run started by hand; the same evidence is never sent twice once a run is issued",
+        "supersedes": "nq_synthesis_p1_v2: one object per target with named probability fields - the API refused "
+                      "its compiled grammar as too large; v1: 29 nullable fields and 20,000 tokens",
+    }
 
 ISSUE_POLICY_DEFINITIONS = {
     "historical_replay": {
@@ -266,12 +375,22 @@ def forecast_schema_record() -> Dict[str, Any]:
     })
 
 
+def forecast_schema_v2_record() -> Dict[str, Any]:
+    """Arm D's schema: v1 with the judgement estimation status and the synthesis' Forecast Confidence."""
+    record = forecast_schema_record()["definition"]
+    return defs._record(SYNTHESIS_SCHEMA_VERSION, "forecast_schema", {
+        **record, "estimation_statuses": list(ESTIMATION_STATUSES_V2),
+        "forecast_confidence": "an integer 1-5 from the synthesis (A2): evidence and conviction, not calibration",
+        "supersedes": f"{FORECAST_SCHEMA_VERSION} for synthesis runs; the deterministic arms keep it"})
+
+
 def baseline_record() -> Dict[str, Any]:
     return defs._record(BASELINE_VERSION, "forecast_algorithm", BASELINE)
 
 
 def algorithm_records() -> List[Dict[str, Any]]:
-    return [defs._record(v, "forecast_algorithm", d) for v, d in ALGORITHMS.items()]
+    return ([defs._record(v, "forecast_algorithm", d) for v, d in ALGORITHMS.items()]
+            + [defs._record(SYNTHESIS_VERSION, "forecast_algorithm", synthesis_definition())])
 
 
 def issue_policy_records() -> List[Dict[str, Any]]:
@@ -279,4 +398,4 @@ def issue_policy_records() -> List[Dict[str, Any]]:
 
 
 def all_records() -> List[Dict[str, Any]]:
-    return [forecast_schema_record()] + algorithm_records() + issue_policy_records()
+    return [forecast_schema_record(), forecast_schema_v2_record()] + algorithm_records() + issue_policy_records()

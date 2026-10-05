@@ -9,11 +9,22 @@ dashboard's database connection or its event loop:
                full collection
   forecaster   python -m collector.ib_collector --journal-only
                that journal step alone, no IB: the event calendar and earnings,
-               then snapshots, structure annotations and outcomes of the final
-               sessions, the analogue sets and the historical-replay forecasts
+               then the snapshot, annotation, analogue set and historical-replay
+               forecasts of every session past its cutoff, outcomes once final
+  preview      the collector, then python scripts/nq_journal.py preview
+               forecast now: the next session's forecast from the data stored so
+               far, any time from its Globex open - never stored in the journal
+               (forecaster/preview.py); the preview step runs even when the
+               collection failed, from the bars already stored
+  llm          python scripts/nq_journal.py llm-forecast --sessions N --approval T
+               arms C and D (Claude) over the last N sessions, after the
+               dashboard's confirmation issued the one-time approval T
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
+
+A job is one or more steps, each a process run in turn; Stop ends the running step
+and skips the rest.
 
 A job has no terminal (its stdin is empty), so nothing that asks a person - such as
 the confirmation the Claude API requests need (they are manual only) - can run here.
@@ -32,7 +43,7 @@ import signal
 import sys
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Deque, List, Optional, TextIO, Tuple
 
 from config import Config
@@ -57,17 +68,15 @@ def live_command() -> List[str]:
     return [sys.executable, os.path.join("scripts", "nq_journal.py"), "live"]
 
 
-def next_session(after: date) -> Optional[cal.Session]:
-    """The first scheduled session after the date ``after``; None past the calendar's coverage."""
-    d = after
-    while True:
-        d += timedelta(days=1)
-        try:
-            s = cal.session(d)
-        except cal.CalendarCoverageError:
-            return None
-        if s.is_open:
-            return s
+def preview_command() -> List[str]:
+    return [sys.executable, os.path.join("scripts", "nq_journal.py"), "preview"]
+
+
+def llm_command(sessions: int, arms: str, approval: Optional[str] = None) -> List[str]:
+    """Arms C and D over the last ``sessions`` sessions (forecaster/llm_arms.py); Claude requests need the
+    dashboard's one-time ``approval`` (forecaster/approvals.py) - without one only what needs no request runs."""
+    return ([sys.executable, os.path.join("scripts", "nq_journal.py"), "llm-forecast", "--sessions", str(int(sessions)),
+             "--arms", arms] + (["--approval", approval] if approval else []))
 
 
 def live_window(now: datetime) -> Tuple[bool, str]:
@@ -83,19 +92,25 @@ def live_window(now: datetime) -> Tuple[bool, str]:
         return False, str(e)
     if s.is_open and now < s.rth_open_at:
         return True, f"{today:%a %Y-%m-%d}: waits for the 09:29 ET cutoff, then issues by 09:29:50 ET"
-    nxt = next_session(today)
+    nxt = cal.next_session(today)
     when = f"next: {nxt.session_date:%a %Y-%m-%d} before 09:30 ET" if nxt else "no later session in the calendar"
     return False, ("today's session has opened" if s.is_open else f"no session on {today:%a %Y-%m-%d}") + f"; {when}"
 
 
 @dataclass
-class Job:
-    key: str                         # collector | forecaster | live
-    title: str
+class Step:
+    label: str                       # collector, preview, ...
     command: List[str]
+    returncode: Optional[int] = None
+
+
+@dataclass
+class Job:
+    key: str                         # collector | forecaster | preview | live
+    title: str
+    steps: List[Step]
     started_at: datetime
     finished_at: Optional[datetime] = None
-    returncode: Optional[int] = None
     stopped: bool = False            # stopped from the dashboard
     lines: Deque[str] = field(default_factory=lambda: deque(maxlen=MAX_LINES))
     line_count: int = 0              # every line read, so a page can ask for the ones it has not shown
@@ -105,12 +120,24 @@ class Job:
         return self.finished_at is None
 
     @property
+    def returncode(self) -> Optional[int]:
+        """The first step's that failed, else 0; None while running."""
+        if self.running:
+            return None
+        return next((s.returncode for s in self.steps if s.returncode), 0)
+
+    @property
     def outcome(self) -> str:
         if self.running:
             return "running"
         if self.stopped:
             return f"stopped (exit {self.returncode})"
-        return "finished" if self.returncode == 0 else f"failed (exit {self.returncode})"
+        failed = [s for s in self.steps if s.returncode]
+        if not failed:
+            return "finished"
+        if len(self.steps) == 1:
+            return f"failed (exit {failed[0].returncode})"
+        return "; ".join(f"{s.label} failed (exit {s.returncode})" for s in failed)
 
     def since(self, seen: int) -> List[str]:
         """The lines after the first ``seen``, as many of them as are still kept."""
@@ -132,23 +159,25 @@ class JobRunner:
     def busy(self) -> bool:
         return self.job is not None and self.job.running
 
-    def start(self, key: str, title: str, command: List[str]) -> Job:
-        """Starts ``command`` as the job, on the running event loop; raises RuntimeError while another runs."""
+    def start(self, key: str, title: str, steps: List[Tuple[str, List[str]]]) -> Job:
+        """Starts the job of ``steps`` - ``(label, command)`` pairs, run in turn - on the running event loop; raises
+        RuntimeError while another runs."""
         if self.busy:
             raise RuntimeError(f"{self.job.title} is still running")
-        self.job = Job(key, title, command, datetime.now(timezone.utc))
+        self.job = Job(key, title, [Step(label, command) for label, command in steps], datetime.now(timezone.utc))
         self._task = asyncio.get_running_loop().create_task(self._run(self.job))
         return self.job
 
     def stop(self) -> bool:
-        """Interrupts the running job as Ctrl-C would, so it closes its connections; killed if it has not exited
-        after STOP_GRACE_S. False when nothing is running."""
-        process = self._process
-        if not self.busy or process is None or process.returncode is not None:
+        """Interrupts the running step as Ctrl-C would, so it closes its connections (killed if it has not exited
+        after STOP_GRACE_S), and skips the steps after it. False when nothing is running."""
+        if not self.busy:
             return False
         self.job.stopped = True
-        process.send_signal(signal.SIGINT)
-        asyncio.get_running_loop().call_later(STOP_GRACE_S, self._kill, process)
+        process = self._process
+        if process is not None and process.returncode is None:
+            process.send_signal(signal.SIGINT)
+            asyncio.get_running_loop().call_later(STOP_GRACE_S, self._kill, process)
         return True
 
     @staticmethod
@@ -158,27 +187,38 @@ class JobRunner:
 
     async def _run(self, job: Job) -> None:
         self._open_log()
-        self._write(f"[{job.started_at:%Y-%m-%dT%H:%M:%SZ}] Dashboard: {job.title} started: "
-                    f"{' '.join(['python'] + job.command[1:])}")
+        self._write(f"[{job.started_at:%Y-%m-%dT%H:%M:%SZ}] Dashboard: {job.title} started.")
+        try:
+            for i, step in enumerate(job.steps, 1):
+                if job.stopped:
+                    break
+                if len(job.steps) > 1:
+                    self._add(job, f"Dashboard: step {i}/{len(job.steps)}, {step.label}")
+                self._write(f"[{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}] Dashboard: "
+                            f"{' '.join(['python'] + step.command[1:])}")
+                step.returncode = await self._run_step(job, step)
+        finally:
+            job.finished_at = datetime.now(timezone.utc)
+            self._write(f"[{job.finished_at:%Y-%m-%dT%H:%M:%SZ}] Dashboard: {job.title} {job.outcome}.")
+            self._close_log()
+
+    async def _run_step(self, job: Job, step: Step) -> int:
         try:
             self._process = await asyncio.create_subprocess_exec(
-                *job.command, cwd=self.cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                *step.command, cwd=self.cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"}, limit=1 << 20)
             async for raw in self._process.stdout:
                 self._add(job, raw.decode(errors="replace").rstrip())
-            job.returncode = await self._process.wait()
+            return await self._process.wait()
         except Exception as e:                        # not started, or its output could not be read
             self._add(job, f"Dashboard: {type(e).__name__}: {e}")
             if self._process is not None and self._process.returncode is None:
                 self._process.kill()
                 await self._process.wait()
-            job.returncode = self._process.returncode if self._process is not None else -1
+            return self._process.returncode if self._process is not None else -1
         finally:
             self._process = None
-            job.finished_at = datetime.now(timezone.utc)
-            self._write(f"[{job.finished_at:%Y-%m-%dT%H:%M:%SZ}] Dashboard: {job.title} {job.outcome}.")
-            self._close_log()
 
     def _add(self, job: Job, line: str) -> None:
         job.lines.append(line)

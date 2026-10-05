@@ -22,7 +22,7 @@ import pytest
 
 from contracts import nq_prompt_v2 as defs
 from features import calendar as cal
-from features.nq_evidence import aggregate, build_snapshot, dec, wilder_atr
+from features.nq_evidence import SnapshotError, aggregate, build_snapshot, dec, wilder_atr
 
 DSN = os.getenv("TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(
@@ -400,6 +400,52 @@ def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
 
 
 @needs_db
+def test_a_preview_forecasts_from_the_data_so_far_and_stores_nothing(market, tmp_path):
+    """Forecast now (forecaster/preview.py): the evidence as of the preview's minute, the same pipeline in memory,
+    nothing in the journal - and with the whole pre-open the official forecast."""
+    from database import journal_store as store
+    from forecaster import preview as pv
+    from forecaster.forecast_service import forecast_session
+    from contracts import nq_forecast as fc
+    from scripts.nq_journal import main
+    conn = market[0]
+    d = date.fromisoformat(DAY)
+    tables = ("snapshots", "structure_annotations", "analogue_sets", "forecast_runs", "forecast_predictions")
+    rows = lambda: [conn.execute(f"SELECT count(*) FROM journal.{t};").fetchone()[0] for t in tables]
+    before = rows()
+
+    early = pv.preview(conn, now=cal.ny_instant(d, time(7, 45, 30)))
+    assert early["status"] == "ok" and early["session_date"] == DAY and not early["complete"]
+    assert early["as_of"] == "2026-06-12 11:45:00" and early["data_through"] == "2026-06-12T11:45:00Z"
+    payload = early["snapshot"]["payload"]
+    assert payload["cutoff"]["preview"] is True and payload["cutoff"]["data_mode"] == "preview"
+    assert max(b[0] for b in payload["bars"]["1m"]) == "2026-06-12T11:44:00Z"         # nothing after the minute
+    assert payload["references"]["premarket_high"]["detail"].startswith("the premarket starts at 08:00 ET")
+    assert [r["algorithm_version"] for r in early["runs"]] == list(fc.RULE_ALGORITHMS)
+    assert all(r["lifecycle_status"] in ("preview", "unavailable") and r["run_id"] == "preview" for r in early["runs"])
+
+    whole = pv.preview(conn, now=cal.ny_instant(d, time(9, 30)))                      # the cutoff has passed
+    assert whole["complete"] and whole["as_of"] == "2026-06-12 13:29:00"
+    for run in whole["runs"]:
+        official = forecast_session(conn, DAY, algorithm=run["algorithm_version"])[0]
+        assert run["lifecycle_status"] == "preview" and official["lifecycle_status"] == "issued"
+        assert {t: (p["predicted_label"], p["distribution"]) for t, p in run["predictions"].items()} == \
+            {t: (p["predicted_label"], p["distribution"]) for t, p in official["predictions"].items()}
+    assert rows() == before                                                             # nothing stored
+
+    with pytest.raises(ValueError, match="never stored"):
+        store.save_snapshot(conn, build_snapshot(conn, DAY, as_of=cal.ny_instant(d, time(8, 0))))
+    with pytest.raises(SnapshotError, match="preview cutoff"):
+        build_snapshot(conn, DAY, as_of=cal.ny_instant(d, time(9, 45)))                # past the profile's cutoff
+
+    out = tmp_path / "preview.json"
+    assert pv.save(early, str(out)) == str(out) and pv.load(str(out)) == early
+    assert pv.load(str(tmp_path / "none.json")) is None
+    assert main(["--db", DSN, "preview", "--out", str(out)]) == 0 and pv.load(str(out))["kind"] == "forecast_preview"
+    assert rows() == before
+
+
+@needs_db
 def test_rules_annotations_are_stored_once(market):
     from contracts import nq_preopen as pre
     from database import journal_store as store
@@ -639,15 +685,30 @@ class _Message:
         self.model, self.stop_reason, self.usage, self.stop_details = model, stop_reason, _Usage(), None
 
 
+class _Stream:
+    """``client.beta.messages.stream(...)``: a context manager whose final message is ``message``."""
+    def __init__(self, message):
+        self.message = message
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self.message
+
+
 class _Client:
     def __init__(self, message):
         self.calls = []
         outer = self
 
         class _Messages:
-            def create(self, **kw):
+            def stream(self, **kw):
                 outer.calls.append(kw)
-                return message
+                return _Stream(message)
         self.beta = type("Beta", (), {"messages": _Messages()})()
 
 
@@ -780,6 +841,83 @@ def test_llm_requests_are_accounted_for_across_an_interrupted_run(market):
         assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
         with pytest.raises(psycopg.Error, match="append-only"):
             conn.execute("DELETE FROM journal.inference_requests;")
+
+
+class _ArmsClient:
+    """Claude for arms C and D: by the request's schema, a restricted annotation or a synthesis of its bundle."""
+    def __init__(self, synthesis=None):
+        from contracts import nq_preopen as pre
+        from tests.test_llm_arms import synthesis_answer
+        self.calls = []
+        outer = self
+
+        class _Messages:
+            def stream(self, **kw):
+                outer.calls.append(kw)
+                bundle = json.loads(kw["messages"][0]["content"].split("\n", 1)[1])
+                if "predictions" in kw["output_config"]["format"]["schema"]["properties"]:
+                    answer = (synthesis or synthesis_answer)(bundle)
+                else:
+                    bar = bundle["bars_5m"]["rows"][0][0]
+                    answer = {"integrity_status": "ok", "contradictions": [], "fields": {
+                        name: {"value": "Range", "status": "classified", "reason": None, "evidence_ids": [bar],
+                               "basis": "shape"} for name in pre.RESTRICTED_FIELDS}}
+                return _Stream(_Message(answer, pre.LLM_MODEL))
+        self.beta = type("Beta", (), {"messages": _Messages()})()
+
+
+@needs_db
+def test_arms_c_and_d_are_sent_by_hand_issued_and_never_sent_twice(market):
+    import re
+    from contracts import nq_forecast as fc
+    from contracts import nq_preopen as pre
+    from database import journal_store as store
+    from forecaster import llm_arms as la
+    from forecaster import structure_llm as llm
+    from tests.test_llm_arms import synthesis_answer
+    conn = market[0]
+    noon = cal.ny_instant(date.fromisoformat(DAY), time(12, 0))
+    plan = la.plan(conn, 2, now=noon)
+    assert [r["session_date"] for r in plan["sessions"]] == [PREV, DAY]
+    assert (plan["requests_c"], plan["requests_d"], plan["restricted_pool"]) == (2, 2, 0) and plan["usd"] > 0
+    client = _ArmsClient()
+    requests = lambda: conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
+    before = requests()
+    with pytest.raises(llm.ManualOnly):                                  # not started by hand: nothing sent
+        la.run(conn, client, 2, now=noon)
+    assert requests() == before and client.calls == []
+
+    with llm.manual_requests():
+        summary = la.run(conn, client, 2, now=noon)
+    assert summary["requests_sent"] == 4 and len(client.calls) == 4
+    for day in (PREV, DAY):
+        runs = {r["algorithm_version"]: store.get_forecast_run(conn, r["run_id"])
+                for r in store.list_forecast_runs(conn, day, day)}
+        c, d = runs[fc.RESTRICTED_VERSION], runs[fc.SYNTHESIS_VERSION]
+        assert c["lifecycle_status"] == "issued" and c["evidence"]["protocol_version"] == pre.RESTRICTED_PROTOCOL_VERSION
+        assert d["lifecycle_status"] == "issued" and d["schema_version"] == fc.SYNTHESIS_SCHEMA_VERSION
+        assert d["request_id"] and d["outputs"]["confidence"] == 2 and d["annotation_id"] == runs[
+            fc.BASELINE_VERSION]["annotation_id"]                       # arm B's evidence
+        assert {p["estimation_status"] for p in d["predictions"].values()} <= {"judgement", "none"}
+    day_c = store.get_forecast_run(conn, [r["run_id"] for r in store.list_forecast_runs(conn, DAY, DAY)
+                                          if r["algorithm_version"] == fc.RESTRICTED_VERSION][0])
+    assert day_c["evidence"]["pool_size"] == 1                          # C's pool: PREV, annotated the same way
+    assert store.unresolved_inference_requests(conn, fc.SYNTHESIS_VERSION) == []
+    assert store.unresolved_inference_requests(conn, pre.RESTRICTED_PROTOCOL_VERSION) == []
+    assert not any(re.search(r"\d{4}-\d{2}-\d{2}", c["messages"][0]["content"]) for c in client.calls)
+
+    assert la.plan(conn, 2, now=noon)["requests"] == 0                  # everything answered: nothing to send
+    with llm.manual_requests():
+        assert la.run(conn, client, 2, now=noon)["requests_sent"] == 0
+    assert len(client.calls) == 4
+
+    # an invalid synthesis is kept as an invalid run with its raw text; a retry can still issue
+    with llm.manual_requests():
+        bad = la.synthesize(conn, _ArmsClient(lambda b: synthesis_answer(b, top_share="0.85")), "2026-06-10")
+        assert bad["run"]["lifecycle_status"] == "invalid" and "sum to" in bad["run"]["failure_reason"]
+        assert bad["run"]["evidence"]["attempt"]["raw_text"]
+        assert la.synthesize(conn, client, "2026-06-10")["run"]["lifecycle_status"] == "issued"
+        assert la.synthesize(conn, client, "2026-06-10")["status"] == "stored"
 
 
 @needs_db

@@ -1,8 +1,8 @@
 # dashboard/components/pipeline.py
 """
 The header's "Update data" control: starts the pipeline's jobs (dashboard/jobs.py)
-- the collector, the forecaster and the live pre-open capture - and shows the one
-running, or the last, with its output.
+- the collector, the forecaster, forecast now (a preview) and the live pre-open
+capture - and shows the one running, or the last, with its output.
 
 Each page has its own copy, which polls the dashboard's one job every second. When
 a job ends, every page that saw it running reloads what it shows from the database
@@ -14,18 +14,34 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
 
-from nicegui import ui
+from nicegui import run, ui
 
 from config import Config
-from dashboard.jobs import RUNNER, Job, collector_command, forecaster_command, live_command, live_window
+from contracts import nq_preopen as pre
+from contracts import nq_prompt_v2 as defs
+from dashboard.jobs import (RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
+                            llm_command, preview_command)
 from features import calendar as cal
+from forecaster.preview import PreviewUnavailable, preview_target
 
 _MUTED = "color:#787b86"
 _PANEL = "#1c212e"
 _LOG_LINES = 1000         # lines the page's log holds; logs/pipeline_run.log has every line
 _OUTCOME_COLOR = {"running": "#2962ff", "finished": "#26a69a"}
 
-COLLECTOR, FORECASTER, LIVE = "Collector", "Forecaster", "Live pre-open forecast"
+COLLECTOR, FORECASTER, PREVIEW, LIVE, LLM = ("Collector", "Forecaster", "Forecast now", "Live pre-open forecast",
+                                             "LLM forecast")
+
+
+def preview_note(now: datetime) -> tuple:
+    """``(possible, text)``: what Forecast now would forecast at ``now``, or why it cannot."""
+    try:
+        session, as_of = preview_target(now)
+    except PreviewUnavailable as e:
+        return False, str(e)
+    complete = as_of == session.cutoff_at
+    return True, (f"now: {session.session_date:%a %Y-%m-%d} as of {as_of.astimezone(cal.NY_TZ):%H:%M} ET"
+                  + (" - the whole pre-open" if complete else " - the pre-open so far"))
 
 
 def _elapsed(job: Job) -> str:
@@ -38,11 +54,14 @@ def _et(at: datetime) -> str:
 
 
 class PipelinePanel:
-    def __init__(self) -> None:
+    def __init__(self, conn=None) -> None:
+        self.conn = conn                                 # for the LLM forecast's plan, before anything is sent
         self.on_update: List[Callable[[], Any]] = []     # called when a job this page saw running has ended
         self.job: Optional[Job] = None                   # the job the log shows
         self.seen = 0                                    # its lines already pushed to the log
         self.watching = False                            # it was running while this page was open
+        self.preview_possible = False                    # Forecast now has a session to forecast
+        self.preview_why = ""                            # which, or why not
 
     # -- layout ---------------------------------------------------------------
 
@@ -74,6 +93,30 @@ class PipelinePanel:
                          "forecasts (historical replay), each stored once; outcomes once a session is final, two "
                          "hours after its close. No Claude requests: those are started by hand only."
                          ).classes("text-sm").style(_MUTED)
+                self.preview_button = ui.button("Forecast now", icon="bolt", on_click=self.forecast_now).props(
+                    "no-caps")
+                with ui.column().classes("gap-0"):
+                    with ui.row().classes("items-baseline gap-2"):
+                        ui.label("The next session's forecast from the data so far, at any time from its Globex open "
+                                 "(18:00 ET the evening before): collects the latest bars, then forecasts in memory - "
+                                 "a preview, never stored; the official forecast comes from the 09:31 ET snapshot."
+                                 ).classes("text-sm").style(_MUTED)
+                        ui.link("Show the preview", "/forecast?view=preview").classes("text-sm")
+                    self.preview_note = ui.label().classes("text-xs")
+                self.llm_button = ui.button("Run LLM forecast", icon="psychology", on_click=self.llm_forecast).props(
+                    "no-caps")
+                with ui.row().classes("w-full items-center gap-4 no-wrap"):
+                    ui.label("Arms C (restricted LLM: Claude reads the overnight and premarket structure, matched "
+                             "and smoothed like B) and D (synthesis: Claude forecasts from arm B's evidence) for the "
+                             "last sessions up to today, date-blinded. Claude requests: you see what would be sent "
+                             "and its rough cost, and confirm, before anything is sent.").classes(
+                        "text-sm grow").style(_MUTED)
+                    with ui.column().classes("gap-0 shrink-0"):
+                        self.llm_sessions = ui.number("Sessions", value=1, min=1, max=300, step=1, format="%d").props(
+                            "dense").classes("w-20")
+                        with ui.row().classes("gap-0 no-wrap"):
+                            self.llm_c = ui.checkbox("C", value=True).props("dense")
+                            self.llm_d = ui.checkbox("D", value=True).props("dense")
                 self.live_button = ui.button("Live forecast", icon="schedule", on_click=self.live).props("no-caps")
                 with ui.column().classes("gap-0"):
                     ui.label("Captures today's NQ session live at the 09:29 ET cutoff and issues its forecasts, due "
@@ -94,26 +137,98 @@ class PipelinePanel:
 
     # -- actions ----------------------------------------------------------------
 
-    def _start(self, key: str, title: str, command: List[str]) -> None:
+    def _start(self, key: str, title: str, steps: List[tuple]) -> None:
         try:
-            self._follow(RUNNER.start(key, title, command))
+            self._follow(RUNNER.start(key, title, steps))
         except RuntimeError as e:
             ui.notify(str(e), type="warning")
         self._render()
 
+    def _days(self) -> int:
+        return int(self.days.value or 5)
+
     def collect(self) -> None:
-        days = int(self.days.value or 5)
-        self._start("collector", COLLECTOR, collector_command(days))
+        self._start("collector", COLLECTOR, [("collector", collector_command(self._days()))])
 
     def forecast(self) -> None:
-        self._start("forecaster", FORECASTER, forecaster_command())
+        self._start("forecaster", FORECASTER, [("forecaster", forecaster_command())])
+
+    def forecast_now(self) -> None:
+        """The dedicated forecast-now job: the latest bars, then the preview (also the Forecast page's button)."""
+        possible, why = preview_note(datetime.now(timezone.utc))
+        if not possible:
+            ui.notify(f"Nothing to forecast now: {why}", type="warning", multi_line=True)
+            return
+        self._start("preview", PREVIEW, [("collector", collector_command(self._days())), ("preview", preview_command())])
+
+    async def llm_forecast(self) -> None:
+        """The plan of arms C and D over the chosen sessions, then the confirmation; only its Send button issues
+        the one-time approval the job needs to send Claude requests (forecaster/approvals.py)."""
+        from forecaster import approvals
+        from forecaster import llm_arms as la
+        arms = "".join(a for a, box in (("C", self.llm_c), ("D", self.llm_d)) if box.value)
+        if not arms:
+            ui.notify("Choose arm C, arm D or both.", type="warning")
+            return
+        if self.conn is None:
+            ui.notify("No database connection on this page.", type="warning")
+            return
+        sessions = max(1, int(self.llm_sessions.value or 1))
+        self.llm_button.props("loading")
+        try:
+            plan = await run.io_bound(la.plan, self.conn, sessions, tuple(arms))
+        except Exception as e:
+            ui.notify(f"Could not plan the LLM forecast: {e}", type="negative")
+            return
+        finally:
+            self.llm_button.props(remove="loading")
+
+        def start(approval=None):
+            confirm.close()
+            self._start("llm", LLM, [("llm-forecast", llm_command(sessions, arms, approval))])
+
+        def send():
+            token = approvals.issue({"command": "llm-forecast", "sessions": sessions, "arms": arms,
+                                     "profile": defs.DEFAULT_PROFILE, "max_requests": plan["requests"]})
+            start(token)
+
+        with ui.dialog() as confirm, ui.card().classes("w-[44rem] max-w-full gap-2").style(f"background:{_PANEL}"):
+            n = plan["requests"]
+            ui.label("Send Claude requests?" if n else "Nothing to send").classes("text-lg font-medium")
+            with ui.grid(columns="8rem" + " minmax(0,1fr)" * len(arms)).classes("w-full gap-x-3 gap-y-0"):
+                ui.label("session").classes("text-xs").style(_MUTED)
+                for a in arms:
+                    ui.label(f"arm {a}").classes("text-xs").style(_MUTED)
+                for row in plan["sessions"]:
+                    ui.label(row["session_date"]).classes("text-sm")
+                    for a in arms:
+                        text = row.get(a) or f"skipped - {row.get('skip')}"
+                        ui.label(text).classes("text-sm break-words").style(
+                            "color:#ffa726" if text == "request" else _MUTED)
+            ui.label(f"{n} request(s) to {plan['model']} (effort {plan['effort']}): {plan['requests_c']} restricted "
+                     f"annotation(s), {plan['requests_d']} synthesis(es) - roughly ${plan['usd']} at list prices, "
+                     f"at most ${plan['usd_max']} if every request used its whole token cap (effort xhigh thinks "
+                     f"at length, and the thinking is billed).").classes("text-sm")
+            if "C" in arms:
+                ui.label(f"Arm C's pool: {plan['restricted_pool']} session(s) annotated by "
+                         f"{pre.RESTRICTED_PROTOCOL_VERSION}. Its analogues come only from those; with few, arm C "
+                         f"is close to the prior. The pool is cheapest at half price through the Batch API, from a "
+                         f"terminal: python scripts/nq_journal.py annotate-llm --restricted --start ... --end ... "
+                         f"--batch").classes("text-xs").style(_MUTED)
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=confirm.close).props("flat no-caps")
+                if n:
+                    ui.button(f"Send {n} request(s)", icon="send", on_click=send).props("no-caps color=warning")
+                elif "C" in arms:
+                    ui.button("Issue arm C runs from stored annotations", on_click=lambda: start()).props("no-caps")
+        confirm.open()
 
     def live(self) -> None:
         allowed, why = live_window(datetime.now(timezone.utc))
         if not allowed:
             ui.notify(f"The live forecast cannot start now: {why}.", type="warning")
             return
-        self._start("live", LIVE, live_command())
+        self._start("live", LIVE, [("live", live_command())])
 
     def stop(self) -> None:
         if RUNNER.stop():
@@ -151,10 +266,19 @@ class PipelinePanel:
 
     def _render(self) -> None:
         job, busy = self.job, RUNNER.busy
-        allowed, why = live_window(datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        allowed, why = live_window(now)
+        self.preview_possible, preview_why = preview_note(now)
+        self.preview_why = preview_why
         self.collect_button.set_enabled(not busy)
         self.forecast_button.set_enabled(not busy)
+        self.llm_button.set_enabled(not busy)
+        self.preview_button.set_enabled(not busy and self.preview_possible)
         self.live_button.set_enabled(not busy and allowed)
+        note = ("Possible " if self.preview_possible else "Not possible now: ") + preview_why
+        if note != self.preview_note.text:
+            self.preview_note.set_text(note)
+            self.preview_note.style(f"color:{'#26a69a' if self.preview_possible else '#787b86'}")
         note = ("Available now - " if allowed else "Not available: ") + why
         if note != self.live_note.text:
             self.live_note.set_text(note)

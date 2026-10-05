@@ -97,6 +97,63 @@
       "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
       "bytes": 9693,
       "provenance": "The same file as nq_structure_llm_v2 and v3; nq_structure_llm_v4 records the same hash, so an edit needs a new protocol version."
+    },
+    {
+      "id": "nq_structure_restricted_v1",
+      "path": "prompts/runtime/structure_annotation_restricted_v1.md",
+      "title": "Structure annotation, restricted (arm C) - runtime prompt",
+      "derived_from": [
+        "A (A1, verbatim)",
+        "P1 section 4, Overnight Structure and Premarket Pattern (verbatim)"
+      ],
+      "sha256": "dc963f5ed840d9b4d638ef1173f0ddff2922134a1a53d265ed7ff83e35f817c9",
+      "bytes": 8114,
+      "provenance": "Generated 2026-10-05 for arm C (guideline revision 2, sequence item 6); nq_structure_restricted_v1 records its hash, so an edit needs a new protocol version."
+    },
+    {
+      "id": "nq_synthesis_p1_v1",
+      "path": "prompts/runtime/forecast_synthesis_v1.md",
+      "title": "Forecast synthesis (arm D) - runtime prompt",
+      "derived_from": [
+        "A (A2, verbatim)",
+        "nq_prompt_v2_1_impl5 target rules (generated from contracts/nq_prompt_v2.TARGETS)"
+      ],
+      "sha256": "56ba2da7ee8d31ccf1e33f6dc9a4ff959ad63d3531017ca9237b2a296c316776",
+      "bytes": 9670,
+      "provenance": "Generated 2026-10-05 for arm D (guideline revision 2, 4B); nq_synthesis_p1_v1 records its hash, so an edit needs a new algorithm version."
+    },
+    {
+      "id": "nq_structure_restricted_v2",
+      "path": "prompts/runtime/structure_annotation_restricted_v1.md",
+      "title": "Structure annotation, restricted (arm C) - runtime prompt",
+      "derived_from": [
+        "nq_structure_restricted_v1's prompt, unchanged (v2 raises max_tokens to 64,000 and streams)"
+      ],
+      "sha256": "dc963f5ed840d9b4d638ef1173f0ddff2922134a1a53d265ed7ff83e35f817c9",
+      "bytes": 8114,
+      "provenance": "The same file as nq_structure_restricted_v1; nq_structure_restricted_v2 records the same hash."
+    },
+    {
+      "id": "nq_synthesis_p1_v2",
+      "path": "prompts/runtime/forecast_synthesis_v2.md",
+      "title": "Forecast synthesis (arm D) - runtime prompt",
+      "derived_from": [
+        "nq_synthesis_p1_v1's prompt with empty strings for none (the v2 schema has no nullable field)"
+      ],
+      "sha256": "0b02d6315507382b1ca5e9d9a8611846058a7249dd3ad8c2e0b4d6857dba9059",
+      "bytes": 9753,
+      "provenance": "Generated 2026-10-05 from forecast_synthesis_v1.md; nq_synthesis_p1_v2 records its hash, so an edit needs a new algorithm version."
+    },
+    {
+      "id": "nq_synthesis_p1_v3",
+      "path": "prompts/runtime/forecast_synthesis_v3.md",
+      "title": "Forecast synthesis (arm D) - runtime prompt",
+      "derived_from": [
+        "nq_synthesis_p1_v2's prompt with the flat output shape (a list of predictions, probability pairs)"
+      ],
+      "sha256": "39a1e24bd45c0273937717b744a4df5e9b33321c7d3930cc4e05337269a93c08",
+      "bytes": 9938,
+      "provenance": "Generated 2026-10-05 from forecast_synthesis_v2.md; nq_synthesis_p1_v3 records its hash, so an edit needs a new algorithm version."
     }
   ]
 }

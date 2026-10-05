@@ -41,6 +41,7 @@ def _basis(target: str, p: Dict[str, Any], algorithm: str) -> str:
     source = ("the earlier-session prior alone" if algorithm == fc.PRIOR_VERSION else
               {"analogues": f"{p['eligible']} analogue label(s) ({p['without_label']} without)",
                "prior_only": f"no analogue label ({p['without_label']} without): the prior only",
+               "judgement": f"the synthesis' judgement from arm B's evidence ({p['eligible']} analogue label(s))",
                "none": "no estimate"}[p["estimation_status"]])
     share = f"; p = {percent(p['distribution'][p['predicted_label']])}" if p["status"] == "predicted" else ""
     return (f"{algorithm}: {source}, prior {p['prior_sessions']} session(s) "
@@ -48,8 +49,9 @@ def _basis(target: str, p: Dict[str, Any], algorithm: str) -> str:
 
 
 def forecast_rows(run: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
-    """P1 fields 25-36 and 42-45 of a stored run as (value, basis)."""
-    if run["lifecycle_status"] != "issued":
+    """P1 fields 25-36 and 42-45 of a stored run - or a preview's run-shaped record (forecaster/preview.py) - as
+    (value, basis)."""
+    if run["lifecycle_status"] not in ("issued", "preview"):
         why = f"run {run['run_id'][:8]} {run['lifecycle_status']}: {run['failure_reason']}"
         return {prop: (UNAVAILABLE, why) for prop in FORECAST_PROPERTIES}
     preds, outputs = run["predictions"], run["outputs"]
@@ -70,7 +72,10 @@ def forecast_rows(run: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
     price = outputs.get("first_level_price")
     out["Expected First Level Price"] = ((_price(price), "the predicted level's frozen price")
                                          if price is not None else out["Expected First Level Tested"])
-    out["Forecast Confidence"] = (UNAVAILABLE, outputs.get("forecast_confidence_reason") or "not produced")
+    confidence = outputs.get("confidence")
+    out["Forecast Confidence"] = (
+        (f"{confidence} of 5", f"{outputs.get('forecast_confidence_reason')}: {outputs.get('confidence_basis')}")
+        if confidence is not None else (UNAVAILABLE, outputs.get("forecast_confidence_reason") or "not produced"))
     targets = outputs.get("reference_targets") or {}
     for name, (side, rank) in fc.REFERENCE_TARGETS.items():
         levels = targets.get(side) or []

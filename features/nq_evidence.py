@@ -391,10 +391,15 @@ def _overnight(bars: Sequence[Bar], session: cal.Session, cutoff: datetime) -> D
         refs["cutoff_price"] = _ref(None, "missing", "no bar in the overnight window")
     refs["price_at_0929"] = _ref(None, "not_observed",
                                  "the cutoff precedes 09:29:59; the 09:29 minute is not observed")
-    # premarket (nq_conv_v4): [08:00 ET, cutoff); every minute (nq_conv_v5)
+    # premarket (nq_conv_v4): [08:00 ET, cutoff); every minute (nq_conv_v5). Only a preview's earlier cutoff can
+    # come before it has started.
     pm_start = cal.ny_instant(session.session_date, defs.PREMARKET_START)
-    refs.update(_window_extremes([b for b in bars if b[0] >= pm_start], _minutes(pm_start, cutoff), "premarket",
-                                 "premarket_high", "premarket_low"))
+    if cutoff <= pm_start:
+        why = f"the premarket starts at {defs.PREMARKET_START:%H:%M} ET, after the cutoff"
+        refs.update(premarket_high=_ref(None, "missing", why), premarket_low=_ref(None, "missing", why))
+    else:
+        refs.update(_window_extremes([b for b in bars if b[0] >= pm_start], _minutes(pm_start, cutoff), "premarket",
+                                     "premarket_high", "premarket_low"))
     refs["vwap"] = _vwap(bars, complete)
     refs["_coverage"] = {"expected_minutes": expected, "minutes": unique, "ratio": coverage.quantize(
         Decimal("0.0001")), "complete": complete, "duplicates": len(bars) - unique}
@@ -570,9 +575,13 @@ def _availability(conn, capture_id: str, cid: int, session: cal.Session, cutoff:
 
 
 def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symbol: str = defs.SYMBOL,
-                   live_capture_id: Optional[str] = None) -> Snapshot:
-    """Freezes ``symbol``'s evidence for ``session_date`` at ``profile``'s cutoff (see the module docstring); with
-    ``live_capture_id`` a live capture, its point-in-time evidence in the cutoff section."""
+                   live_capture_id: Optional[str] = None, as_of: Optional[datetime] = None) -> Snapshot:
+    """
+    Freezes ``symbol``'s evidence for ``session_date`` at ``profile``'s cutoff (see the module docstring); with
+    ``live_capture_id`` a live capture, its point-in-time evidence in the cutoff section. ``as_of`` is a preview's
+    earlier cutoff (forecaster/preview.py): the evidence as it stood at that minute, marked ``preview`` in the
+    cutoff section - the journal refuses to store it.
+    """
     p = defs.PROFILES[profile]
     try:
         session = cal.session(session_date)
@@ -582,6 +591,12 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         raise SnapshotError(f"{session.session_date} is not a scheduled session")
     day = session.session_date.isoformat()
     cutoff = cal.ny_instant(session.session_date, p.cutoff)
+    if as_of is not None:
+        as_of = as_of.astimezone(timezone.utc).replace(second=0, microsecond=0)
+        if not session.overnight_start_at < as_of <= cutoff:
+            raise SnapshotError(f"a preview cutoff must fall after {day}'s overnight start and by its "
+                                f"{p.cutoff:%H:%M} ET cutoff, not {as_of.astimezone(cal.NY_TZ):%Y-%m-%d %H:%M} ET")
+        cutoff = as_of
 
     with conn:
         conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;")
@@ -610,7 +625,7 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
     moving = _moving_averages(buckets[2], session, cutoff)
     t, b = defs.threshold_t(two_minute.get("exact")), defs.threshold_b(daily.get("exact"))
     last = overnight[-1][0] if overnight else None
-    data_mode, pit = "historical_reconstruction", "unverified_historical"
+    data_mode, pit = ("preview" if as_of is not None else "historical_reconstruction"), "unverified_historical"
     if availability is not None:
         data_mode, pit = "live_capture", "verified" if availability["verified"] else "unverified_historical"
 
@@ -621,7 +636,8 @@ def build_snapshot(conn, session_date, profile: str = defs.DEFAULT_PROFILE, symb
         "schedule": {"calendar_version": cal.CALENDAR_VERSION, "schedule": session.schedule,
                      "rth_open_at": iso(session.rth_open_at), "scheduled_close_at": iso(session.scheduled_close_at),
                      "overnight_start_at": iso(session.overnight_start_at)},
-        "cutoff": {"profile": p.name, "cutoff_et": p.cutoff.strftime("%H:%M"), "input_cutoff_at": iso(cutoff),
+        "cutoff": {"profile": p.name, "cutoff_et": cutoff.astimezone(cal.NY_TZ).strftime("%H:%M"),
+                   "input_cutoff_at": iso(cutoff), **({"preview": True} if as_of is not None else {}),
                    "last_completed_bar": None if last is None else
                    {"bar_start_at": iso(last), "bar_end_at": iso(last + MINUTE)},
                    "last_received_bar": None if availability is None else availability["last_received_bar"],

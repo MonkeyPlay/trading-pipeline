@@ -20,13 +20,22 @@ status, so a superseded or late run stays visible.
                  latest outcome revision, beside the run's classes - a view, not a
                  score (stage 4 scores registered runs)
 
-After the forecaster runs from the header, the sessions and runs are read again
+Beside the stored runs, the Forecast now tab (``/forecast?view=preview``) shows the
+latest preview (forecaster/preview.py): the next session's forecast from the data so
+far, made by its own button at any time from the session's Globex open - the latest
+bars collected, then the evidence as of now, its rule-based annotation, analogues and
+both arms, all in memory and never stored. The same chart, per-target view and P1
+record as a stored run, with what is not known yet shown as unavailable.
+
+After a job runs from the header, the sessions, runs and preview are read again
 (``ForecastPage.reload``): the run shown stays shown - a run never changes once
-stored - unless it was of the newest session and a newer session now has runs.
+stored - unless it was of the newest session and a newer session now has runs; a
+Forecast now job switches to its tab.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from nicegui import ui
@@ -35,8 +44,12 @@ from contracts import nq_forecast as fc
 from contracts import nq_prompt_v2 as defs
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import frozen_preopen_spec
+from dashboard.jobs import RUNNER
 from database import journal_store as store
+from features import calendar as cal
+from forecaster import preview as pv
 from forecaster.forecast_display import target_rows
+from forecaster.grading import BENCHMARK, current_runs, grade
 from forecaster.outcome_display import p2_record
 from forecaster.preopen_display import p1_record
 
@@ -45,15 +58,69 @@ _CELL = "px-2 py-1 text-xs"
 _STATUS_COLOR = {"issued": "#26a69a", "unavailable": "#787b86", "late": "#ffa726", "failed": "#ef5350",
                  "invalid": "#ef5350"}
 _FORECAST_FIELDS = set(range(25, 37)) | set(range(42, 46))
+_ARMS = {v: f"{fc.ARM_NAMES[a]} (arm {a})" for a, v in fc.ARMS.items()}
+# The arms on the grading radar: A, the benchmark, a dashed neutral grey; B-D the first three categorical slots of
+# the dark palette (validated all-pairs against #1c212e and #131722: CVD dE 9.4, normal-vision dE 20.9, >= 3:1).
+_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "C": "#d95926", "D": "#199e70"}
+_SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
+          "direction_15m": "15-min direction", "session_type_rth": "Session type", "close_direction_rth": "RTH close",
+          "first_level_tested": "First level"}
+_EMPTY_SPEC = {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []}
+
+
+def _et(value: str, fmt: str = "%H:%M") -> str:
+    """A journal timestamp ('YYYY-MM-DD HH:MM:SS' or ISO, UTC) in New York time."""
+    t = datetime.fromisoformat(str(value).replace("Z", "").replace(" ", "T")).replace(tzinfo=timezone.utc)
+    return f"{t.astimezone(cal.NY_TZ):{fmt}} ET"
+
+
+def _targets_grid(run: Dict[str, Any], title: str) -> None:
+    """A run's per-target view where it is called: class, distribution and denominators."""
+    ui.label(title).classes("text-sm font-medium")
+    rows = target_rows(run)
+    if not rows:
+        ui.label(f"No predictions: {run['failure_reason']}").classes("text-xs").style(_MUTED)
+        return
+    with ui.grid(columns="minmax(0,1.1fr) minmax(0,0.9fr) minmax(0,1.6fr) minmax(0,0.9fr)").classes(
+            "w-full gap-x-2 gap-y-1"):
+        for head in ("P1 property", "class", "distribution", "n / prior"):
+            ui.label(head).classes(_CELL).style(_MUTED)
+        for r in rows:
+            ui.label(r["property"]).classes(_CELL).style(_MUTED)
+            ui.label(r["class"] if r["status"] == "predicted" else f"{r['class']} - {r['reason']}").classes(
+                _CELL + " break-words")
+            ui.label(", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-").classes(
+                _CELL + " break-words")
+            ui.label(f"{r['eligible']} (+{r['without_label']}) / {r['prior_sessions']} "
+                     f"(+{r['prior_without_label']})").classes(_CELL)
+    ui.label("n: analogues with a label (+ without); prior: earlier sessions with a label (+ without). "
+             "Estimates are conditional on classifiable outcomes.").classes("text-[10px]").style(_MUTED)
+
+
+def _record_grid(snapshot, annotation, aset, run) -> None:
+    """P1's 47-field record where it is called, the forecast's fields shaded."""
+    provenance, rows = p1_record(snapshot, annotation, aset, run)
+    ui.label(provenance).classes("text-xs").style(_MUTED)
+    with ui.grid(columns="2.5rem minmax(0,1fr) minmax(0,1fr) minmax(0,2fr)").classes("w-full gap-x-2 gap-y-0"):
+        for i, (prop, value, basis) in enumerate(rows, 1):
+            style = "background:rgba(41,98,255,0.10)" if i in _FORECAST_FIELDS else ""
+            ui.label(str(i)).classes(_CELL).style(_MUTED + ";" + style)
+            ui.label(prop).classes(_CELL).style(_MUTED + ";" + style)
+            ui.label(value).classes(_CELL + " break-words").style(style)
+            ui.label(basis).classes(_CELL + " break-words text-[10px]").style(_MUTED + ";" + style)
 
 
 class ForecastPage:
-    def __init__(self, conn, run_id: Optional[str] = None) -> None:
+    def __init__(self, conn, run_id: Optional[str] = None, view: Optional[str] = None, panel=None) -> None:
         self.conn = conn
         self._load_runs()
         self.requested = store.get_forecast_run(conn, run_id) if run_id else None
         self.run: Optional[Dict[str, Any]] = None
         self.outcome_shown = False
+        self.view = "preview" if view == "preview" else "stored"
+        self.arm: Optional[str] = None           # the arm shown for the selected session
+        self.panel = panel                       # the header's job control: its Forecast now starts the preview
+        self.preview: Optional[Dict[str, Any]] = None
 
     def _load_runs(self) -> None:
         self.runs = store.list_forecast_runs(self.conn, "2000-01-01", "2100-01-01", profile=defs.DEFAULT_PROFILE)
@@ -63,9 +130,17 @@ class ForecastPage:
         self.days = sorted(self.by_day, reverse=True)
 
     def reload(self) -> None:
-        """The stored runs read again (see the module docstring)."""
-        if not self.days:                                  # built without runs: build it again
-            ui.navigate.reload()
+        """The stored runs and the preview read again (see the module docstring)."""
+        self.preview = pv.load()
+        self._render_preview()
+        if RUNNER.job is not None and RUNNER.job.key == "preview":
+            self.tabs.set_value("preview")
+        elif RUNNER.job is not None and RUNNER.job.key == "llm":
+            self.tabs.set_value("stored")
+        if not self.days:                                  # built without runs: build it again once there are
+            self._load_runs()
+            if self.days:
+                ui.navigate.to(f"/forecast?view={self.tabs.value}")
             return
         day, run_id = self.day_select.value, self.run_select.value
         newest = day == self.days[0]
@@ -80,51 +155,103 @@ class ForecastPage:
 
     def build(self) -> None:
         with ui.column().classes("w-full p-4 gap-3"):
-            ui.label("Forecast").classes("text-2xl font-medium")
-            if not self.days:
-                ui.label("No forecast runs yet. The forecaster issues them (Update data, above - the collector "
-                         "runs it too), or: python scripts/nq_journal.py forecast --start 2025-09-01 --end "
-                         "2026-10-02").style(_MUTED)
-                return
-            ui.label(f"Deterministic forecasts from the run's frozen evidence: the baseline ({fc.BASELINE_VERSION}, "
-                     f"stage 4 arm B) smooths the selected analogues with the earlier sessions; the prior "
-                     f"({fc.PRIOR_VERSION}, arm A) is the earlier sessions alone. A historical replay is research on "
-                     f"reconstructed evidence, never a timely live forecast. The realised outcome stays hidden "
-                     f"until you show it.").classes("text-sm").style(_MUTED)
-            first = self.requested["session_date"] if self.requested else self.days[0]
-            with ui.row().classes("w-full items-center gap-4"):
-                self.day_select = ui.select(self.days, value=first, label="Session", with_input=True,
-                                            on_change=lambda e: self.pick_day(e.value)).classes("w-52")
-                self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
-                ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
-            self.provenance = ui.column().classes("w-full gap-0")
-            with ui.row().classes("w-full no-wrap gap-4 items-start"):
-                with ui.column().classes("grow gap-1 min-w-0"):
-                    self.chart = LightweightChart(height=520)
-                with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
-                    self.targets = ui.column().classes("w-full gap-0")
-            self.outcome = ui.column().classes("w-full gap-0")
-            with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
-                    "background:#1c212e"):
-                self.record = ui.column().classes("w-full gap-0")
+            with ui.row().classes("w-full items-center gap-6"):
+                ui.label("Forecast").classes("text-2xl font-medium")
+                with ui.tabs(value=self.view).props("dense no-caps inline-label") as self.tabs:
+                    ui.tab("stored", label="Stored runs", icon="inventory_2")
+                    ui.tab("preview", label="Forecast now", icon="bolt")
+            with ui.tab_panels(self.tabs, value=self.view).props("keep-alive").classes("w-full").style(
+                    "background:transparent"):
+                with ui.tab_panel("stored").classes("p-0 gap-3"):
+                    self._build_stored()
+                with ui.tab_panel("preview").classes("p-0 gap-3"):
+                    self._build_preview()
+
+    def _build_stored(self) -> None:
+        if not self.days:
+            ui.label("No forecast runs yet. The forecaster issues them (Update data, above - the collector "
+                     "runs it too), or: python scripts/nq_journal.py forecast --start 2025-09-01 --end "
+                     "2026-10-02").style(_MUTED)
+            return
+        ui.label(f"Forecasts from each run's frozen evidence, by arm (stage 4): A the prior ({fc.PRIOR_VERSION}, the "
+                 f"earlier sessions alone, the benchmark); B the baseline ({fc.BASELINE_VERSION}, the rule-based "
+                 f"analogues smoothed with the prior); C the restricted LLM ({fc.RESTRICTED_VERSION}, Claude's "
+                 f"overnight and premarket structure, matched and smoothed like B); D the synthesis "
+                 f"({fc.SYNTHESIS_VERSION}, Claude's own forecast from B's evidence). C and D run only when started "
+                 f"by hand (Update data, Run LLM forecast). A historical replay is research on reconstructed "
+                 f"evidence, never a timely live forecast. The realised outcome and the grading stay hidden until "
+                 f"you show them.").classes("text-sm").style(_MUTED)
+        first = self.requested["session_date"] if self.requested else self.days[0]
+        with ui.row().classes("w-full items-center gap-4"):
+            self.day_select = ui.select(self.days, value=first, label="Session", with_input=True,
+                                        on_change=lambda e: self.pick_day(e.value)).classes("w-52")
+            self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
+            ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.label("Arms for this session").classes("text-xs").style(_MUTED)
+            self.arm_row = ui.row().classes("items-center gap-1")
+        self.provenance = ui.column().classes("w-full gap-0")
+        with ui.row().classes("w-full no-wrap gap-4 items-start"):
+            with ui.column().classes("grow gap-1 min-w-0"):
+                self.chart = LightweightChart(height=520)
+            with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
+                self.targets = ui.column().classes("w-full gap-0")
+        with ui.card().classes("w-full").style("background:#1c212e"):
+            ui.label("Grading: the arms against the realised outcome").classes("text-sm font-medium")
+            self.grading = ui.column().classes("w-full gap-2")
+        self.outcome = ui.column().classes("w-full gap-0")
+        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
+                "background:#1c212e"):
+            self.record = ui.column().classes("w-full gap-0")
         self.pick_day(first, self.requested["run_id"] if self.requested else None)
 
     def _run_label(self, r: Dict[str, Any]) -> str:
-        arm = {fc.PRIOR_VERSION: "prior (arm A)", fc.BASELINE_VERSION: "baseline (arm B)"}.get(
-            r["algorithm_version"], r["algorithm_version"])
+        arm = _ARMS.get(r["algorithm_version"], r["algorithm_version"])
         return (f"{r['run_id'][:8]} · {arm} · {r['lifecycle_status']} · {r['mode'].replace('_', ' ')} · "
                 f"{str(r['created_at'])[:16]} UTC")
 
     def pick_day(self, day: Optional[str], run_id: Optional[str] = None) -> None:
+        """The session's arms (the buttons), then the runs of the arm shown - the requested run's, the arm shown
+        before when the session has it, else arm B, else the first the session has."""
         if not day:
             return
         runs = self.by_day.get(day, [])
-        self.run_select.set_options({r["run_id"]: self._run_label(r) for r in runs},
-                                    value=run_id or (runs[0]["run_id"] if runs else None))
+        have = {fc.arm_of(r["algorithm_version"]) for r in runs}
+        requested = next((r for r in runs if r["run_id"] == run_id), None)
+        if requested is not None:
+            self.arm = fc.arm_of(requested["algorithm_version"])
+        elif self.arm not in have:
+            self.arm = "B" if "B" in have else next((a for a in fc.ARMS if a in have), None)
+        self._render_arms(have)
+        mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == self.arm]
+        self.run_select.set_options({r["run_id"]: self._run_label(r) for r in mine},
+                                    value=run_id if requested is not None else (mine[0]["run_id"] if mine else None))
+
+    def pick_arm(self, arm: str) -> None:
+        self.arm = arm
+        self.pick_day(self.day_select.value)
+
+    def _render_arms(self, have) -> None:
+        """One button per arm: the one shown highlighted, the session's others outlined, the rest disabled."""
+        self.arm_row.clear()
+        with self.arm_row:
+            for arm, version in fc.ARMS.items():
+                label = f"{arm} · {fc.ARM_NAMES[arm]}"
+                b = ui.button(label, on_click=lambda a=arm: self.pick_arm(a)).props("dense no-caps size=sm")
+                if arm == self.arm:
+                    b.props("unelevated color=primary")
+                    b.tooltip(f"Shown: arm {arm}, {version}")
+                elif arm in have:
+                    b.props("outline color=grey-5").tooltip(f"Show arm {arm} ({version})")
+                else:
+                    b.props("flat color=grey-8").disable()
+                    b.tooltip(f"No arm {arm} run for this session"
+                              + (" - Update data, Run LLM forecast" if arm in "CD" else ""))
 
     def toggle_outcome(self, event) -> None:
         self.outcome_shown = bool(event.value)
         self._render_outcome()
+        self._render_grading()
 
     def show(self, run_id: Optional[str]) -> None:
         if not run_id:
@@ -138,6 +265,7 @@ class ForecastPage:
         self._render_targets()
         self._render_record()
         self._render_outcome()
+        self._render_grading()
 
     # -- rendering --------------------------------------------------------------
 
@@ -147,7 +275,9 @@ class ForecastPage:
         with self.provenance:
             status = (f"issued {str(r['issued_at'])[:19]} UTC (database clock)" if r["issued_at"]
                       else f"{r['lifecycle_status']}: {r['failure_reason']}")
-            ui.html(f"<b>Run {r['run_id']}</b> - <span style='color:{_STATUS_COLOR[r['lifecycle_status']]}'>"
+            arm = fc.arm_of(r["algorithm_version"])
+            ui.html((f"<b>Arm {arm} · {fc.ARM_NAMES[arm]}</b> · " if arm else "")
+                    + f"<b>Run {r['run_id']}</b> - <span style='color:{_STATUS_COLOR[r['lifecycle_status']]}'>"
                     f"{status}</span> · {r['mode'].replace('_', ' ')} · cutoff {str(r['input_cutoff_at'])[:16]} UTC"
                     ).classes("text-sm")
             ui.label(f"{r['algorithm_version']} · {r['schema_version']} · {r['issue_policy']} · labels "
@@ -164,42 +294,217 @@ class ForecastPage:
             if ev.get("prior"):
                 ui.label(f"analogues {members or 'none'}; prior {ev['prior']['sessions']} earlier session(s) - "
                          f"{ev['prior']['known_as_of']}").classes("text-xs").style(_MUTED)
+            attempt = ev.get("attempt") or {}
+            if attempt:
+                usage = attempt.get("usage") or {}
+                ui.label(f"Claude: {attempt.get('model') or 'no answer'}"
+                         + (f", {usage.get('input_tokens', 0):,} input / {usage.get('output_tokens', 0):,} output "
+                            f"tokens" if usage else "") + f"; request {str(attempt.get('request_id'))[:8]}"
+                         ).classes("text-xs").style(_MUTED)
 
     def _render_targets(self) -> None:
         self.targets.clear()
         with self.targets:
-            ui.label("Per target (baseline distribution and its denominators)").classes("text-sm font-medium")
-            rows = target_rows(self.run)
-            if not rows:
-                ui.label(f"No predictions: {self.run['failure_reason']}").classes("text-xs").style(_MUTED)
-                return
-            with ui.grid(columns="minmax(0,1.1fr) minmax(0,0.9fr) minmax(0,1.6fr) minmax(0,0.9fr)").classes(
-                    "w-full gap-x-2 gap-y-1"):
-                for head in ("P1 property", "class", "distribution", "n / prior"):
-                    ui.label(head).classes(_CELL).style(_MUTED)
-                for r in rows:
-                    ui.label(r["property"]).classes(_CELL).style(_MUTED)
-                    ui.label(r["class"] if r["status"] == "predicted" else f"{r['class']} - {r['reason']}").classes(
-                        _CELL + " break-words")
-                    ui.label(", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-").classes(
-                        _CELL + " break-words")
-                    ui.label(f"{r['eligible']} (+{r['without_label']}) / {r['prior_sessions']} "
-                             f"(+{r['prior_without_label']})").classes(_CELL)
-            ui.label("n: analogues with a label (+ without); prior: earlier sessions with a label (+ without). "
-                     "Estimates are conditional on classifiable outcomes.").classes("text-[10px]").style(_MUTED)
+            _targets_grid(self.run, f"Per target ({_ARMS.get(self.run['algorithm_version'], self.run['algorithm_version'])}"
+                                    f": distribution and denominators)")
 
     def _render_record(self) -> None:
         self.record.clear()
-        provenance, rows = p1_record(self.snapshot, self.annotation, self.aset, self.run)
         with self.record:
-            ui.label(provenance).classes("text-xs").style(_MUTED)
-            with ui.grid(columns="2.5rem minmax(0,1fr) minmax(0,1fr) minmax(0,2fr)").classes("w-full gap-x-2 gap-y-0"):
-                for i, (prop, value, basis) in enumerate(rows, 1):
-                    style = "background:rgba(41,98,255,0.10)" if i in _FORECAST_FIELDS else ""
-                    ui.label(str(i)).classes(_CELL).style(_MUTED + ";" + style)
-                    ui.label(prop).classes(_CELL).style(_MUTED + ";" + style)
-                    ui.label(value).classes(_CELL + " break-words").style(style)
-                    ui.label(basis).classes(_CELL + " break-words text-[10px]").style(_MUTED + ";" + style)
+            _record_grid(self.snapshot, self.annotation, self.aset, self.run)
+
+    # -- forecast now (the preview) ----------------------------------------------
+
+    def _build_preview(self) -> None:
+        with ui.row().classes("w-full items-center gap-4"):
+            with ui.column().classes("gap-0"):
+                self.preview_button = ui.button("Forecast now", icon="bolt", on_click=self._forecast_now).props(
+                    "no-caps")
+            self.preview_status = ui.html().classes("text-sm")
+        self.preview_note = ui.label().classes("text-xs")
+        ui.label("A preview of the next session's forecast from the data so far, at any time from its Globex open "
+                 "(18:00 ET the evening before): the button collects the latest bars, then builds the evidence as of "
+                 "now, annotates it by the rules, finds its analogues among the stored sessions and runs both arms - "
+                 "in memory, never stored. What is not known yet is unavailable, never filled in, so the preview can "
+                 "differ from the official forecast, which comes from the 09:31 ET snapshot (Stored runs)."
+                 ).classes("text-sm").style(_MUTED)
+        self.preview_meta = ui.column().classes("w-full gap-0")
+        with ui.row().classes("w-full no-wrap gap-4 items-start"):
+            with ui.column().classes("grow gap-1 min-w-0"):
+                self.preview_chart = LightweightChart(height=520)
+            with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
+                self.preview_arm = ui.toggle({v: _ARMS[v] for v in fc.RULE_ALGORITHMS}, value=fc.BASELINE_VERSION,
+                                             on_change=lambda e: self._render_preview_run()).props("dense no-caps")
+                self.preview_targets = ui.column().classes("w-full gap-0")
+        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=False).classes("w-full").style(
+                "background:#1c212e"):
+            self.preview_record = ui.column().classes("w-full gap-0")
+        self.preview = pv.load()
+        self._render_preview()
+        self._preview_button_state()
+        ui.timer(2.0, self._preview_button_state)
+
+    def _forecast_now(self) -> None:
+        if self.panel is None:
+            ui.notify("Forecast now runs from the Update data control in the header.", type="warning")
+            return
+        self.panel.forecast_now()
+
+    def _preview_button_state(self) -> None:
+        possible = self.panel is not None and self.panel.preview_possible
+        self.preview_button.set_enabled(possible and not RUNNER.busy)
+        note = ("" if self.panel is None else
+                f"Forecast now is running ({RUNNER.job.title})" if RUNNER.busy else
+                ("Possible " if possible else "Not possible now: ") + self.panel.preview_why)
+        if note != self.preview_note.text:
+            self.preview_note.set_text(note)
+            self.preview_note.style(f"color:{'#26a69a' if possible else '#787b86'}")
+
+    def _preview_run(self) -> Optional[Dict[str, Any]]:
+        return next((r for r in (self.preview or {}).get("runs") or []
+                     if r["algorithm_version"] == self.preview_arm.value), None)
+
+    def _render_preview(self) -> None:
+        r = self.preview
+        self.preview_meta.clear()
+        if r is None or r["status"] != "ok":
+            text = ("No preview yet - press Forecast now." if r is None else
+                    f"No preview ({_et(r['made_at'], '%a %H:%M')}): {r['reason']}")
+            self.preview_status.set_content(f"<span style='{_MUTED}'>{text}</span>")
+            self.preview_chart.apply(dict(_EMPTY_SPEC))
+            self.preview_targets.clear()
+            self.preview_record.clear()
+            return
+        made = datetime.fromisoformat(r["made_at"].replace(" ", "T")).replace(tzinfo=timezone.utc)
+        age = int((datetime.now(timezone.utc) - made).total_seconds() // 60)
+        scope = ("the whole pre-open" if r["complete"] else f"the pre-open so far, to the {r['cutoff_et']} cutoff")
+        self.preview_status.set_content(
+            f"<b>{r['session_date']}</b> as of {r['as_of_et']} - <span style='color:"
+            f"{'#26a69a' if r['complete'] else '#ffa726'}'>{scope}</span> <span style='{_MUTED}'>· data through "
+            f"{_et(r['data_through'])} · made {_et(r['made_at'])} ({age} min ago) · not stored</span>")
+        payload = r["snapshot"]["payload"]
+        missing = sorted(k for k, v in (payload.get("references") or {}).items()
+                         if v["status"] != "valid" and k != "price_at_0929")
+        aset = r["analogue_set"]
+        with self.preview_meta:
+            ui.label("not known yet or unavailable: " + (", ".join(missing) or "nothing")).classes("text-xs").style(
+                _MUTED)
+            members = ", ".join(f"{m['session_date']} ({float(m['similarity']):.0f}%)" for m in aset["members"]) \
+                if aset and aset["members"] else "none"
+            ui.label(f"analogues {members}" + (f"; prior {aset['outcome_summary']['prior']['sessions']} earlier "
+                                               f"session(s)" if aset else "")).classes("text-xs").style(_MUTED)
+        self.preview_chart.apply(frozen_preopen_spec(r["snapshot"]))
+        self._render_preview_run()
+
+    def _render_preview_run(self) -> None:
+        run = self._preview_run()
+        self.preview_targets.clear()
+        self.preview_record.clear()
+        if run is None:
+            return
+        with self.preview_targets:
+            _targets_grid(run, f"Per target ({_ARMS[run['algorithm_version']]}, preview)")
+        with self.preview_record:
+            r = self.preview
+            _record_grid(r["snapshot"], r["annotation"], r["analogue_set"], run)
+
+    def _render_grading(self) -> None:
+        """Every arm's current run of the session against its realised outcome (forecaster/grading.py): a radar of
+        p(realised) per target with the benchmark (arm A) dashed and chance dotted, and the scorecard beside it."""
+        self.grading.clear()
+        with self.grading:
+            if not self.outcome_shown:
+                ui.label("Hidden with the realised outcome: switch on Show realised outcome.").classes(
+                    "text-xs").style(_MUTED)
+                return
+            outcome = store.latest_outcome(self.conn, self.run["snapshot_id"], self.run["label_version"])
+            if outcome is None:
+                ui.label("Graded once the session is final, two hours after its close.").classes("text-xs").style(
+                    _MUTED)
+                return
+            runs = current_runs(self.by_day.get(self.run["session_date"], []))
+            if not runs:
+                ui.label("No issued run to grade.").classes("text-xs").style(_MUTED)
+                return
+            full = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in runs.items()}
+            g = grade(full, outcome["labels"])
+            with ui.row().classes("w-full no-wrap gap-6 items-start"):
+                if len(g["targets"]) >= 3:
+                    ui.echart(self._radar_options(g)).style("width:540px;height:460px").classes("shrink-0")
+                with ui.column().classes("grow gap-2 min-w-0 max-w-[52rem]"):
+                    self._scorecard(g)
+            ui.label(f"p(realised): the probability the arm gave the class that happened; a hit: its predicted "
+                     f"class was it. Arm {BENCHMARK} (the earlier-session prior) is the benchmark; chance is 1 / the "
+                     f"number of classes. One session is a view, not a score - experiments score many "
+                     f"(Evaluation).").classes("text-[10px]").style(_MUTED)
+
+    def _radar_options(self, g: Dict[str, Any]) -> Dict[str, Any]:
+        targets = [t for _, t in g["targets"]]
+        series = []
+        for arm, a in g["arms"].items():
+            color, bench = _ARM_COLOR[arm], arm == BENCHMARK
+            series.append({
+                "name": f"{arm} · {fc.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
+                "value": [round(100 * (a["cells"][t]["p"] or 0), 1) for t in targets],
+                "symbol": "circle", "symbolSize": 8,
+                "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
+                "itemStyle": {"color": color, "borderColor": "#1c212e", "borderWidth": 2},
+                "areaStyle": {"color": color, "opacity": 0 if bench else 0.08}})
+        series.append({"name": "chance", "value": [round(100 * g["chance"][t], 1) for t in targets],
+                       "symbol": "none", "lineStyle": {"width": 1, "type": "dotted", "color": "#5d606b"},
+                       "itemStyle": {"color": "#5d606b"}, "areaStyle": {"opacity": 0}})
+        return {
+            "backgroundColor": "transparent", "animation": False,
+            "legend": {"top": 0, "left": "center", "itemWidth": 14, "itemHeight": 8, "itemGap": 12,
+                       "textStyle": {"color": "#b2b5be", "fontSize": 11}},
+            "tooltip": {"trigger": "item", "backgroundColor": "#1c212e", "borderColor": "#2a2e39",
+                        "textStyle": {"color": "#d1d4dc", "fontSize": 11}},
+            "radar": {"indicator": [{"name": _SHORT[t], "max": 100} for t in targets], "radius": "66%",
+                      "center": ["50%", "56%"], "splitNumber": 4, "shape": "polygon",
+                      "axisName": {"color": "#b2b5be", "fontSize": 11},
+                      "splitLine": {"lineStyle": {"color": "#2a2e39", "width": 1}},
+                      "splitArea": {"show": False}, "axisLine": {"lineStyle": {"color": "#2a2e39"}}},
+            "series": [{"type": "radar", "data": series, "emphasis": {"lineStyle": {"width": 3}}}]}
+
+    def _scorecard(self, g: Dict[str, Any]) -> None:
+        """Per arm: hits, mean p(realised) and its difference to the benchmark; then per target each arm's
+        p(realised) with a hit or a miss, under the realised class."""
+        arms = list(g["arms"])
+        with ui.grid(columns="minmax(0,1.6fr) repeat(3, minmax(0,1fr))").classes("w-full gap-x-3 gap-y-1"):
+            for head in ("arm", "hits", "mean p(realised)", f"vs arm {BENCHMARK}"):
+                ui.label(head).classes(_CELL).style(_MUTED)
+            for arm in arms:
+                a = g["arms"][arm]
+                with ui.row().classes(_CELL + " items-center gap-2 no-wrap"):
+                    ui.element("span").style(f"display:inline-block;width:14px;height:0;border-top:2px "
+                                             f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
+                    ui.label(f"{arm} · {fc.ARM_NAMES[arm]}")
+                ui.label(f"{a['hits']} of {a['graded']}").classes(_CELL)
+                ui.label("-" if a["mean_p"] is None else f"{100 * a['mean_p']:.0f}%").classes(_CELL)
+                vs = a["vs_benchmark"]
+                ui.label("benchmark" if arm == BENCHMARK else "-" if vs is None else
+                         f"{'+' if vs >= 0 else '−'}{abs(100 * vs):.0f} pts").classes(_CELL).style(
+                    _MUTED if arm == BENCHMARK or vs is None else "")
+        targets = g["targets"]
+        with ui.grid(columns=f"minmax(0,1.3fr) repeat({len(arms)}, minmax(0,1fr))").classes(
+                "w-full gap-x-3 gap-y-0 mt-2"):
+            ui.label("target - realised").classes(_CELL).style(_MUTED)
+            for arm in arms:
+                ui.label(f"arm {arm}").classes(_CELL).style(_MUTED)
+            for name, t in targets:
+                ui.label(f"{_SHORT[t]} - {defs.display(t, g['realised'][t])}").classes(_CELL + " break-words")
+                for arm in arms:
+                    c = g["arms"][arm]["cells"][t]
+                    if c["p"] is None:
+                        ui.label("-").classes(_CELL).style(_MUTED).tooltip(c.get("why") or "")
+                        continue
+                    with ui.row().classes(_CELL + " items-center gap-1 no-wrap"):
+                        ui.icon("check_circle" if c["hit"] else "cancel", size="14px").style(
+                            f"color:{'#0ca30c' if c['hit'] else '#787b86'}")
+                        ui.label(f"{100 * c['p']:.0f}%" + (" hit" if c["hit"] else ""))
+        if g["ungraded"]:
+            ui.label("not graded: " + ", ".join(f"{_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(
+                "text-[10px]").style(_MUTED)
 
     def _render_outcome(self) -> None:
         self.outcome.clear()
@@ -230,7 +535,7 @@ class ForecastPage:
                         ui.label(value).classes(_CELL + " break-words")
 
 
-def show_forecast_page(conn, run_id: Optional[str] = None) -> ForecastPage:
-    page = ForecastPage(conn, run_id)
+def show_forecast_page(conn, run_id: Optional[str] = None, view: Optional[str] = None, panel=None) -> ForecastPage:
+    page = ForecastPage(conn, run_id, view, panel)
     page.build()
     return page

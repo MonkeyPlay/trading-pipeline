@@ -27,6 +27,10 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py experiment-score --name hist_dev_v1        # freeze cases, score, report
     python scripts/nq_journal.py experiment-list
     python scripts/nq_journal.py live                                       # the pre-open live capture (3D)
+    python scripts/nq_journal.py preview                                    # forecast now: a preview, never stored
+    python scripts/nq_journal.py llm-forecast --sessions 1 --estimate      # arms C and D: the plan and its cost
+    python scripts/nq_journal.py llm-forecast --sessions 1                 # ... sent after typing "send"
+    python scripts/nq_journal.py annotate-llm --restricted --start 2025-09-01 --end 2026-10-02 --batch  # C's pool
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
@@ -135,25 +139,32 @@ def cmd_annotate_llm(conn, args):
     """The Claude structure annotation (forecaster/structure_llm.py): estimate, live requests or a batch - sent only
     after a person confirmed at a terminal."""
     from forecaster import structure_llm as llm
+    protocol = llm.FULL
+    if args.restricted:
+        from forecaster.llm_arms import RESTRICTED as protocol
     version = defs.PROFILES[args.profile].snapshot_version
-    unresolved = store.unresolved_inference_requests(conn, preopen.LLM_PROTOCOL_VERSION)
+    unresolved = store.unresolved_inference_requests(conn, protocol.version)
     batches = sorted({r["batch_id"] for r in unresolved if r["batch_id"]})
     stranded = [r for r in unresolved if not r["batch_id"]]
     if stranded and args.close_unresolved:
-        print(f"Closed {llm.close_unresolved(conn, stranded)} unresolved request(s) as error attempts.")
+        print(f"Closed {llm.close_unresolved(conn, stranded, protocol)} unresolved request(s) as error attempts.")
         stranded, unresolved = [], [r for r in unresolved if r["batch_id"]]
     for r in stranded:
         print(f"  unresolved {r['mode']} request {r['request_id']} ({r['session_date']}, sent {r['created_at']}): its "
               f"answer cannot be fetched; --close-unresolved records it as an error so the session can be sent again")
     waiting = {r["snapshot_id"] for r in unresolved}
     snaps = store.list_snapshots(conn, args.date or args.start, args.date or args.end, version)
-    todo = [s for s in snaps if store.latest_annotation(conn, s["snapshot_id"], preopen.LLM_PROTOCOL_VERSION) is None
+    todo = [s for s in snaps if store.latest_annotation(conn, s["snapshot_id"], protocol.version) is None
             and s["snapshot_id"] not in waiting]
-    print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) to send for {preopen.LLM_PROTOCOL_VERSION}"
+    print(f"{len(todo)} of {len(snaps)} {version} snapshot(s) to send for {protocol.version}"
           + (f"; {len(waiting)} with an unresolved request" if waiting else "")
           + (f"; {len(batches)} recorded batch(es) to collect first" if batches else "") + ".")
     if todo:
-        e = llm.estimate(todo)
+        if args.restricted:
+            from forecaster.llm_arms import RESTRICTED_OUTPUT_TOKENS
+            e = llm.estimate(todo, protocol, RESTRICTED_OUTPUT_TOKENS)
+        else:
+            e = llm.estimate(todo, protocol)
         print(f"  about {e['input_tokens']:,} input and {e['output_tokens']:,} output tokens: ~${e['usd_live']} "
               f"live, ~${e['usd_batch']} with --batch ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT})")
     if args.estimate or not (todo or batches):
@@ -163,7 +174,7 @@ def cmd_annotate_llm(conn, args):
     if not confirmed_by_hand(f"Claude API ({preopen.LLM_MODEL}, effort {preopen.LLM_EFFORT}): {' and '.join(what)}."):
         return 1
     with llm.manual_requests():
-        return _send_llm(conn, args, llm, todo, batches)
+        return _send_llm(conn, args, llm, todo, batches, protocol)
 
 
 def confirmed_by_hand(summary: str) -> bool:
@@ -172,8 +183,8 @@ def confirmed_by_hand(summary: str) -> bool:
     "send". Without a terminal (cron, the dashboard's jobs, a pipe) nothing is sent.
     """
     if not sys.stdin.isatty():
-        print("Claude API requests are started by hand only, for now: run annotate-llm in a terminal and confirm "
-              "there. Nothing was sent.")
+        print("Claude API requests are started by hand only, for now: run this in a terminal and confirm there "
+              "(or confirm in the dashboard). Nothing was sent.")
         return False
     print(summary)
     try:
@@ -186,7 +197,7 @@ def confirmed_by_hand(summary: str) -> bool:
     return True
 
 
-def _send_llm(conn, args, llm, todo, batches):
+def _send_llm(conn, args, llm, todo, batches, protocol):
     """The requests of a confirmed annotate-llm run (inside structure_llm.manual_requests)."""
     import time
     from datetime import datetime, timezone
@@ -203,19 +214,19 @@ def _send_llm(conn, args, llm, todo, batches):
         started = datetime.now(timezone.utc)
         while client.messages.batches.retrieve(batch_id).processing_status != "ended":
             time.sleep(llm.batch_poll_delay(started))
-        counts = llm.collect_batch(conn, client, batch_id)
+        counts = llm.collect_batch(conn, client, batch_id, protocol)
         print(f"  results: {counts}")
         status |= not set(counts) <= {"ok"}
     if not todo:
         return status
     if not args.batch:
         for snap in todo:
-            attempt = llm.annotate_live(conn, client, snap)
+            attempt = llm.annotate_live(conn, client, snap, protocol)
             print(f"  {snap['session_date']}: {attempt['status']}" + (f" - {attempt['error']}" if attempt.get("error") else ""))
             status |= attempt["status"] not in ("ok", "contaminated")
         return status
     submitted = datetime.now(timezone.utc)
-    batch_id = llm.submit_batch(conn, client, todo)
+    batch_id = llm.submit_batch(conn, client, todo, protocol)
     if batch_id is None:
         print("  no batch was created: every snapshot contaminated, or the API refused it (see the error attempts)")
         return 1
@@ -223,9 +234,60 @@ def _send_llm(conn, args, llm, todo, batches):
           f"interrupted run collects it next time ...")
     while client.messages.batches.retrieve(batch_id).processing_status != "ended":
         time.sleep(llm.batch_poll_delay(submitted))
-    counts = llm.collect_batch(conn, client, batch_id)
+    counts = llm.collect_batch(conn, client, batch_id, protocol)
     print(f"  results: {counts}")
     return status | (0 if set(counts) <= {"ok"} else 1)
+
+
+def cmd_llm_forecast(conn, args):
+    """Arms C and D (forecaster/llm_arms.py) over the last --sessions sessions: the plan, then - confirmed by hand
+    in a terminal, or by a dashboard approval (--approval) - the Claude requests."""
+    from forecaster import approvals
+    from forecaster import llm_arms as la
+    from forecaster import structure_llm as llm
+    arms = tuple(a for a in "CD" if a in args.arms.upper())
+    if not arms:
+        print("--arms names no arm (C, D, or CD).")
+        return 1
+    plan = la.plan(conn, args.sessions, arms, args.profile)
+    print(f"Arms {' and '.join(arms)} over the last {args.sessions} session(s) ({plan['model']}, effort "
+          f"{plan['effort']}):")
+    for row in plan["sessions"]:
+        print(f"  {row['session_date']}: " + (f"skipped - {row['skip']}" if row.get("skip") else
+                                             ", ".join(f"{a} {row[a]}" for a in arms if a in row)))
+    if "C" in arms:
+        print(f"  arm C's pool: {plan['restricted_pool']} session(s) annotated by {preopen.RESTRICTED_PROTOCOL_VERSION}"
+              f" - analogues come only from earlier ones; with none, arm C is the prior alone")
+    print(f"  {plan['requests']} Claude request(s), roughly ${plan['usd']} at list prices (a rough estimate; at most "
+          f"${plan['usd_max']} if every request used its whole token cap)")
+    if args.estimate:
+        return 0
+    if plan["requests"] == 0:                         # nothing to send: arm C's runs from the stored annotations
+        summary = la.run(conn, None, args.sessions, arms, args.profile, max_requests=0)
+        return 0
+    scope = {"command": "llm-forecast", "sessions": args.sessions, "arms": "".join(arms), "profile": args.profile}
+    if args.approval:
+        approved, why = approvals.redeem(args.approval, scope)
+        print(why + ("" if approved else ". Nothing was sent."))
+        if approved is None:
+            return 1
+        cap = int(approved.get("max_requests") or 0)
+    else:
+        if not confirmed_by_hand(f"Send {plan['requests']} Claude request(s) for arms {' and '.join(arms)}?"):
+            return 1
+        cap = plan["requests"]
+    with llm.manual_requests():
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            client.models.retrieve(preopen.LLM_MODEL)
+        except Exception as e:
+            print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
+            return 1
+        summary = la.run(conn, client, args.sessions, arms, args.profile, max_requests=cap)
+    print(f"{summary['requests_sent']} request(s) sent; " + ", ".join(f"{k}: {v}" for k, v in summary["counts"].items()))
+    bad = [k for k in summary["counts"] if any(w in k for w in ("failed", "invalid", "error", "refused"))]
+    return 1 if bad else 0
 
 
 def _components_line(members, feature):
@@ -507,6 +569,30 @@ def cmd_live(conn, args):
     return 0 if result["status"] == "issued" else 1
 
 
+def cmd_preview(conn, args):
+    """Forecast now (forecaster/preview.py): the next session's forecast from the data stored so far, written to the
+    preview file the dashboard shows - nothing goes into the journal."""
+    from forecaster import preview as pv
+    from forecaster.forecast_display import target_rows
+    result = pv.preview(conn)
+    print(f"Preview file: {pv.save(result, args.out or pv.PREVIEW_FILE)}")
+    if result["status"] != "ok":
+        print(f"No preview: {result['reason']}")
+        return 0
+    print(f"{result['session_date']} as of {result['as_of_et']} (data through {result['data_through'][11:16]} UTC; "
+          f"{'the whole pre-open' if result['complete'] else 'the pre-open so far, to the ' + result['cutoff_et'] + ' ET cutoff'})")
+    aset = result["analogue_set"]
+    print("  analogues: " + (", ".join(f"{m['session_date']} ({float(m['similarity']):.0f}%)" for m in aset["members"])
+                             if aset and aset["members"] else "none"))
+    for run in result["runs"]:
+        print(f"  {run['algorithm_version']}: {run['lifecycle_status']}"
+              + (f" - {run['failure_reason']}" if run["failure_reason"] else ""))
+        for r in target_rows(run):
+            print(f"    {r['property']}: {r['class']}" + (f" ({', '.join(f'{k} {v}' for k, v in r['distribution'].items())})"
+                                                         if r["distribution"] else ""))
+    return 0
+
+
 def cmd_live_report(conn, args):
     """Every live capture of a date range with its steps as seconds after the cutoff (database clock)."""
     from forecaster import live_capture as live
@@ -603,6 +689,16 @@ def main(argv=None):
     p.add_argument("--estimate", action="store_true", help="Only estimate the tokens and the cost")
     p.add_argument("--close-unresolved", action="store_true",
                    help="Record requests whose answer can never be fetched (a run ended mid-request) as errors")
+    p.add_argument("--restricted", action="store_true",
+                   help="Arm C's restricted protocol (Overnight Structure and Premarket Pattern only, date-blinded) - "
+                        "e.g. to annotate its pool with --batch")
+    p = sub.add_parser("llm-forecast", help="Arms C (restricted LLM) and D (synthesis) over the last sessions "
+                                            "(Claude requests, confirmed by hand)")
+    p.add_argument("--sessions", type=int, default=1, help="The last N scheduled sessions up to today (default 1)")
+    p.add_argument("--arms", default="CD", help="C, D or CD (default)")
+    p.add_argument("--estimate", action="store_true", help="Only show the plan and its rough cost")
+    p.add_argument("--approval", default=None, help="A dashboard approval token (forecaster/approvals.py)")
+    p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p = sub.add_parser("analogues", help="One session's analogues (outcome-blind unless --outcomes)")
     common(p, ranged=False)
     p.add_argument("--outcomes", action="store_true", help="Also show the analogues' outcomes")
@@ -633,6 +729,9 @@ def main(argv=None):
     p = sub.add_parser("live", help="Capture, freeze and issue today's session live (run before the open)")
     p.add_argument("--date", help="Session date (default: today in New York)")
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p = sub.add_parser("preview", help="Forecast now: the next session's forecast from the data stored so far "
+                                       "(a preview, never stored in the journal)")
+    p.add_argument("--out", default=None, help="Preview file (default: the one the dashboard reads)")
     p = sub.add_parser("live-report", help="Live captures and their timing")
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
@@ -674,6 +773,7 @@ def main(argv=None):
                    "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
                    "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
+                   "preview": cmd_preview, "llm-forecast": cmd_llm_forecast,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

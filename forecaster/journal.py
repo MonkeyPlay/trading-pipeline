@@ -84,8 +84,8 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
 
 def register(conn) -> None:
     from contracts import nq_forecast
-    for rec in (defs.all_records() + [preopen.rules_record(), preopen.llm_record(), preopen.matcher_record()]
-                + nq_forecast.all_records()):
+    for rec in (defs.all_records() + [preopen.rules_record(), preopen.llm_record(), preopen.restricted_record(),
+                                      preopen.matcher_record()] + nq_forecast.all_records()):
         store.register_version(conn, rec)
 
 
@@ -130,11 +130,13 @@ KNOWN_AS_OF = {
     False: "reconstruction: the latest outcome revision of each earlier session, computed after the fact",
     True: "live: for each earlier session the latest outcome revision computed by the target's cutoff",
 }
+PREVIEW_KNOWN_AS_OF = "preview: the latest outcome revision of each earlier session when the preview was made"
 
 
 def _known_as_of(history: Dict[str, List[Dict[str, Any]]], target_snapshot: Dict[str, Any]):
     """The outcome revision of a session usable for this target (nq_match_p1_v2): for a live capture only the
-    revisions computed by the target's cutoff, for a historical reconstruction the latest (said so)."""
+    revisions computed by the target's cutoff, for a historical reconstruction the latest (said so) - and for a
+    preview, made now, the latest, all of them computed by now."""
     live = target_snapshot["data_mode"] == "live_capture"
     cutoff = target_snapshot["cutoff_at"]
 
@@ -144,6 +146,57 @@ def _known_as_of(history: Dict[str, List[Dict[str, Any]]], target_snapshot: Dict
             revisions = [r for r in revisions if r["computed_at"] <= cutoff]
         return revisions[-1] if revisions else None
     return known
+
+
+def annotated_records(conn, snaps: List[Dict[str, Any]], protocol: str) -> List[ms.Record]:
+    """The matcher's record of every snapshot in ``snaps`` annotated under ``protocol``."""
+    records = []
+    for snap in snaps:
+        a = store.latest_annotation(conn, snap["snapshot_id"], protocol)
+        if a is None:
+            continue
+        records.append(ms.Record(snap["snapshot_id"], str(snap["session_date"]), snap["symbol"],
+                                 snap["snapshot_version"], a["annotation_id"], a["protocol_version"],
+                                 a["integrity_status"], ms.features(a)))
+    return records
+
+
+def analogue_set_record(target: ms.Record, records: List[ms.Record], sessions: List[ms.SessionRef],
+                        history: Dict[str, List[Dict[str, Any]]], target_snapshot: Dict[str, Any]):
+    """
+    ``(set, members)`` of ``target``: its P1-rubric analogues among the earlier sessions of ``records``, their
+    outcomes known for the target and the earlier ``sessions``' labels as the prior - what save_analogue_set
+    stores (match), or a preview keeps in memory (forecaster/preview.py).
+    """
+    known = _known_as_of(history, target_snapshot)
+    ranked = ms.rank(target, records)
+    prior = ms.prior_manifest(target, sessions, known)
+    outcomes = {m["record"].snapshot_id: known(m["record"].snapshot_id) for m in ranked["selected"]}
+    summary = ms.outcome_summary(ranked["selected"], {sid: (o["labels"] if o else None)
+                                                      for sid, o in outcomes.items()}, prior["labels"])
+    summary["prior"] = {"known_as_of": (PREVIEW_KNOWN_AS_OF if target_snapshot["data_mode"] == "preview" else
+                                        KNOWN_AS_OF[target_snapshot["data_mode"] == "live_capture"]),
+                        "sessions": len(prior["manifest"]), "excluded": prior["excluded"],
+                        "digest": prior["digest"], "manifest": prior["manifest"]}
+    members = []
+    for m in ranked["selected"]:
+        r, o = m["record"], outcomes[m["record"].snapshot_id]
+        members.append({
+            "rank": m["rank"], "snapshot_id": r.snapshot_id, "annotation_id": r.annotation_id,
+            "session_date": r.session_date, "similarity": ms.show(m["similarity"]),
+            "comparable_weight": ms.show(m["comparable_weight"]),
+            "components": {f: {**c, "weight": str(c["weight"]), "score": ms.show(c["score"])}
+                           for f, c in m["components"].items()},
+            "outcome_revision": None if o is None else int(o["outcome_revision"]),
+            "outcome_computed_at": None if o is None else o["computed_at"]})
+    digest = hashlib.sha256(defs.canonical_json(
+        [[m["snapshot_id"], m["outcome_revision"]] for m in members]).encode()).hexdigest()
+    return {"target_snapshot_id": target.snapshot_id, "target_annotation_id": target.annotation_id,
+            "matcher_version": preopen.MATCHER_VERSION, "label_version": defs.LABEL_VERSION,
+            "data_mode": target_snapshot["data_mode"], "pool_size": ranked["pool_size"],
+            "pool_hash": ranked["pool_hash"], "excluded": ranked["excluded"], "outcome_digest": digest,
+            "prior_digest": prior["digest"],
+            "mean_similarity": summary["mean_similarity"], "outcome_summary": summary}, members
 
 
 def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RULES_PROTOCOL_VERSION,
@@ -163,48 +216,13 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
     by_id = {s["snapshot_id"]: s for s in snaps}
     sessions = [ms.SessionRef(s["snapshot_id"], str(s["session_date"]), s["symbol"]) for s in snaps]
     history = store.outcome_history(conn, defs.LABEL_VERSION)
-    records = []
-    for snap in snaps:
-        a = store.latest_annotation(conn, snap["snapshot_id"], protocol)
-        if a is None:
-            continue
-        records.append(ms.Record(snap["snapshot_id"], str(snap["session_date"]), snap["symbol"],
-                                 snap["snapshot_version"], a["annotation_id"], a["protocol_version"],
-                                 a["integrity_status"], ms.features(a)))
+    records = annotated_records(conn, snaps, protocol)
     created = 0
     for target in records:
         if target.integrity_status != "ok" or (only is not None and target.snapshot_id not in only):
             continue
-        tsnap = by_id[target.snapshot_id]
-        known = _known_as_of(history, tsnap)
-        ranked = ms.rank(target, records)
-        prior = ms.prior_manifest(target, sessions, known)
-        outcomes = {m["record"].snapshot_id: known(m["record"].snapshot_id) for m in ranked["selected"]}
-        summary = ms.outcome_summary(ranked["selected"], {sid: (o["labels"] if o else None)
-                                                          for sid, o in outcomes.items()}, prior["labels"])
-        summary["prior"] = {"known_as_of": KNOWN_AS_OF[tsnap["data_mode"] == "live_capture"],
-                            "sessions": len(prior["manifest"]), "excluded": prior["excluded"],
-                            "digest": prior["digest"], "manifest": prior["manifest"]}
-        members = []
-        for m in ranked["selected"]:
-            r, o = m["record"], outcomes[m["record"].snapshot_id]
-            members.append({
-                "rank": m["rank"], "snapshot_id": r.snapshot_id, "annotation_id": r.annotation_id,
-                "session_date": r.session_date, "similarity": ms.show(m["similarity"]),
-                "comparable_weight": ms.show(m["comparable_weight"]),
-                "components": {f: {**c, "weight": str(c["weight"]), "score": ms.show(c["score"])}
-                               for f, c in m["components"].items()},
-                "outcome_revision": None if o is None else int(o["outcome_revision"]),
-                "outcome_computed_at": None if o is None else o["computed_at"]})
-        digest = hashlib.sha256(defs.canonical_json(
-            [[m["snapshot_id"], m["outcome_revision"]] for m in members]).encode()).hexdigest()
-        _, new = store.save_analogue_set(conn, {
-            "target_snapshot_id": target.snapshot_id, "target_annotation_id": target.annotation_id,
-            "matcher_version": preopen.MATCHER_VERSION, "label_version": defs.LABEL_VERSION,
-            "data_mode": tsnap["data_mode"], "pool_size": ranked["pool_size"],
-            "pool_hash": ranked["pool_hash"], "excluded": ranked["excluded"], "outcome_digest": digest,
-            "prior_digest": prior["digest"],
-            "mean_similarity": summary["mean_similarity"], "outcome_summary": summary}, members)
+        _, new = store.save_analogue_set(conn, *analogue_set_record(target, records, sessions, history,
+                                                                     by_id[target.snapshot_id]))
         created += new
     logger.info(f"Analogues ({preopen.MATCHER_VERSION}, {protocol}): {created} new set(s) of {len(records)} "
                 f"annotated session(s).")
