@@ -310,6 +310,23 @@ is a historical reconstruction and every forecast a historical replay.
 It collects every symbol in `SYMBOLS`, and hands the whole list to the collector in one
 process so its rate-limit pacing stays accurate.
 
+### Benchmark price fan
+
+A forecast arm that is not tied to 09:29: from any minute, the distribution of the price at
+every later minute of the trading day - the usual intraday volatility pattern, bumped
+around scheduled releases and scaled to the current volatility, as a zero-drift random walk
+([docs/fan.md](docs/fan.md), version `fan_rw_v1`). It is the bar a learned fan has to beat.
+
+```bash
+python scripts/fan.py now --symbol NQ                               # the fan from the latest closed bar
+python scripts/fan.py now --symbol NQ --as-of "2026-10-02 10:15"    # ... replayed from a past minute (ET)
+python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-10-02   # every origin, walk-forward
+```
+
+`score` scores every origin minute against the flat, intraday-pattern and event-bump
+references and writes `docs/reports/fan_rw_v1_<symbol>_<start>_<end>.md`. Nothing is stored
+but the registered definition.
+
 ## Configuration
 
 Settings come from environment variables or a local `.env`, read by
@@ -443,13 +460,13 @@ name contains `test`; they reset it).
 | [collector/](collector/) | IB API client, coverage planner, request pacing, contract rolls |
 | [database/](database/) | Connection, queries, migrations, the journal store, backfill/repair tools, economic calendar and earnings loaders |
 | [features/](features/) | Trading calendar, session/timezone classification, VWAP, the chart's reference levels, the NQ evidence snapshot |
-| [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract |
-| [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture |
+| [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract, the benchmark fan |
+| [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture; the benchmark fan and its scoring (`fan_*.py`) |
 | [matching/](matching/) | The P1 structural analogue matcher |
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
-| [scripts/](scripts/) | The journal CLI, daily runner, DB backup, report generators |
+| [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [reports](docs/reports/) |
 
 ## Database
 
