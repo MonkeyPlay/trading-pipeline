@@ -292,10 +292,15 @@ decides what matters together.
   E[z^2 | features] multiplicatively, and an extreme move pulls a leaf linearly, not
   quadratically.
 - **The multiplier** of v2's sigma is sqrt(prediction / its mean over the training rows),
-  clipped to [0.5, 2]: the model moves width between origins and, over the training rows,
-  keeps the mean *squared* multiplier at 1 (before clipping) - v2's average variance. The
-  average width multiplier is therefore a little below 1 (on the checks the median is
-  about 0.95). v2's median and shape are kept.
+  clipped to [0.5, 2]: the model moves width between origins, and over the training rows
+  the mean *squared* multiplier is 1 (before clipping). That fixes neither the average
+  variance nor the average width - v2's variance changes from row to row, and the
+  multiplier is larger where v2 is already wide. Measured for `lin_pois_ivx` on the
+  checks' origins (2026-10-06, every origin, against v2): the mean width (sigma times the
+  multiplier) +0.4 % at 15 minutes, within +-0.6 % from 1 to 120 minutes, -4.6 % at 240;
+  the mean variance +6 to +8 % from 1 to 120 minutes, -3.5 % at 240; the mean squared
+  multiplier 1.00-1.03 and the median multiplier 0.95-0.99. v2's median and shape are
+  kept.
 - The pre-open slice (16, 31, 61 minutes from 09:28) uses the nearest trained horizon.
 - **Settings:** learning rate 0.05, 150 trees of depth 3, at least 4,000 rows a leaf
   (about 15 sessions of 5-minute origins), L2 1.0, 30 % of the features at each split.
@@ -527,17 +532,68 @@ Hansen's SPA over every candidate run; realised variance from 5-minute returns.
   is a like-for-like pair). Development only: the screens that chose features and the
   trials without a definition are not in the test.
 
-**Freeze proposal (not done - each step is the user's decision).** Chunk 7, once chosen:
-register one `fan_model` naming this experiment and its hash with the candidate's
-definition (model class, feature list and hash, settings, v2's shape), trained once on all
-243 development sessions, its fitted state stored with the code revision and the data
-fingerprint; no refit during the holdout or the forward record (a refit is a new version);
-the manifest's rule decides - pass when the whole 95 % interval of candidate minus v2, NQ at
+**Before the freeze** (2026-10-06, a fourth outside review: freeze `lin_pois_ivx`, unchanged,
+after three reproducibility fixes):
+
+- **Data snapshot, row by row.** The count-and-sum fingerprint could miss offsetting
+  changes. `fan_panel.data_snapshot` now hashes every stored row a computation can read, in
+  a fixed order with timestamps as epoch seconds (no session time zone changes the text):
+  every bar of the included instruments up to the end of development (all columns, every
+  contract), their session days, contracts and active-contract mapping, the economic
+  events and their coverage, and the calendar's version - each component hashed and one
+  fingerprint of them all (`59bd1c5a0daa6fd1` on 2026-10-06; 6 s; stable across calls and
+  session time zones).
+- **Source snapshot.** `provenance.source_snapshot` hashes every file git tracks or would
+  track (the outputs under docs/, data/ and logs/ aside) with the commit, whether the tree
+  differs from it, the Python version and the numerical packages' versions; a freeze also
+  archives the files (`data/fan_cache/snapshots/<snapshot>.tar.gz`), so a '+dirty' tree stays
+  recoverable. Every stored run and the freeze record both snapshots.
+- **SPA and StepM cross-checked** against the `arch` package (8.0.0, in a separate
+  environment) on the same loss matrices. With arch's choices this implementation
+  reproduces arch's moving-block results exactly (against v2: p 0.0020, the same 17 runs;
+  against `gbm_own`: p 0.0080 / 0.0085 / 0.0085, the same 5 runs). The difference from the
+  first report is two choices, now options of `fan_search`: arch ranks raw mean differences
+  (its `studentize` flag changes nothing in 8.0.0) and recentres poor runs as Hansen's SPA
+  does; the primary procedure studentises (Hansen's recommendation) with Romano and Wolf's
+  recentring. Under every procedure: some run beats v2 (consistent p 0.002-0.007) and the
+  nominee does individually; some run reading VXN beats `gbm_own` (p 0.0045-0.011). The
+  nominee's own edge over `gbm_own` depends on the procedure - named with raw means, not
+  when studentised (its session differences are the noisiest) - and stays borderline. The
+  `search` report shows the three procedures side by side.
+- **Average width and variance measured** (the learned fan's section): mean squared
+  multiplier 1 fixes neither; the nominee's mean width is within +-0.6 % of v2's to 120
+  minutes, its mean variance 6-8 % higher.
+- **Freeze and holdout built as two commands.** `scripts/fan.py freeze` trains the chosen
+  candidate once on every development session (243, 513,451 rows), writes its `fan_model`
+  definition - features and hash, the complete fitted state (imputation, standardisation,
+  coefficients per horizon: predictions come from it alone), the baseline, the issue rule,
+  "no refit; a refit is a new version", the manifest's acceptance rule, the source and data
+  snapshots - checks that the definition alone reproduces the fitted model (difference 0)
+  and that it would open the holdout, and registers it only without `--dry-run` (a dirty
+  tree only with `--allow-dirty`, its source archived). `scripts/fan.py holdout` scores the
+  registered model once, from its definition, never refitted, stores the result in the
+  journal and refuses a second run; `--rehearse` runs the identical pipeline on the last 60
+  development sessions with a dry run's definition and stores nothing.
+- **Dry run of `lin_pois_ivx`** (definition `e89160d219fab522`): reproduction exact; the
+  15-minute coefficients' largest are VXN's level (+0.34) and NQ's 5-day realised variance
+  (-0.34) - the implied-against-realised comparison, learned linearly - then the after-close
+  phase, NQ's 60- and 15-minute realised variance and the pre-open phase. **Rehearsal**: the
+  whole holdout path ran in 34 s (in sample, so its -0.58 % is no evidence); the frames it
+  computes for a session range equal the cached development frames exactly. Nothing is
+  registered and the holdout is sealed.
+
+**The freeze (each step the user's decision).** The candidate is `lin_pois_ivx`, unchanged
+(the fourth review: E's edge against `gbm_own` is not a comparison with the nominee, whose
+direct paired comparison with E shows no difference). Remaining, in order: commit the code;
+`freeze --candidate lin_pois_ivx` (registers it - the holdout opens for this model alone);
+`holdout` (the one evaluation: pass when the whole 95 % interval of the model minus v2, NQ at
 15 minutes over the 60 holdout sessions, lies below zero; inconclusive leaves v2 the
 baseline and calls for more untouched sessions, never another candidate on the same
-holdout. Open before it: which candidate (the nominee, or `gbm_own_ivx` - the one whose
-intermarket gain is individually established); realised variance from 5-minute returns
-stays unexplored.
+holdout); then the forward record (chunk 8: issuance time, the live inputs as read and
+when, the model version, the issued quantiles - append only, scored once each horizon has
+passed). A holdout result against v2 does not by itself show that reading other markets
+adds value: that would need its own matched comparison. Deferred to a later version:
+realised variance from 5-minute returns and any new features.
 
 **How much to trust it.** `iv_rv` was picked from 11 prototypes by a screen on the checks'
 own sessions, so the checks overstate it - the holdout is the honest test. In its favour:
@@ -581,7 +637,7 @@ records this as a historical test.
 | 4 | Features, each tagged with its instrument and group | done: 119 instrument features + 4 base columns, `scripts/fan.py features` (above) |
 | 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | done: `gbm_own` -0.24 % at 15 min; `gbm_all` no better; with VXN's implied against NQ's realised variance -0.35 to -0.40 % whatever the model; nominee `lin_pois_ivx`; replay passed; the search reviewed (SPA p 0.003 against v2) - above |
 | 6 | Contribution of each instrument (above) | next |
-| 7 | Freeze one model (`fan_model`) and score it once on the holdout | |
+| 7 | Freeze one model (`fan_model`) and score it once on the holdout | ready: `freeze` and `holdout` built; `lin_pois_ivx` dry run and rehearsal passed; registering and scoring await the user |
 | 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | |
 | 9 | Dashboard: the model draws the horizons it passed | |
 
@@ -600,6 +656,9 @@ python scripts/fan.py checks --candidate gbm_own_ivx  # the learned fan: NQ's ow
 python scripts/fan.py compare gbm_own_ivx lin_pois_ivx   # two stored runs paired: B minus A
 python scripts/fan.py replay                          # live-style replay of the leading candidates
 python scripts/fan.py search                          # SPA and StepM over every stored run
+python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition, registered without --dry-run
+python scripts/fan.py holdout --rehearse --definition data/fan_cache/freeze/fan_intermarket_v2_lin_pois_ivx_frozen.json
+python scripts/fan.py holdout                         # the frozen model on the holdout - once
 ```
 
 `experiment-register` takes `--holdout-end`, `--holdout-sessions`, `--warm-up`,

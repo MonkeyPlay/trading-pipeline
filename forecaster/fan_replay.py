@@ -158,7 +158,8 @@ def write_report(res: Dict[str, Any], meta: Dict[str, Any], report_dir: str) -> 
             "multiplier": "each candidate on the replayed features and variance, against the research batch",
             "alone": "one origin predicted alone, against the same origin inside the session's batch"}
     L = [f"# Live-style replay: {meta['experiment']}, {meta['target']}", "",
-         f"Code {meta['code_revision'][:12]}; data `{meta['data_fingerprint']}`; candidates "
+         f"Code {meta['code_revision'][:12]} (source snapshot `{meta['source']['snapshot']}`); data "
+         f"`{meta['data_fingerprint']}`; candidates "
          + ", ".join(f"`{c}`" for c in meta["candidates"]) + f" (each trained on its check's training rows).", "",
          "Sessions (predefined from what was known before each opened): "
          + "; ".join(f"{k} {', '.join(v)}" for k, v in res["sessions"].items())

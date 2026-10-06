@@ -70,3 +70,17 @@ def test_runs_align_on_shared_sessions_and_refuse_another_baseline():
     runs["b"]["per_session"]["d1"]["h15"][0] = 2.5
     with pytest.raises(ValueError):
         fs.aligned(runs, "h15")
+
+
+def test_studentising_and_recentring_are_choices_that_can_change_the_named_runs():
+    means = np.r_[0.35, 0.30, np.full(18, -0.8)]
+    d = _noise(k=20, seed=11, ar=0.0, means=means)
+    d[1] *= 3                                       # the second: mean 0.9, three times noisier - the same t as 0.3 / 1
+    raw = fs.stepm(d, studentize=False, recentre="consistent")
+    stud = fs.stepm(d, studentize=True, recentre="own")
+    assert 1 in raw["better"]                                        # a large raw mean passes unstudentised ...
+    assert raw["steps"][0]["critical"] > 0 and stud["steps"][0]["critical"] > 0
+    own, cons = fs.stepm(d, recentre="own"), fs.stepm(d, recentre="consistent")
+    assert cons["steps"][0]["critical"] <= own["steps"][0]["critical"]          # poor runs raise only the 'own' bar
+    with pytest.raises(ValueError):
+        fs.stepm(d, recentre="both")

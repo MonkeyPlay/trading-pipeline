@@ -46,43 +46,59 @@ def _boot_means(d: np.ndarray, idx: np.ndarray) -> np.ndarray:
     return d[:, idx].mean(axis=2).T
 
 
-def spa(d: np.ndarray, block: int = F.BOOTSTRAP["block_sessions"], resamples: int = F.BOOTSTRAP["resamples"],
-        seed: int = F.BOOTSTRAP["seed"]) -> Dict[str, Any]:
-    """Hansen's SPA on ``d`` (candidates x sessions): the statistic and the lower / consistent / upper p-values."""
+def _setup(d: np.ndarray, block: int, resamples: int, seed: int):
     k, n = d.shape
     idx = block_indices(n, block, resamples, seed)
     mean = d.mean(axis=1)
     boot = _boot_means(d, idx)
-    omega = np.sqrt(n) * boot.std(axis=0)
+    omega = np.sqrt(n) * boot.std(axis=0)            # the bootstrap standard error of sqrt(n) x the mean
+    return n, mean, boot, omega
+
+
+def _consistent(mean: np.ndarray, omega: np.ndarray, n: int) -> np.ndarray:
+    """Hansen's consistent recentring: a run far worse than the benchmark is recentred on zero (so it rarely sets
+    the maximum), every other on its own mean."""
+    return np.where(mean >= -np.sqrt(omega ** 2 / n * 2 * np.log(np.log(n))), mean, 0.0)
+
+
+def spa(d: np.ndarray, block: int = F.BOOTSTRAP["block_sessions"], resamples: int = F.BOOTSTRAP["resamples"],
+        seed: int = F.BOOTSTRAP["seed"], studentize: bool = True) -> Dict[str, Any]:
+    """Hansen's SPA on ``d`` (candidates x sessions): the statistic and the lower / consistent / upper p-values;
+    ``studentize`` False ranks the runs' raw mean differences instead of their t-statistics."""
+    n, mean, boot, omega = _setup(d, block, resamples, seed)
     ok = omega > 0
     if not ok.any():
         raise ValueError("every candidate's difference is constant: nothing to test")
-    t = np.sqrt(n) * mean[ok] / omega[ok]
+    scale = omega[ok] if studentize else np.ones(int(ok.sum()))
+    t = np.sqrt(n) * mean[ok] / scale
     stat = max(0.0, float(t.max()))
-    threshold = np.sqrt(omega[ok] ** 2 / n * 2 * np.log(np.log(n)))
-    recentre = {"lower": np.maximum(mean[ok], 0.0),
-                "consistent": np.where(mean[ok] >= -threshold, mean[ok], 0.0),
+    recentre = {"lower": np.maximum(mean[ok], 0.0), "consistent": _consistent(mean[ok], omega[ok], n),
                 "upper": mean[ok]}
     p = {}
     for name, g in recentre.items():
-        z = np.sqrt(n) * (boot[:, ok] - g[None, :]) / omega[ok][None, :]
+        z = np.sqrt(n) * (boot[:, ok] - g[None, :]) / scale[None, :]
         p[name] = float(np.mean(np.maximum(z.max(axis=1), 0.0) >= stat))
-    return {"statistic": stat, "p": p, "candidates": int(ok.sum()), "sessions": n,
+    return {"statistic": stat, "p": p, "candidates": int(ok.sum()), "sessions": n, "studentize": studentize,
             "t": [float(x) if o else None for x, o in zip(np.sqrt(n) * mean / np.where(ok, omega, 1.0), ok)]}
 
 
 def stepm(d: np.ndarray, alpha: float = 0.05, block: int = F.BOOTSTRAP["block_sessions"],
-          resamples: int = F.BOOTSTRAP["resamples"], seed: int = F.BOOTSTRAP["seed"]) -> Dict[str, Any]:
-    """Romano and Wolf's studentised StepM on ``d``: the candidates better than the benchmark (family-wise error
-    ``alpha``), with each step's critical value."""
-    k, n = d.shape
-    idx = block_indices(n, block, resamples, seed)
-    mean = d.mean(axis=1)
-    boot = _boot_means(d, idx)
-    omega = np.sqrt(n) * boot.std(axis=0)
-    t = np.where(omega > 0, np.sqrt(n) * mean / np.where(omega > 0, omega, 1.0), -np.inf)
-    z = np.sqrt(n) * (boot - mean[None, :]) / np.where(omega > 0, omega, 1.0)[None, :]
-    active = [i for i in range(k) if omega[i] > 0]
+          resamples: int = F.BOOTSTRAP["resamples"], seed: int = F.BOOTSTRAP["seed"], studentize: bool = True,
+          recentre: str = "own") -> Dict[str, Any]:
+    """StepM on ``d``: the candidates better than the benchmark, the family-wise error held at ``alpha``, with each
+    step's critical value. ``recentre`` 'own' is Romano and Wolf's original (every run recentred on its own mean);
+    'consistent' recentres the runs far worse than the benchmark on zero, as Hansen's SPA does (more power when many
+    runs are poor). ``studentize`` False compares raw mean differences."""
+    if recentre not in ("own", "consistent"):
+        raise ValueError(f"unknown recentring {recentre!r}")
+    k, _ = d.shape
+    n, mean, boot, omega = _setup(d, block, resamples, seed)
+    valid = omega > 0
+    scale = np.where(valid, omega, 1.0) if studentize else np.ones(k)
+    t = np.where(valid, np.sqrt(n) * mean / scale, -np.inf)
+    centre = mean if recentre == "own" else _consistent(mean, omega, n)
+    z = np.sqrt(n) * (boot - centre[None, :]) / scale[None, :]
+    active = [i for i in range(k) if valid[i]]
     rejected: List[int] = []
     steps = []
     while active:
@@ -93,7 +109,8 @@ def stepm(d: np.ndarray, alpha: float = 0.05, block: int = F.BOOTSTRAP["block_se
             break
         rejected += new
         active = [i for i in active if i not in new]
-    return {"better": rejected, "steps": steps, "t": [float(x) for x in t], "alpha": alpha}
+    return {"better": rejected, "steps": steps, "t": [float(x) for x in np.sqrt(n) * mean / np.where(valid, omega, 1.0)],
+            "alpha": alpha, "studentize": studentize, "recentre": recentre}
 
 
 def aligned(runs: Dict[str, Dict[str, Any]], key: str, benchmark: Optional[str] = None
@@ -146,6 +163,21 @@ def _cross_market(run: Dict[str, Any], target: str) -> bool:
     return any(not (n.startswith("base.") or n.startswith(f"{target}.")) for n in (run.get("features") or []))
 
 
+PROCEDURES = (("studentised, own recentring (Romano and Wolf; the primary)", True, "own"),
+              ("studentised, consistent recentring", True, "consistent"),
+              ("raw means, consistent recentring (as arch 8.0.0 computes it)", False, "consistent"))
+
+
+def _sensitivity(d: np.ndarray, names: Sequence[str]) -> List[Dict[str, Any]]:
+    """The same tests under each of PROCEDURES: how much the verdicts depend on the procedure's choices."""
+    out = []
+    for label, stud, rec in PROCEDURES:
+        s = spa(d, studentize=stud)
+        w = stepm(d, studentize=stud, recentre=rec)
+        out.append({"procedure": label, "p": s["p"], "better": sorted(names[i] for i in w["better"])})
+    return out
+
+
 def review(runs: Dict[str, Dict[str, Any]], key: str) -> Dict[str, Any]:
     """SPA and StepM over ``runs`` against v2 (every run), and against gbm_own (the runs that read another
     instrument) when it is among them."""
@@ -154,7 +186,7 @@ def review(runs: Dict[str, Dict[str, Any]], key: str) -> Dict[str, Any]:
     base = np.array([next(iter(runs.values()))["per_session"][x][key][0] for x in days])
     s, w = spa(d), stepm(d)
     out["v2"] = {"benchmark": "fan_rw_v2", "sessions": len(days), "spa": s,
-                 "better": [names[i] for i in w["better"]], "steps": w["steps"],
+                 "better": [names[i] for i in w["better"]], "steps": w["steps"], "sensitivity": _sensitivity(d, names),
                  "runs": [{"name": n, "diff_bps": float(-d[i].mean()), "share": float(-d[i].mean() / base.mean()),
                            "t": w["t"][i]} for i, n in enumerate(names)]}
     target = next(iter(runs.values()))["target"]
@@ -166,6 +198,7 @@ def review(runs: Dict[str, Dict[str, Any]], key: str) -> Dict[str, Any]:
         own = np.array([runs["gbm_own"]["per_session"][x][key][1] for x in days2])
         out["own"] = {"benchmark": "gbm_own", "sessions": len(days2), "spa": s2,
                       "better": [names2[i] for i in w2["better"]], "steps": w2["steps"],
+                      "sensitivity": _sensitivity(d2, names2),
                       "runs": [{"name": n, "diff_bps": float(-d2[i].mean()), "share": float(-d2[i].mean() / own.mean()),
                                 "t": w2["t"][i]} for i, n in enumerate(names2)]}
     else:
@@ -187,7 +220,10 @@ def write_report(res: Dict[str, Any], runs: Dict[str, Dict[str, Any]], experimen
          "(Romano and Wolf 2005) names the runs that are, holding the chance of naming any wrongly at 5 %. Both "
          "resample whole sessions in 5-session blocks (2000 resamples). Development only: neither replaces the "
          "sealed holdout, and neither sees the trials below that left no rebuildable definition, nor the choices "
-         "made by looking at screens.", ""]
+         "made by looking at screens. Cross-checked against the arch package (8.0.0): with arch's choices - raw mean "
+         "differences (its `studentize` flag changes nothing in that version) and consistent recentring - this "
+         "implementation reproduces arch's moving-block p-values and StepM sets; the primary procedure studentises, "
+         "as Hansen recommends, and the table under each benchmark shows what the choice changes.", ""]
     for part in ("v2", "own"):
         r = res.get(part)
         if r is None:
@@ -200,6 +236,12 @@ def write_report(res: Dict[str, Any], runs: Dict[str, Dict[str, Any]], experimen
               + (", ".join(f"`{n}`" for n in r["better"]) or "none") + f" ({len(r['steps'])} step(s); first critical "
               f"value {r['steps'][0]['critical']:.2f}).", "",
               "| Run | Where it came from | Features | Difference (bps) | Share | t | StepM |", "|---|---|---|---|---|---|---|"]
+        L += ["Procedure sensitivity:", "", "| Procedure | SPA p (lower / consistent / upper) | StepM names |",
+              "|---|---|---|"]
+        for v in r["sensitivity"]:
+            L.append(f"| {v['procedure']} | {v['p']['lower']:.4f} / {v['p']['consistent']:.4f} / {v['p']['upper']:.4f} "
+                     f"| {len(v['better'])}: " + ", ".join(f"`{n}`" for n in v["better"]) + " |")
+        L.append("")
         for row in sorted(r["runs"], key=lambda x: x["diff_bps"]):
             run = runs[row["name"]]
             spec = (run.get("provenance") or {}).get("spec") or {}

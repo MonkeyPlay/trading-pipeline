@@ -149,3 +149,26 @@ def test_an_out_of_sample_shape_is_fitted_and_scored(mis_sized):
     assert shaped["results"]["h15"]["other_crps_bps"] != plain["results"]["h15"]["other_crps_bps"]   # ... another shape
     cal = shaped["calibration"]["cand|h15|all"]
     assert set(cal["interval_score_bps"]) == {"0.50", "0.80", "0.90", "0.95"} and cal["interval_score_bps"]["0.90"] > 0
+
+
+def test_a_frozen_definition_predicts_exactly_as_the_fitted_model(mis_sized):
+    wrong, manifest, table, _ = mis_sized
+    days = sorted(wrong)
+    cand = fm.LinearScale(table, ["NQ.hint"], "lin_pois_ivx")
+    cand.fit(fh.Rows.concat([fh.frame_rows(wrong[d], every=5) for d in days[:20]]))
+    experiment = {"version": "fan_test", "definition_hash": "abc", "definition": {
+        "gate": {"pass": "p", "inconclusive": "i", "fail": "f"}, "targets": {"primary": "NQ"},
+        "horizons": {"primary": {"minutes": 15}}}}
+    definition = fm.frozen_definition("lin_pois_ivx", cand, experiment, {"version": "fan_rw_v2"}, days[:20],
+                                      {"feature_format": 3, "frame_format": 1})
+    assert definition["features"][-1] == "NQ.hint" and definition["training_sessions"] == days[:20]
+    frozen = fm.frozen_predictor(definition, table)
+    for d in days[20:24]:
+        rows = fh.frame_rows(wrong[d])
+        assert np.array_equal(frozen.predict(rows), cand.predict(rows))            # from the stored state alone
+    fm.check_columns(frozen, definition)
+    res = fh.score_fixed(wrong, days[20:], frozen, {**manifest, "data": {"excluded": {"NQ": [days[21]]}}}, "NQ")
+    assert res["verdict"] in ("pass", "inconclusive", "fail", "no interval") and res["sessions"]["excluded"] == [days[21]]
+    assert len(res["sessions"]["scored"]) == len(days) - 21 and set(res["per_session"]) == set(res["sessions"]["scored"])
+    with pytest.raises(ValueError):
+        fm.frozen_definition("gbm_own_ivx", cand, experiment, {}, days, {"feature_format": 3, "frame_format": 1})

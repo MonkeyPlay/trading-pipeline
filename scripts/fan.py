@@ -21,6 +21,9 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py compare gbm_own_ivx lin_pois_ivx                # two stored runs, paired (B minus A)
     python scripts/fan.py search                                          # SPA and StepM over every stored run
     python scripts/fan.py replay                                          # live-style replay of the leading candidates
+    python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run       # the frozen definition, registered without --dry-run
+    python scripts/fan.py holdout --rehearse --definition data/fan_cache/freeze/<version>.json   # the code path, in sample
+    python scripts/fan.py holdout                                         # the frozen model on the holdout - once
 
 Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
@@ -44,6 +47,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from config import Config
 from contracts import fan as F
+from contracts import nq_prompt_v2 as defs
 from database import journal_store as store
 from database.connection import get_db_connection, init_database
 from features import calendar as cal
@@ -58,12 +62,14 @@ from forecaster import fan_search as fsr
 from forecaster.fan_benchmark import InsufficientHistory, fan_from, fit, slot_instant
 from forecaster.fan_data import history_start, load_days
 from forecaster.fan_scoring import score_sessions, summarise, write_report
-from forecaster.provenance import code_revision
+from forecaster.provenance import code_revision, source_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("fan")
 REPORT_DIR = os.path.join(_PROJECT_ROOT, "docs", "reports")
 CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "fan_cache")      # the checks' baseline frames (not in git)
+FREEZE_DIR = os.path.join(CACHE_DIR, "freeze")                    # frozen definitions as written (dry runs too)
+SNAPSHOT_DIR = os.path.join(CACHE_DIR, "snapshots")               # archived source snapshots of a freeze
 SHOWN_QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 
 
@@ -359,8 +365,8 @@ def cmd_checks(conn, args):
     symbols = [s for s, a in m["instruments"]["availability"].items() if a["status"] == "included"]
     res["provenance"] = {
         "code_revision": res["code_revision"],
-        "data_fingerprint": fp.fingerprint(conn, symbols, m["split"]["window"]["start"],
-                                           m["split"]["development"]["last"]),
+        "source": source_snapshot(),
+        "data": fp.data_snapshot(conn, symbols, m["split"]["development"]["last"]),
         "feature_format": ff.FEATURE_FORMAT, "frame_format": fh.FRAME_FORMAT,
         "spec": ({"kind": spec.kind, "features": spec.features, "base": spec.base, "note": spec.note,
                   "settings": {**fm.SETTINGS, **spec.settings} if spec.kind in ("gbm", "crps_boost") else
@@ -470,10 +476,162 @@ def cmd_replay(conn, args):
               f"{v['max_rel']:.2e}" + (f"  e.g. {v['examples'][0]}" if v["examples"] else ""))
     if not args.no_report:
         meta = {"experiment": args.name, "target": target, "code_revision": code_revision(),
-                "candidates": args.candidate,
-                "data_fingerprint": fp.fingerprint(conn, symbols, m["split"]["window"]["start"], dev[-1])}
+                "candidates": args.candidate, "source": source_snapshot(),
+                "data_fingerprint": fp.data_snapshot(conn, symbols, dev[-1])["fingerprint"]}
         print(f"Report: {frp.write_report(res, meta, args.report_dir)}")
     return 0 if res["passed"] else 1
+
+
+def _included(m):
+    avail = m["instruments"]["availability"]
+    symbols = [s for s, a in avail.items() if a["status"] == "included"]
+    return symbols, {s: avail[s]["first_complete"] for s in symbols}
+
+
+def cmd_freeze(conn, args):
+    """Chunk 7, part one: train the chosen candidate once on every development session and write its 'fan_model'
+    definition - registered (opening the holdout for it) only without --dry-run. Scoring the holdout is a separate
+    command (holdout)."""
+    exp = fx.load_experiment(conn, args.name)
+    m = exp["definition"]
+    target = m["targets"]["primary"]
+    if fx.frozen_model(conn, exp) is not None:
+        print(f"Not frozen: {args.name} already has a frozen model ({fx.frozen_model(conn, exp)['version']})")
+        return 1
+    src = source_snapshot(archive_dir=None if args.dry_run else SNAPSHOT_DIR)
+    if src["dirty"] and not args.dry_run and not args.allow_dirty:
+        print("Not frozen: the working tree has uncommitted changes - commit them first, or pass --allow-dirty (the "
+              "source is then archived under data/fan_cache/snapshots and its snapshot recorded)")
+        return 1
+    _, baseline, frames = fh.load_frames(conn, args.name, target, CACHE_DIR)
+    table = load_features(conn, m, target)
+    excluded = set(m["data"]["excluded"].get(target, []))
+    dev = [d for d in m["split"]["development"]["sessions"] if d not in excluded and d in frames]
+    rows = fh.Rows.concat([fh.frame_rows(frames[d], every=fh.TRAIN_EVERY) for d in dev])
+    try:
+        cand = fm.candidate(args.candidate, table, frames)()
+        cand.fit(rows)
+        symbols, _ = _included(m)
+        provenance = {"code_revision": code_revision(), "source": src,
+                      "data": fp.data_snapshot(conn, symbols, m["split"]["development"]["last"]),
+                      "feature_format": ff.FEATURE_FORMAT, "frame_format": fh.FRAME_FORMAT}
+        base_rec = F.fan_v2_record() if baseline == F.FAN_V2_VERSION else F.fan_record()
+        definition = fm.frozen_definition(args.candidate, cand, exp, {"version": baseline,
+                                          "definition_hash": base_rec["definition_hash"]}, dev, provenance)
+        frozen = fm.frozen_predictor(definition, table)
+        worst = 0.0
+        for d in dev[-5:]:
+            r = fh.frame_rows(frames[d])
+            worst = max(worst, float(np.max(np.abs(cand.predict(r) - frozen.predict(r)))))
+        fm.check_columns(frozen, definition)
+    except ValueError as e:
+        print(f"Not frozen: {e}")
+        return 1
+    if worst != 0.0:
+        print(f"Not frozen: the definition does not reproduce the fitted model (largest difference {worst:.3g})")
+        return 1
+    version = f"{args.name}_{args.candidate}_frozen"
+    record = defs._record(version, "fan_model", definition)
+    why = fx.why_sealed(exp, record)
+    if why:
+        print(f"Not frozen: {why}")
+        return 1
+    os.makedirs(FREEZE_DIR, exist_ok=True)
+    path = os.path.join(FREEZE_DIR, f"{version}.json")
+    with open(path, "w") as fh_:
+        json.dump(record, fh_, indent=1)
+    h15 = definition["fitted"][str(fx.PRIMARY_HORIZON)]
+    top = sorted(zip(h15["columns"], h15["coef"]), key=lambda x: -abs(x[1]))[:8]
+    print(f"{version} - definition hash {record['definition_hash'][:16]}")
+    print(f"  {args.candidate}: trained once on {len(dev)} development sessions ({dev[0]} to {dev[-1]}), "
+          f"{len(rows):,} rows; features {len(definition['features'])} (hash {definition['features_hash']})")
+    print(f"  baseline {baseline}; source {src['commit'][:12]}{' +dirty' if src['dirty'] else ''} (snapshot "
+          f"{src['snapshot']}); data {provenance['data']['fingerprint']}")
+    print(f"  the definition alone reproduces the fitted model on the last 5 development sessions (difference 0)")
+    print(f"  {fx.PRIMARY_HORIZON}-minute coefficients on standardised columns, largest first: "
+          + ", ".join(f"{c} {v:+.3f}" for c, v in top))
+    print(f"  written to {os.path.relpath(path, _PROJECT_ROOT)}")
+    if args.dry_run:
+        print("Dry run: nothing registered - the holdout stays sealed.")
+        return 0
+    store.register_version(conn, record)
+    print(f"Registered {version}: {args.name}'s holdout is open for this model alone. Score it once with "
+          f"scripts/fan.py holdout.")
+    return 0
+
+
+def cmd_holdout(conn, args):
+    """Chunk 7, part two: the frozen model against the baseline on the holdout's sessions - once, from its stored
+    definition, never refitted; the result stored in the journal. With --rehearse (and a freeze dry run's
+    --definition) the identical pipeline runs on the last development sessions instead, storing nothing: a check of
+    the code path before the one real run (in sample, so no evidence about the model)."""
+    exp = fx.load_experiment(conn, args.name)
+    m = exp["definition"]
+    target = m["targets"]["primary"]
+    if args.rehearse:
+        if not args.definition:
+            print("--rehearse needs --definition: the JSON a freeze dry run wrote")
+            return 1
+        with open(args.definition) as fh_:
+            record = json.load(fh_)
+        why = fx.why_sealed(exp, record)
+        if why:
+            print(f"Not rehearsed: {why}")
+            return 1
+        days = m["split"]["development"]["sessions"][-m["split"]["holdout"]["count"]:]
+    else:
+        record = fx.frozen_model(conn, exp)
+        if record is None:
+            print(f"{args.name}'s holdout is sealed: freeze a model first (scripts/fan.py freeze)")
+            return 1
+        done = [r for r in store.experiment_results(conn, args.name) if r["results"].get("kind") == "holdout"]
+        if done:
+            print(f"Already scored {str(done[-1]['computed_at'])[:19]} UTC (result {done[-1]['result_id'][:8]}): "
+                  f"{done[-1]['results']['verdict']}. The holdout is scored once.")
+            return 0
+        days = fx.holdout_sessions(conn, args.name, record["version"])
+    definition = record["definition"]
+    if definition["feature_format"] != ff.FEATURE_FORMAT or definition["frame_format"] != fh.FRAME_FORMAT:
+        print(f"Not scored: the model was frozen with feature format {definition['feature_format']} and frame format "
+              f"{definition['frame_format']}; the code computes {ff.FEATURE_FORMAT} and {fh.FRAME_FORMAT}")
+        return 1
+    started = time.time()
+    baseline = definition["baseline"]["version"]
+    d0, d1 = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
+    loaded = load_days(conn, target, history_start(d0, F.EVENT_SESSIONS + F.SHAPE_SESSIONS), d1)
+    frames = fh.baseline_frames(loaded, d0, d1, baseline)
+    symbols, first_complete = _included(m)
+    sessions = [s.session_date.isoformat() for s in cal.sessions_between(
+        date.fromisoformat(m["split"]["window"]["start"]), d1)]
+    table = ff.build(fp.load_panel(conn, sessions, symbols), target, first_complete)
+    predictor = fm.frozen_predictor(definition, table)
+    res = fh.score_fixed(frames, days, predictor, m, target)
+    fm.check_columns(predictor, definition)
+    res.update(kind="holdout_rehearsal" if args.rehearse else "holdout", experiment=args.name,
+               experiment_hash=exp["definition_hash"], model=record["version"],
+               model_hash=record["definition_hash"], baseline=baseline, code_revision=code_revision(),
+               source=source_snapshot(), data=fp.data_snapshot(conn, symbols, days[-1]))
+    p = res["results"][res["primary"]]
+    print(f"{record['version']} against {baseline} on {len(res['sessions']['scored'])} "
+          f"{'development (rehearsal, in sample)' if args.rehearse else 'holdout'} sessions ({time.time() - started:.0f} s):"
+          f" {res['primary']} {100 * p['diff_share']:+.2f} %, interval [{p['interval'][0]:+.5f}, "
+          f"{p['interval'][1]:+.5f}] bps - {res['verdict']}")
+    title = (f"Holdout rehearsal (in sample - not evidence): {record['version']}" if args.rehearse else
+             f"Holdout: {record['version']} against {baseline} ({args.name}, {target})")
+    preamble = [f"Model `{record['version']}` (definition `{record['definition_hash'][:16]}`), frozen on "
+                f"{len(definition['training_sessions'])} development sessions; experiment `{exp['definition_hash'][:16]}`; "
+                f"code {res['code_revision'][:12]} (source snapshot `{res['source']['snapshot']}`); data "
+                f"`{res['data']['fingerprint']}`.", "",
+                f"**Rule** (fixed before any result): {definition['acceptance']['pass']}; "
+                f"{definition['acceptance']['inconclusive']}; {definition['acceptance']['fail']}."]
+    if args.rehearse:
+        path = os.path.join(FREEZE_DIR, f"{record['version']}_rehearsal.md")
+        print(f"Rehearsal report: {fh.write_fixed_report(res, path, title, preamble)} - nothing stored")
+        return 0
+    result_id = store.save_experiment_result(conn, args.name, res, res["code_revision"])
+    path = os.path.join(args.report_dir, f"fan_holdout_{args.name}_{target}.md")
+    print(f"Stored as result {result_id[:8]}. Report: {fh.write_fixed_report(res, path, title, preamble)}")
+    return 0
 
 
 def _run_path(name, target, candidate):
@@ -602,6 +760,17 @@ def main(argv=None):
                    "(after a backfill revised development sessions)")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("freeze", help="Train the chosen candidate on all of development and freeze it (chunk 7)")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--candidate", required=True, choices=sorted(n for n, s in fm.MODELS.items()
+                                                                 if s.kind in fm.FROZEN_KINDS))
+    p.add_argument("--dry-run", action="store_true", help="Write and check the definition, register nothing")
+    p.add_argument("--allow-dirty", action="store_true", help="Freeze from uncommitted code (its source archived)")
+    p = sub.add_parser("holdout", help="Score the frozen model on the holdout, once (or rehearse the code path)")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--rehearse", action="store_true", help="Run on the last development sessions; store nothing")
+    p.add_argument("--definition", help="--rehearse: a freeze dry run's JSON (data/fan_cache/freeze/)")
+    p.add_argument("--report-dir", default=REPORT_DIR)
     p = sub.add_parser("replay", help="Live-style replay of the leading candidates on predefined check sessions")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--target", help="The primary target by default")
@@ -642,7 +811,8 @@ def main(argv=None):
         return {"register": cmd_register, "now": cmd_now, "score": cmd_score,
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
                 "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
-                "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay}[args.command](conn, args)
+                "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay,
+                "freeze": cmd_freeze, "holdout": cmd_holdout}[args.command](conn, args)
     finally:
         conn.close()
 

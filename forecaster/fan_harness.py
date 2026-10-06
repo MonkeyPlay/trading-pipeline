@@ -671,6 +671,75 @@ def checks(conn, name: str, target: str, make: Callable[[], Candidate], cache_di
     return res
 
 
+HOLDOUT_VERDICT = {"better": "pass", "worse": "fail", "inconclusive": "inconclusive", "no interval": "no interval"}
+
+
+def score_fixed(frames: Dict[str, Frame], days: Sequence[str], cand: Candidate, manifest: Dict[str, Any],
+                target: str) -> Dict[str, Any]:
+    """
+    A fitted candidate - a frozen model, never refitted here - and the baseline on every origin of ``days``: the
+    paired results per key (the manifest's interval), the verdicts, the calibration, how concentrated the primary
+    gain is, and the per-session scores. The holdout's scoring, and its rehearsal on development sessions.
+    """
+    keys = check_keys()
+    main = [f"h{h}" for h in REPORT_HORIZONS] + [f"pre_open_{m}" for m in PRE_OPEN_MINUTES]
+    primary = manifest["horizons"]["primary"]["minutes"]
+    excluded = set(manifest["data"]["excluded"].get(target, []))
+    wanted = [d for d in days if d not in excluded]
+    shapes = {h: q for h in FRAME_HORIZONS if (q := cand.shape(h)) is not None}
+    per, scored, cal = [], [], {}
+    for d in wanted:
+        if d not in frames:
+            continue
+        rows = frame_rows(frames[d])
+        mult = cand.predict(rows)
+        per.append(score_frame(frames[d], rows, mult, shapes))
+        calibrate(frames[d], rows, mult, cal, shapes)
+        scored.append(d)
+    results = {k: paired(per, k) for k in keys}
+    return {"target": target, "candidate": cand.name,
+            "sessions": {"wanted": len(wanted), "scored": scored, "missing": [d for d in wanted if d not in scored],
+                         "excluded": sorted(set(days) & excluded)},
+            "results": results, "verdicts": {k: _verdict(v) for k, v in results.items()},
+            "roles": {k: _role(k, manifest, target) for k in keys},
+            "verdict": HOLDOUT_VERDICT[_verdict(results[f"h{primary}"])], "primary": f"h{primary}",
+            "calibration": {f"{who}|h{h}|{scope}": _cal_summary(t) for (who, h, scope), t in cal.items()},
+            "concentration": concentration(per, scored, f"h{primary}"),
+            "per_session": {d: {k: list(r[k]) for k in main if k in r} for d, r in zip(scored, per)}}
+
+
+def write_fixed_report(res: Dict[str, Any], path: str, title: str, preamble: Sequence[str]) -> str:
+    """A fixed model's scoring (score_fixed) as markdown at ``path``."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    s = res["sessions"]
+    L = [f"# {title}", "", *preamble, "",
+         f"**Sessions:** {len(s['scored'])} of {s['wanted']} scored"
+         + (f" (missing {', '.join(s['missing'])})" if s["missing"] else "") + ". CRPS of the log price in basis "
+         "points (K = 200) on identical origins; the model minus the baseline per session, 95 % moving-block "
+         "bootstrap (5-session blocks, 2000 resamples).", "",
+         f"## Verdict at the primary horizon ({res['primary'][1:]} minutes): **{res['verdict']}**", "",
+         "| Horizon | Role | Sessions | Origins | Baseline CRPS | Model CRPS | Difference | Share | 95 % interval | "
+         "Verdict |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for k in [f"h{h}" for h in REPORT_HORIZONS] + [f"pre_open_{m}" for m in PRE_OPEN_MINUTES]:
+        p = res["results"].get(k)
+        if p is None:
+            continue
+        iv = p["interval"]
+        L.append(f"| {_label(k)} | {res['roles'][k]} | {p['sessions']} | {p['origins']:,} | "
+                 f"{_f(p['base_crps_bps'])} | {_f(p['other_crps_bps'])} | {_f(p['diff_bps'], 5)} | "
+                 f"{'-' if p['diff_share'] is None else f'{100 * p['diff_share']:+.2f} %'} | "
+                 f"{'-' if not iv else f'[{iv[0]:+.5f}, {iv[1]:+.5f}]'} | {res['verdicts'][k]} |")
+    L += ["", "## By origin phase (ET)", "", "| Phase | " + " | ".join(f"{h} min" for h in REPORT_HORIZONS) + " |",
+          "|---|" + "---|" * len(REPORT_HORIZONS)]
+    for name, a, b_ in PHASES:
+        L.append(f"| {name.replace('_', ' ')} {a}-{b_} | "
+                 + " | ".join(_share(res["results"].get(f"h{h}:{name}")) for h in REPORT_HORIZONS) + " |")
+    L += _concentration_lines(res) + _calibration_lines(res) + [""]
+    with open(path, "w") as fh_:
+        fh_.write("\n".join(L))
+    return path
+
+
 def compare_runs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     """Two stored checks runs (run_checks results with 'per_session') paired on the sessions both scored: per main
     key, b's candidate minus a's - their CRPS on identical sessions and origins - with the manifest's interval."""

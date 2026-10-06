@@ -1,6 +1,6 @@
 # The development search under review: fan_intermarket_v2, NQ, 15 minutes
 
-25 stored checks runs, each on the checks' 90 sessions; the loss is a session's mean CRPS. **SPA** (Hansen 2005) asks whether *any* run is better than the benchmark once the search is taken into account - the consistent p-value is the test's, the upper one White's reality check; **StepM** (Romano and Wolf 2005) names the runs that are, holding the chance of naming any wrongly at 5 %. Both resample whole sessions in 5-session blocks (2000 resamples). Development only: neither replaces the sealed holdout, and neither sees the trials below that left no rebuildable definition, nor the choices made by looking at screens.
+25 stored checks runs, each on the checks' 90 sessions; the loss is a session's mean CRPS. **SPA** (Hansen 2005) asks whether *any* run is better than the benchmark once the search is taken into account - the consistent p-value is the test's, the upper one White's reality check; **StepM** (Romano and Wolf 2005) names the runs that are, holding the chance of naming any wrongly at 5 %. Both resample whole sessions in 5-session blocks (2000 resamples). Development only: neither replaces the sealed holdout, and neither sees the trials below that left no rebuildable definition, nor the choices made by looking at screens. Cross-checked against the arch package (8.0.0): with arch's choices - raw mean differences (its `studentize` flag changes nothing in that version) and consistent recentring - this implementation reproduces arch's moving-block p-values and StepM sets; the primary procedure studentises, as Hansen recommends, and the table under each benchmark shows what the choice changes.
 
 ## Against fan_rw_v2 - is any run better than the baseline?
 
@@ -8,6 +8,14 @@ SPA statistic 3.64; p lower 0.002, **consistent 0.003**, upper 0.003. StepM name
 
 | Run | Where it came from | Features | Difference (bps) | Share | t | StepM |
 |---|---|---|---|---|---|---|
+Procedure sensitivity:
+
+| Procedure | SPA p (lower / consistent / upper) | StepM names |
+|---|---|---|
+| studentised, own recentring (Romano and Wolf; the primary) | 0.0020 / 0.0030 / 0.0030 | 12: `crps_ivx`, `gam_ivx`, `gbm_own`, `gbm_own_iv`, `gbm_own_ivx`, `lin_pois_ivx`, `lin_pois_ivx_shape`, `trial_a1_gbm_own`, `trial_abl_c_level`, `trial_abl_d_both_sides`, `trial_own_both_iv`, `trial_own_volatility_f2` |
+| studentised, consistent recentring | 0.0020 / 0.0030 / 0.0030 | 12: `crps_ivx`, `gam_ivx`, `gbm_own`, `gbm_own_iv`, `gbm_own_ivx`, `lin_pois_ivx`, `lin_pois_ivx_shape`, `trial_a1_gbm_own`, `trial_abl_c_level`, `trial_abl_d_both_sides`, `trial_own_both_iv`, `trial_own_volatility_f2` |
+| raw means, consistent recentring (as arch 8.0.0 computes it) | 0.0020 / 0.0020 / 0.0020 | 17: `crps_ivx`, `gam_ivx`, `gbm_all`, `gbm_own`, `gbm_own_iv`, `gbm_own_ivx`, `lin_pois_ivx`, `lin_pois_ivx_shape`, `trial_a1_gbm_own`, `trial_a3_gbm_all_f2`, `trial_abl_b_rv5d`, `trial_abl_c_level`, `trial_abl_d_both_sides`, `trial_add_equity_etfs`, `trial_add_volatility`, `trial_own_both_iv`, `trial_own_volatility_f2` |
+
 | `gbm_own_ivx` | candidate | 17 (`7c0f6e1c82ddb538`) | -0.02746 | -0.40 % | +3.64 | better |
 | `lin_pois_ivx_shape` | candidate | 16 (`61b6a1e0c67b00c2`) | -0.02604 | -0.38 % | +3.15 | better |
 | `lin_pois_ivx` | candidate | 16 (`61b6a1e0c67b00c2`) | -0.02528 | -0.37 % | +3.10 | better |
@@ -40,6 +48,14 @@ SPA statistic 3.59; p lower 0.003, **consistent 0.004**, upper 0.004. StepM name
 
 | Run | Where it came from | Features | Difference (bps) | Share | t | StepM |
 |---|---|---|---|---|---|---|
+Procedure sensitivity:
+
+| Procedure | SPA p (lower / consistent / upper) | StepM names |
+|---|---|---|
+| studentised, own recentring (Romano and Wolf; the primary) | 0.0025 / 0.0045 / 0.0045 | 4: `crps_ivx`, `gam_ivx`, `gbm_own_iv`, `gbm_own_ivx` |
+| studentised, consistent recentring | 0.0025 / 0.0045 / 0.0045 | 4: `crps_ivx`, `gam_ivx`, `gbm_own_iv`, `gbm_own_ivx` |
+| raw means, consistent recentring (as arch 8.0.0 computes it) | 0.0080 / 0.0085 / 0.0085 | 5: `crps_ivx`, `gam_ivx`, `gbm_own_ivx`, `lin_pois_ivx`, `lin_pois_ivx_shape` |
+
 | `gbm_own_ivx` | candidate | 17 (`7c0f6e1c82ddb538`) | -0.01129 | -0.17 % | +3.59 | better |
 | `lin_pois_ivx_shape` | candidate | 16 (`61b6a1e0c67b00c2`) | -0.00987 | -0.15 % | +2.41 | - |
 | `lin_pois_ivx` | candidate | 16 (`61b6a1e0c67b00c2`) | -0.00911 | -0.13 % | +2.24 | - |

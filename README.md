@@ -381,6 +381,8 @@ python scripts/fan.py checks --candidate gbm_own_ivx  # the learned fan on the c
 python scripts/fan.py compare gbm_own_ivx lin_pois_ivx   # two stored runs paired on identical sessions
 python scripts/fan.py replay                          # live-style replay: every input as the store served it
 python scripts/fan.py search                          # SPA and StepM over every stored checks run
+python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition (registers without --dry-run)
+python scripts/fan.py holdout                         # the frozen model on the sealed holdout - once
 ```
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a

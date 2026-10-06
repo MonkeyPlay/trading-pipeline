@@ -141,21 +141,58 @@ def load_panel(conn, sessions: Sequence[str], symbols: Sequence[str], carry_days
     return Panel(sessions, list(symbols), close, age, volume, contract)
 
 
-def fingerprint(conn, symbols: Sequence[str], first: str, last: str) -> str:
-    """The stored data a run read, as one hash: per instrument the count, the exact decimal sum of closes and of
-    volumes of its 1-minute bars from ``first`` to ``last`` (every contract). A backfill or a revised bar changes it."""
+_SNAPSHOT_QUERIES = {
+    # every stored row a computation can read, in a fixed order, timestamps as epoch seconds (no time-zone setting
+    # can change the text); one md5 per symbol and day keeps the aggregation small
+    "bars": """
+        SELECT k.symbol, b.trading_day, md5(string_agg(concat_ws('|', b.contract_id, b.interval, b.price_type,
+               extract(epoch FROM b.timestamp_utc)::bigint, b.open, b.high, b.low, b.close, b.volume, b.is_completed),
+               ';' ORDER BY b.contract_id, b.interval, b.price_type, b.timestamp_utc))
+          FROM bars b JOIN contracts k ON k.contract_id = b.contract_id
+         WHERE k.symbol = ANY(%s) AND b.trading_day <= %s
+         GROUP BY k.symbol, b.trading_day ORDER BY k.symbol, b.trading_day;""",
+    "session_days": """
+        SELECT md5(string_agg(concat_ws('|', k.symbol, d.contract_id, d.interval, d.price_type, d.trading_day, d.status,
+               d.bar_count), ';' ORDER BY k.symbol, d.contract_id, d.interval, d.price_type, d.trading_day))
+          FROM session_days d JOIN contracts k ON k.contract_id = d.contract_id
+         WHERE k.symbol = ANY(%s) AND d.trading_day <= %s;""",
+    "contracts": """
+        SELECT md5(string_agg(concat_ws('|', contract_id, symbol, expiry, exchange, local_symbol), ';'
+               ORDER BY contract_id)) FROM contracts WHERE symbol = ANY(%s);""",
+    "active_contracts": """
+        SELECT md5(string_agg(concat_ws('|', symbol, trading_day, contract_id), ';' ORDER BY symbol, trading_day))
+          FROM active_contracts WHERE symbol = ANY(%s) AND trading_day <= %s;""",
+    "events": """
+        SELECT md5(string_agg(concat_ws('|', extract(epoch FROM scheduled_at)::bigint, name, tier, source), ';'
+               ORDER BY scheduled_at, name, source))
+          FROM economic_events WHERE scheduled_at::date <= %s;""",
+    "event_coverage": """
+        SELECT md5(string_agg(concat_ws('|', covered_from, covered_to), ';' ORDER BY covered_from, covered_to))
+          FROM economic_event_coverage;""",
+}
+
+
+def data_snapshot(conn, symbols: Sequence[str], last: str) -> Dict[str, str]:
+    """The stored inputs of everything up to ``last``, row by row: every bar of ``symbols`` (all columns, every
+    contract, every day to ``last``), their session days, contracts and active-contract mapping, the economic events
+    and their coverage, and the trading calendar's version - each component's hash and one hash of them all
+    ('fingerprint'). Any changed, added or removed row changes it."""
     import hashlib
+    from features import calendar as cal
+    syms = sorted(symbols)
+    out: Dict[str, str] = {}
     h = hashlib.sha256()
-    for symbol in sorted(symbols):
-        inst = Config.instrument(symbol)
-        n, c, v = conn.execute(
-            "SELECT count(*), coalesce(sum(round(b.close::numeric, 6)), 0), coalesce(sum(round(b.volume::numeric, 3)), 0) "
-            "FROM bars b "
-            "JOIN contracts k ON k.contract_id = b.contract_id WHERE k.symbol = %s AND b.interval = '1m' "
-            "AND b.price_type = %s AND b.trading_day BETWEEN %s AND %s;", (symbol, inst.what_to_show, first, last)
-        ).fetchone()
-        h.update(f"{symbol}|{int(n)}|{c}|{v}\n".encode())                # exact decimals: no summation-order noise
-    return h.hexdigest()[:16]
+    for sym, day, digest in conn.execute(_SNAPSHOT_QUERIES["bars"], (syms, last)).fetchall():
+        h.update(f"{sym}|{str(day)[:10]}|{digest}\n".encode())
+    out["bars"] = h.hexdigest()[:16]
+    params = {"session_days": (syms, last), "contracts": (syms,), "active_contracts": (syms, last),
+              "events": (last,), "event_coverage": ()}
+    for name, args in params.items():
+        row = conn.execute(_SNAPSHOT_QUERIES[name], args).fetchone()
+        out[name] = (row[0] or "none")[:16]
+    out["calendar"] = str(cal.CALENDAR_VERSION)
+    out["fingerprint"] = hashlib.sha256("|".join(f"{k}={out[k]}" for k in sorted(out)).encode()).hexdigest()[:16]
+    return out
 
 
 # --------------------------------------------------------------------------

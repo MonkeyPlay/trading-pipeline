@@ -9,8 +9,9 @@ candidate here learns the size of moves, never their direction.
                   missing values read as missing) of z^2 - the squared realised move in
                   v2's sigmas - with Poisson deviance and its log link; the multiplier is
                   sqrt(pred(x) / mean of pred over the training rows): over the training
-                  rows the mean *squared* multiplier is 1 (before clipping) - v2's average
-                  variance is kept, and so the average width multiplier is a little below 1
+                  rows the mean *squared* multiplier is 1 (before clipping) - which fixes
+                  neither the average variance nor the average width, as v2's variance
+                  changes from row to row (docs/fan_experiment.md has them measured)
   LinearScale     the same target and normalisation from a regularised linear Poisson
                   model: numeric features standardised, missing values imputed with the
                   training median beside a missing flag, the minute of the day as origin
@@ -220,9 +221,8 @@ class LinearScale(fh.Candidate, _Features):
         the standardisation, the coefficients (on standardised columns), the intercept and the normaliser."""
         out = {}
         for h, st in self.models.items():
-            m = st["model"]
-            out[str(h)] = {"columns": st["columns"], "intercept": float(m.intercept_),
-                           "coef": [float(c) for c in m.coef_], "median": [float(x) for x in st["median"]],
+            out[str(h)] = {"columns": st["columns"], "intercept": st["intercept"],
+                           "coef": [float(c) for c in st["coef"]], "median": [float(x) for x in st["median"]],
                            "flag": [int(i) for i in st["flag"]], "mu": [float(x) for x in st["mu"]],
                            "sd": [float(x) for x in st["sd"]], "norm": st["norm"], "alpha": self.alpha}
         return out
@@ -235,7 +235,8 @@ class LinearScale(fh.Candidate, _Features):
             state: Dict[str, Any] = {}
             D = self._design(sub, state, fit=True)
             model = PoissonRegressor(alpha=self.alpha, max_iter=1000).fit(D, sub.z ** 2)
-            state["model"], state["norm"] = model, float(np.mean(model.predict(D)))
+            state["coef"], state["intercept"] = np.asarray(model.coef_, dtype=float), float(model.intercept_)
+            state["norm"] = float(np.mean(self._expected(D, state)))
             self.models[h] = state
         if not self.models:
             raise ValueError("no training rows at the model's horizons")
@@ -245,9 +246,26 @@ class LinearScale(fh.Candidate, _Features):
         for h in np.unique(rows.horizon):
             st = self.models[_nearest(self.models, h)]
             sel = rows.horizon == h
-            pred = st["model"].predict(self._design(rows.take(sel), st, fit=False))
+            pred = self._expected(self._design(rows.take(sel), st, fit=False), st)
             out[sel] = np.clip(np.sqrt(pred / st["norm"]), *BOUNDS)
         return out
+
+    @staticmethod
+    def _expected(D: np.ndarray, st: Dict[str, Any]) -> np.ndarray:
+        """E[z^2 | x] from the coefficients: the Poisson model's log link (what PoissonRegressor.predict computes)."""
+        return np.exp(D @ st["coef"] + st["intercept"])
+
+    @classmethod
+    def from_state(cls, table: FeatureTable, features: Sequence[str], fitted: Dict[str, Any], name: str
+                   ) -> "LinearScale":
+        """The model a describe() recorded - a frozen definition's - ready to predict without refitting."""
+        obj = cls(table, features, name, alpha=next(iter(fitted.values()))["alpha"])
+        for h, st in fitted.items():
+            obj.models[int(h)] = {"columns": list(st["columns"]), "coef": np.array(st["coef"], dtype=float),
+                                  "intercept": float(st["intercept"]), "median": np.array(st["median"], dtype=float),
+                                  "flag": np.array(st["flag"], dtype=int), "mu": np.array(st["mu"], dtype=float),
+                                  "sd": np.array(st["sd"], dtype=float), "norm": float(st["norm"])}
+        return obj
 
 
 # --------------------------------------------------------------------------
@@ -521,3 +539,58 @@ def candidate(name: str, table: Optional[FeatureTable], frames: Optional[Dict[st
     if spec.kind == "crps_boost":
         return lambda: CRPSBoost(table, frames, names, name, merged)
     return lambda: ConstantCRPS(frames, name)
+
+
+# --------------------------------------------------------------------------
+# Freezing (chunk 7): one candidate, trained once on all of development
+# --------------------------------------------------------------------------
+
+FROZEN_KINDS = ("linear",)       # a tree model would need its fitted trees serialised beside the definition
+RETRAINING = ("none: the model is frozen as registered - trained once on every development session; it is not refitted "
+              "during the holdout or the forward record, and a refit on newer sessions is a new registered version")
+
+
+def frozen_definition(name: str, cand: fh.Candidate, experiment: Dict[str, Any], baseline: Dict[str, str],
+                      training_sessions: Sequence[str], provenance: Dict[str, Any]) -> Dict[str, Any]:
+    """The 'fan_model' definition of a candidate fitted on ``training_sessions``: everything that issues its fan -
+    the feature list and hash, the fitted state (predictions come from it alone), the baseline whose sigma and shape
+    it scales - with the rules it is judged and kept by, and where the code and the data stood."""
+    spec = MODELS[name]
+    if spec.kind not in FROZEN_KINDS:
+        raise ValueError(f"{name} is a {spec.kind} model: only {', '.join(FROZEN_KINDS)} models can be frozen here")
+    m = experiment["definition"]
+    return {
+        "experiment": {"name": experiment["version"], "definition_hash": experiment["definition_hash"]},
+        "candidate": name, "kind": spec.kind, "feature_set": spec.features,
+        "features": list(cand.feature_names), "features_hash": feature_hash(cand.feature_names),
+        "feature_format": provenance["feature_format"], "frame_format": provenance["frame_format"],
+        "settings": {"alpha": LINEAR_ALPHA} if spec.kind == "linear" else {**SETTINGS, **spec.settings},
+        "baseline": baseline,
+        "issue": {"multiplier": f"sqrt(E[z^2 | x] / its training mean) per horizon, clipped to {list(BOUNDS)}; a "
+                                "horizon without its own model uses the nearest trained one in log minutes",
+                  "distribution": "the baseline's sigma times the multiplier, with the baseline's shape and zero "
+                                  "median (no direction)"},
+        "fitted": cand.describe(),
+        "training_sessions": list(training_sessions), "train_every": fh.TRAIN_EVERY,
+        "retraining": RETRAINING,
+        "acceptance": {**m["gate"], "primary": f"{m['targets']['primary']} at {m['horizons']['primary']['minutes']} "
+                                              "minutes over the holdout's sessions",
+                       "after": "an inconclusive verdict leaves the baseline in place and calls for more untouched "
+                                "sessions - never another candidate on the same holdout"},
+        "provenance": provenance,
+    }
+
+
+def frozen_predictor(definition: Dict[str, Any], table: FeatureTable) -> fh.Candidate:
+    """The frozen model of a registered definition, predicting from its stored state - never refitted."""
+    if definition["kind"] != "linear":
+        raise ValueError(f"no frozen predictor for a {definition['kind']} model")
+    return LinearScale.from_state(table, [n for n in definition["features"] if not n.startswith("base.")],
+                                  definition["fitted"], definition["candidate"])
+
+
+def check_columns(predictor: fh.Candidate, definition: Dict[str, Any]) -> None:
+    """Raises ValueError unless the columns the predictor read are the definition's, in its order."""
+    if list(predictor.feature_names) != list(definition["features"]):
+        raise ValueError(f"the model read {feature_hash(predictor.feature_names)}, its definition names "
+                         f"{definition['features_hash']}")
