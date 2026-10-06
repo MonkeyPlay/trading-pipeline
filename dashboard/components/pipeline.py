@@ -62,6 +62,8 @@ class PipelinePanel:
         self.watching = False                            # it was running while this page was open
         self.preview_possible = False                    # Forecast now has a session to forecast
         self.preview_why = ""                            # which, or why not
+        # Shows the preview (the Session Explorer's Forecast now tab): set by the page.
+        self.show_preview: Callable[[], Any] = lambda: ui.navigate.to("/?view=preview")
 
     # -- layout ---------------------------------------------------------------
 
@@ -101,17 +103,18 @@ class PipelinePanel:
                                  "(18:00 ET the evening before): collects the latest bars, then forecasts in memory - "
                                  "a preview, never stored; the official forecast comes from the 09:31 ET snapshot."
                                  ).classes("text-sm").style(_MUTED)
-                        ui.link("Show the preview", "/forecast?view=preview").classes("text-sm")
+                        ui.button("Show the preview", on_click=self._show_preview).props(
+                            "flat dense no-caps size=sm")
                     self.preview_note = ui.label().classes("text-xs")
                 self.llm_button = ui.button("Run LLM forecast", icon="psychology", on_click=self.llm_forecast).props(
                     "no-caps")
                 with ui.row().classes("w-full items-center gap-4 no-wrap"):
                     ui.label("Arms C (restricted LLM: Claude reads the overnight and premarket structure, matched "
                              "and smoothed like B) and D (synthesis: Claude forecasts from arm B's evidence), "
-                             "date-blinded, for the last sessions up to today or for chosen days (the Forecast page "
-                             "also runs them for its session). Claude requests: you see what would be sent and its "
-                             "rough cost, and confirm, before anything is sent.").classes("text-sm grow").style(
-                        _MUTED)
+                             "date-blinded, for the last sessions up to today or for chosen days (the Session "
+                             "Explorer's forecast also runs them for its day). Claude requests: you see what would "
+                             "be sent and its rough cost, and confirm, before anything is sent.").classes(
+                        "text-sm grow").style(_MUTED)
                     with ui.column().classes("gap-1 shrink-0"):
                         self.llm_mode = ui.toggle({"last": "Last sessions", "days": "Chosen days"}, value="last",
                                                   on_change=self._llm_mode).props("dense no-caps size=sm")
@@ -154,6 +157,10 @@ class PipelinePanel:
 
     # -- actions ----------------------------------------------------------------
 
+    def _show_preview(self) -> None:
+        self.dialog.close()
+        self.show_preview()
+
     def _start(self, key: str, title: str, steps: List[tuple]) -> None:
         try:
             self._follow(RUNNER.start(key, title, steps))
@@ -171,7 +178,7 @@ class PipelinePanel:
         self._start("forecaster", FORECASTER, [("forecaster", forecaster_command())])
 
     def forecast_now(self) -> None:
-        """The dedicated forecast-now job: the latest bars, then the preview (also the Forecast page's button)."""
+        """The dedicated forecast-now job: the latest bars, then the preview (also the forecast's own button)."""
         possible, why = preview_note(datetime.now(timezone.utc))
         if not possible:
             ui.notify(f"Nothing to forecast now: {why}", type="warning", multi_line=True)
@@ -224,7 +231,7 @@ class PipelinePanel:
     async def llm_forecast(self, days: Optional[List[str]] = None, arms: Optional[str] = None,
                            batch: Optional[bool] = None) -> None:
         """
-        The plan of arms C and D over ``days`` (from the Forecast page) or the row's choice - the last sessions or
+        The plan of arms C and D over ``days`` (from the explorer's forecast) or the row's choice - the last sessions or
         the chosen days - then the confirmation; only its Send button issues the one-time approval, for exactly
         those days, that the job needs to send Claude requests (forecaster/approvals.py).
         """

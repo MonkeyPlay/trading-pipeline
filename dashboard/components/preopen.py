@@ -1,7 +1,7 @@
 # dashboard/components/preopen.py
 """
-The pre-open chart of one stored snapshot, for the Forecast page: the session's
-overnight on 2-minute bars from 18:00 to the cutoff, with the frozen references
+The pre-open chart of one stored snapshot, for the Session Explorer's forecast: the
+session's overnight on 2-minute bars from 18:00 to the cutoff, with the frozen references
 (previous RTH high / low / close, ON high / low) and the three moving averages
 computed as the structure annotation computes them (on the 2m bars, seeded at
 18:00). Also the names of P1's price-location levels, as the pages show them.

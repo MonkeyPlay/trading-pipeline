@@ -1,7 +1,8 @@
 # dashboard/app.py
 """
 NiceGUI web application entrypoint for the trading pipeline.
-Opens the database connection, applies the shared chrome, and routes the views.
+Opens the database connection, applies the shared chrome - the header and, below
+it, the session bar whose day every page shows - and routes the views.
 
 Run from the project root:  python -m dashboard.app
 """
@@ -16,13 +17,19 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from typing import Optional, Tuple
+from urllib.parse import urlencode
+
+from fastapi.responses import RedirectResponse
 from nicegui import app, ui
 
 from config import Config
+from contracts import nq_prompt_v2 as defs
 from dashboard.components.pipeline import PipelinePanel
+from dashboard.components.session_bar import SessionBar
 from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
-from dashboard.views.forecast import show_forecast_page
+from dashboard.views.forecast import run_day
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
 
@@ -63,44 +70,57 @@ def _db_status(conn) -> str:
         return f"{describe_dsn(Config.DATABASE_URL)} · schema unknown"
 
 
-def chrome(active: str, conn) -> PipelinePanel:
+def chrome(active: str, conn, day: Optional[str] = None, symbol: Optional[str] = None,
+           contract: Optional[str] = None) -> Tuple[PipelinePanel, SessionBar]:
     """
     Header and navigation shared by every page, with the pipeline's "Update data"
-    control. The page adds its own reload to the returned panel's ``on_update``.
+    control, then the session bar (opened on ``day``, ``symbol`` and ``contract``
+    when given): the navigation carries its selection to the other page, and it
+    reads the database again when a job ends. The page follows the bar's
+    ``on_change`` and adds its own reload to the panel's ``on_update``.
     """
     ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
+    bar = SessionBar(conn, day, symbol, contract)
     with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
         ui.label("Trading Pipeline").classes("text-lg font-medium")
-        for label, target in (("Session Explorer", "/"), ("Forecast", "/forecast"), ("Evaluation", "/evaluation")):
-            button = ui.button(label, on_click=lambda t=target: ui.navigate.to(t))
+        for label, target in (("Session Explorer", "/"), ("Evaluation", "/evaluation")):
+            button = ui.button(label, on_click=lambda t=target: ui.navigate.to(f"{t}?{bar.query()}"))
             button.props("flat no-caps" if label != active else "flat no-caps color=primary")
         ui.space()
         panel = PipelinePanel(conn)
+        panel.show_preview = lambda: ui.navigate.to(f"/?{bar.query()}&view=preview")
         panel.build()
         status = ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
+    bar.build()
     panel.on_update.append(lambda: status.set_text(_db_status(conn)))
-    return panel
+    panel.on_update.append(bar.reload)
+    return panel, bar
 
 
 @ui.page("/")
-def index() -> None:
+def index(day: str = None, symbol: str = None, contract: str = None, run: str = None, view: str = None) -> None:
     conn = connection()
-    panel = chrome("Session Explorer", conn)
-    panel.on_update.append(show_candles_page(conn).reload)
+    if run and not day:                                    # a run opens on its own day
+        day, symbol = run_day(conn, run), defs.SYMBOL
+    panel, bar = chrome("Session Explorer", conn, day, symbol, contract)
+    explorer = show_candles_page(conn, bar, panel, run, view)
+    if bar.date is not None:
+        panel.show_preview = explorer.forecast.show_preview
+        panel.on_update.append(explorer.forecast.reload)
 
 
 @ui.page("/evaluation")
-def evaluation() -> None:
+def evaluation(day: str = None, symbol: str = None, contract: str = None) -> None:
     conn = connection()
-    chrome("Evaluation", conn)
-    show_evaluation_page(conn)
+    _, bar = chrome("Evaluation", conn, day, symbol, contract)
+    show_evaluation_page(conn, bar)
 
 
-@ui.page("/forecast")
-def forecast(run: str = None, view: str = None) -> None:
-    conn = connection()
-    panel = chrome("Forecast", conn)
-    panel.on_update.append(show_forecast_page(conn, run, view, panel).reload)
+@app.get("/forecast")
+def forecast(run: str = None, view: str = None) -> RedirectResponse:
+    """The forecast is part of the Session Explorer now; old links land there."""
+    params = {k: v for k, v in (("run", run), ("view", view)) if v}
+    return RedirectResponse("/" + (f"?{urlencode(params)}" if params else ""))
 
 
 def main() -> None:

@@ -2,29 +2,29 @@
 """
 Candlestick exploration view of the stored sessions.
 
-Three selectors pick what is shown, in this order: the session day - a calendar
-on which only the days with stored bars can be picked, with buttons stepping to
-the previous and the next of them - then an instrument with bars that day (ES,
-NQ, ...), then one of its contracts holding the day (the one active that day
-first). The chart shows the regular session with 15 minutes either side - 09:15
-to 16:15 ET, or to 13:15 on an early close - and draws those extra minutes grey
-on a grey background, with the session VWAP, the opening range, the pre-open
-reference levels and the TradingView indicator's three moving averages
-(features.calculations.calculate_moving_averages).
+The session bar at the top of the page (dashboard/components/session_bar.py)
+picks the session: the day, an instrument with bars that day (ES, NQ, ...) and
+one of its contracts holding the day. The chart shows the regular session with
+15 minutes either side - 09:15 to 16:15 ET, or to 13:15 on an early close - and
+draws those extra minutes grey on a grey background, with the session VWAP, the
+opening range, the pre-open reference levels and the TradingView indicator's
+three moving averages (features.calculations.calculate_moving_averages).
 
 Beside it, one of the day's structural analogues (dashboard/views/analogues.py;
 NQ, the journal symbol, on the days the journal holds a pre-open snapshot of),
 the most similar first: that session on its own contract, drawn the same way at
 the same timeframe. The two charts are linked by time of day - scrolling or
 zooming either moves the other. Below them, the comparison of the session with
-its analogues; a date there picks the analogue shown.
+its analogues; a date there picks the analogue shown. At the bottom, the day's
+NQ forecast (dashboard/views/forecast.py): its stored runs, and the preview
+made by Forecast now.
 
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing charts. The charts are created once per page
 load, so a redraw leaves the user's zoom, scroll and crosshair exactly where
 they were. That holds after the collector or the forecaster has run from the
-header too (``SessionExplorer.reload``): the calendar, the coverage map, the
-session and its analogues are read again in place.
+header too (the bar's ``reload``): the session, its analogues and its forecast
+are read again in place.
 """
 
 from __future__ import annotations
@@ -34,23 +34,14 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from nicegui import ui
 
-from config import Config
 from contracts import nq_prompt_v2 as defs
-from dashboard.components.coverage_map import coverage_map
 from dashboard.components.lightweight_chart import LightweightChart
+from dashboard.components.session_bar import SessionBar, contract_label
 from dashboard.components.spec import build_chart_spec, resample, to_epoch
 from dashboard.views.analogues import AnaloguesPanel
+from dashboard.views.forecast import ForecastPanel
 from database import journal_store as store
-from database.queries import (
-    contracts_for_day,
-    get_bars,
-    get_contract,
-    get_day_bars,
-    get_session_day,
-    list_contracts,
-    list_session_days,
-    symbols_with_day,
-)
+from database.queries import get_bars, get_contract, get_day_bars, get_session_day
 from features import calendar as cal
 from features.calculations import (
     MA_WARMUP_BARS,
@@ -59,9 +50,6 @@ from features.calculations import (
     enrich_candle_timezones,
     pre_open_levels,
 )
-
-# The instrument the page opens on; its current contract is preselected.
-DEFAULT_SYMBOL = "NQ"
 
 # The two charts - the session and an analogue - show the same time of day.
 _SYNC_GROUP = "session-explorer"
@@ -128,34 +116,6 @@ def opening_range(df: Optional[pd.DataFrame], day: str, minutes: int = 15) -> Op
     if w.empty:
         return None
     return {"high": float(w["high"].max()), "low": float(w["low"].min()), "start": start, "end": end}
-
-
-def _is_context_only(symbol: str) -> bool:
-    """Collected as intermarket context (VIX, TNX, DX, SMH, ...), not a target future."""
-    if symbol in Config.SYMBOLS:
-        return False
-    instrument = Config.instrument(symbol)
-    return symbol in Config.CONTEXT_SYMBOLS or (instrument is not None and not instrument.is_future)
-
-
-def day_contracts(conn, symbol: str, day: str) -> List[Any]:
-    """
-    Contracts of ``symbol`` holding ``day``, for the contract selector: the one
-    the collector made active that day first (it holds the day's session
-    before the roll and after it), then as ``database.queries.contracts_for_day``
-    orders them - the closest contract expiring on or after the day first.
-    """
-    ordered = contracts_for_day(conn, symbol, day)
-    row = conn.execute("SELECT contract_id FROM active_contracts WHERE symbol = %s AND trading_day = %s;",
-                       (symbol, day)).fetchone()
-    if row is not None:
-        active = [c for c in ordered if c["contract_id"] == row["contract_id"]]
-        ordered = active + [c for c in ordered if c["contract_id"] != row["contract_id"]]
-    return ordered
-
-
-def _contract_label(contract) -> str:
-    return f"{contract['symbol']} {contract['expiry']}"
 
 
 class SessionPane:
@@ -304,25 +264,17 @@ def _status_badge(conn, pane: SessionPane) -> None:
 
 
 def _caption(day: str, contract) -> str:
-    return f"{pd.Timestamp(day):%a} {day}" + (f" · {_contract_label(contract)}" if contract is not None else "")
+    return f"{pd.Timestamp(day):%a} {day}" + (f" · {contract_label(contract)}" if contract is not None else "")
 
 
 class SessionExplorer:
-    """Holds the view's state and keeps the two charts in step with it."""
+    """Follows the session bar's selection and keeps the two charts, the analogues and the forecast in step with it."""
 
-    def __init__(self, conn) -> None:
+    def __init__(self, conn, bar: SessionBar, panel=None) -> None:
         self.conn = conn
-        self.symbols: List[str] = self._target_symbols()
-
-        # Selected, in the order the controls pick them: day -> symbol -> contract.
-        self.days: List[str] = []                 # the days with bars, newest first
-        self.date: Optional[str] = None
-        self.symbol: Optional[str] = None
-        self.contract = None
-        self.day_contracts: Dict[int, Any] = {}   # contract_id -> contract row, for the selector
+        self.bar = bar
         self.timeframe = "1m"
-        # Set while the selectors are updated from code, so their change events
-        # do not reload the session once per control.
+        # Set while the analogue selector is updated from code, so its change event does not redraw twice.
         self._syncing = False
 
         self.main = SessionPane(conn)             # the selected session
@@ -330,18 +282,7 @@ class SessionExplorer:
         self.analogues = AnaloguesPanel(conn, on_pick=self.pick_analogue)
         self.members: Dict[str, Dict[str, Any]] = {}   # the day's analogues by snapshot id, best first
         self.analogue: Optional[str] = None             # the snapshot id of the one beside the session
-
-    def _target_symbols(self) -> List[str]:
-        """
-        Only the target futures are offered: context instruments are collected for
-        intermarket reference. The collector also records whole futures chains to
-        plan rolls, so only contracts that actually hold bars are offered.
-        """
-        symbols: List[str] = []
-        for c in list_contracts(self.conn, with_data_only=True):
-            if not _is_context_only(c["symbol"]) and c["symbol"] not in symbols:
-                symbols.append(c["symbol"])
-        return symbols
+        self.forecast = ForecastPanel(conn, panel)
 
     # ------------------------------------------------------------------
     # The two charts
@@ -353,8 +294,9 @@ class SessionExplorer:
         default window; ``keep_view`` (a display change only) keeps the window
         being looked at.
         """
-        self.main.show(self.contract, self.date, self.timeframe, keep_view=keep_view)
-        self.main_caption.text = _caption(self.date, self.contract) if self.date else ""
+        bar = self.bar
+        self.main.show(bar.contract, bar.date, self.timeframe, keep_view=keep_view)
+        self.main_caption.text = _caption(bar.date, bar.contract) if bar.date else ""
         self.status.clear()
         with self.status:
             _status_badge(self.conn, self.main)
@@ -365,8 +307,9 @@ class SessionExplorer:
         session the most similar - or ``keep``, the one shown, while it is still
         among them.
         """
-        self.analogue_box.text = f"Analogues of {self.date}" if self.symbol == defs.SYMBOL else "Analogues"
-        self.members = {m["snapshot_id"]: m for m in self.analogues.show(self.date, self.symbol)}
+        day, symbol = self.bar.date, self.bar.symbol
+        self.analogue_box.text = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
+        self.members = {m["snapshot_id"]: m for m in self.analogues.show(day, symbol)}
         options = {sid: f"#{m['rank']}  {m['session_date']}  ·  {float(m['similarity']):.1f}%"
                    for sid, m in self.members.items()}
         first = keep if keep in options else next(iter(options), None)
@@ -409,67 +352,27 @@ class SessionExplorer:
     # Control handlers
     # ------------------------------------------------------------------
 
-    def _choose_symbol(self) -> List[str]:
-        """The instruments with bars on the selected day; keeps the current one when it has."""
-        symbols = symbols_with_day(self.conn, self.date, self.symbols) if self.date else []
-        if self.symbol not in symbols:
-            self.symbol = DEFAULT_SYMBOL if DEFAULT_SYMBOL in symbols else (symbols[0] if symbols else None)
-        return symbols
-
-    def _choose_contract(self, keep: Optional[int] = None) -> Dict[int, str]:
+    def on_selection(self, what: str) -> None:
         """
-        The selected instrument's contracts holding the day; the first (active
-        that day) is chosen - or the contract ``keep`` when it is among them.
+        The bar's selection changed (see dashboard/components/session_bar.py):
+        a new day shows its session, analogues and forecast afresh; a new
+        instrument its session and analogues; a new contract its session. After
+        a job (``"data"``) the same day, analogue, run and window stay, redrawn
+        from the database - a session still in progress grows.
         """
-        contracts = day_contracts(self.conn, self.symbol, self.date) if self.symbol and self.date else []
-        self.day_contracts = {int(c["contract_id"]): c for c in contracts}
-        self.contract = self.day_contracts.get(keep) or (contracts[0] if contracts else None)
-        return {int(c["contract_id"]): _contract_label(c) for c in contracts}
-
-    def _sync_selectors(self, symbols: bool = True, keep_contract: Optional[int] = None) -> None:
-        """Pushes the chosen symbol / contract (and their options) to the controls."""
-        self._syncing = True
-        try:
-            if symbols:
-                self.symbol_select.set_options(self._choose_symbol(), value=self.symbol)
-            options = self._choose_contract(keep_contract)
-            self.contract_select.set_options(
-                options, value=int(self.contract["contract_id"]) if self.contract is not None else None)
-        finally:
-            self._syncing = False
-
-    def on_date(self, event) -> None:
-        if self._syncing:
-            return
-        if not event.value:          # the calendar unpicks its day when that day is clicked again
-            self._set_picker(self.date)
-            return
-        self.date_menu.close()
-        self.date = event.value
-        self._mark_day()
-        self._sync_selectors()
-        self.refresh_session()
-        self._show_analogues()
-
-    def step_day(self, older: int) -> None:
-        """The session ``older`` positions back in the list of days with bars (negative: forward)."""
-        i = self.days.index(self.date) + older if self.date in self.days else -1
-        if 0 <= i < len(self.days):
-            self.date_picker.value = self.days[i]          # on_date follows
-
-    def on_symbol(self, event) -> None:
-        if self._syncing or not event.value:
-            return
-        self.symbol = event.value
-        self._sync_selectors(symbols=False)
-        self.refresh_session()
-        self._show_analogues()
-
-    def on_contract(self, event) -> None:
-        if self._syncing or event.value is None:
-            return
-        self.contract = self.day_contracts[int(event.value)]
-        self.refresh_session()
+        if what == "contract":
+            self.refresh_session()
+        elif what == "symbol":
+            self.refresh_session()
+            self._show_analogues()
+        elif what == "day":
+            self.refresh_session()
+            self._show_analogues()
+            self.forecast.show_day(self.bar.date)
+        else:
+            self.refresh_session(keep_view=True)
+            self._show_analogues(keep=self.analogue)
+            self.forecast.show_day(self.bar.date, keep=True)
 
     def on_timeframe(self, event) -> None:
         self.timeframe = event.value
@@ -485,78 +388,36 @@ class SessionExplorer:
         """An analogue's date clicked in the comparison: shown beside the session."""
         self.analogue_select.value = snapshot_id          # on_analogue follows
 
-    def reload(self) -> None:
-        """
-        Reads the stored sessions again, after the collector or the forecaster
-        ran: the day calendar, the coverage map, and the session shown with its
-        analogues. Showing the newest session, the view moves on to a newer one
-        when there is one; otherwise the same day, contract, analogue and window
-        stay, redrawn from the stored bars - a session still in progress grows.
-        """
-        if not self.days:                                  # built without sessions: build it again
-            ui.navigate.reload()
-            return
-        self.symbols = self._target_symbols()
-        days = list_session_days(self.conn, self.symbols)
-        moved = self.date == self.days[0] and days[0] != self.date
-        self.days = days
-        self._set_day_options()
-        if moved:
-            self.date = days[0]
-            self._set_picker(self.date)
-        self._mark_day()
-        contract = None if moved or self.contract is None else int(self.contract["contract_id"])
-        self._sync_selectors(keep_contract=contract)
-        self.refresh_session(keep_view=not moved)
-        self._show_analogues(keep=None if moved else self.analogue)
-        self.coverage.clear()
-        with self.coverage:
-            coverage_map(self.conn)
-
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
-    def _set_picker(self, day: Optional[str]) -> None:
-        self._syncing = True
-        try:
-            self.date_picker.value = day
-        finally:
-            self._syncing = False
-
-    def _mark_day(self) -> None:
-        """The day field shows the selected day; the step buttons stop at the oldest and the newest day."""
-        self.date_field.value = self.date
-        i = self.days.index(self.date) if self.date in self.days else None
-        self.older_button.set_enabled(i is not None and i + 1 < len(self.days))
-        self.newer_button.set_enabled(i is not None and i > 0)
-
-    def build(self) -> None:
-        days = list_session_days(self.conn, self.symbols)
-        if not days:
-            with ui.card().classes("w-full"):
-                ui.label("No sessions found.").classes("text-lg")
-                ui.label("Run the collector (Update data, above), or populate_mock_data.py.")
+    def build(self, run_id: Optional[str] = None, view: Optional[str] = None) -> None:
+        """The page below the bar; ``run_id`` and ``view`` open the forecast on a run or on Forecast now."""
+        if self.bar.date is None:                          # the bar says why there is nothing to show
             return
+        with self.bar.tools:
+            ui.toggle(
+                ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
+            ).props("dense")
+            ui.button("Fit", icon="fit_screen", on_click=self.fit).props(
+                "flat dense no-caps").tooltip("Show the whole 09:15–16:15 window of both sessions")
 
-        # Opens on the newest NQ session (else the newest of any instrument), on
-        # the contract active that day.
-        newest_default = list_session_days(self.conn, [DEFAULT_SYMBOL], limit=1)
-        self.date = newest_default[0] if newest_default else days[0]
-        symbols = self._choose_symbol()
-        contract_options = self._choose_contract()
-
-        with ui.column().classes("w-full p-4 gap-3"):
-            self._build_controls(days, symbols, contract_options)
+        with ui.column().classes("w-full px-4 pb-4 gap-3"):
             self._build_charts()
             self.analogue_box = ui.expansion("Analogues", icon="compare", value=True).classes("w-full")
             with self.analogue_box:
                 self.analogues.build()
+            self.forecast.build(view)
 
-        if self.contract is None:
+        if self.bar.contract is None:
             ui.notify("No contract holds bars for the selected day.", type="warning")
         self.refresh_session()
         self._show_analogues()
+        self.forecast.show_day(self.bar.date, run_id=run_id)
+        self.bar.on_change.append(self.on_selection)
+        if run_id or view:
+            self.forecast.scroll_into_view()
 
     def _build_charts(self) -> None:
         """The selected session on the left, one of its analogues on the right, linked by time of day."""
@@ -578,56 +439,9 @@ class SessionExplorer:
                         "absolute inset-0 flex items-center justify-center text-sm text-center px-10",
                     ).style(f"{_MUTED};pointer-events:none;z-index:4")
 
-    def _build_day_picker(self, days: List[str]) -> None:
-        """
-        The session day: a field opening a calendar (weeks from Monday) on
-        which only ``days`` can be picked, between buttons stepping to the
-        previous and the next of them.
-        """
-        self.days = days
-        with ui.row().classes("items-center gap-0 no-wrap"):
-            self.older_button = ui.button(icon="chevron_left", on_click=lambda: self.step_day(1)).props(
-                'flat dense round aria-label="Previous session"').tooltip("Previous session")
-            with ui.input("Session day (NY trading day)", value=self.date).props("readonly").classes(
-                    "w-48") as self.date_field:
-                with ui.menu() as self.date_menu:
-                    self.date_picker = ui.date(self.date, on_change=self.on_date).props("first-day-of-week=1")
-                    self._set_day_options()
-                with self.date_field.add_slot("append"):
-                    ui.icon("event").classes("cursor-pointer")
-            self.newer_button = ui.button(icon="chevron_right", on_click=lambda: self.step_day(-1)).props(
-                'flat dense round aria-label="Next session"').tooltip("Next session")
-        self._mark_day()
 
-    def _set_day_options(self) -> None:
-        """The calendar offers ``self.days`` only, its months between the oldest and the newest."""
-        self.date_picker.props(f'navigation-min-year-month="{self.days[-1][:7].replace("-", "/")}" '
-                               f'navigation-max-year-month="{self.days[0][:7].replace("-", "/")}"')
-        self.date_picker._props["options"] = [d.replace("-", "/") for d in self.days]
-        self.date_picker.update()
-
-    def _build_controls(self, days: List[str], symbols: List[str], contract_options: Dict[int, str]) -> None:
-        with ui.row().classes("w-full items-center gap-4"):
-            self._build_day_picker(days)
-            self.symbol_select = ui.select(
-                symbols, value=self.symbol, label="Instrument", on_change=self.on_symbol,
-            ).classes("w-32")
-            self.contract_select = ui.select(
-                contract_options, value=int(self.contract["contract_id"]) if self.contract is not None else None,
-                label="Contract", on_change=self.on_contract,
-            ).classes("w-44")
-            ui.toggle(
-                ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
-            ).props("dense")
-            ui.button("Fit", icon="fit_screen", on_click=self.fit).props(
-                "flat dense no-caps").tooltip("Show the whole 09:15–16:15 window of both sessions")
-            ui.space()
-            self.coverage = ui.element("div")
-            with self.coverage:
-                coverage_map(self.conn)
-
-
-def show_candles_page(conn) -> SessionExplorer:
-    explorer = SessionExplorer(conn)
-    explorer.build()
+def show_candles_page(conn, bar: SessionBar, panel=None, run_id: Optional[str] = None,
+                      view: Optional[str] = None) -> SessionExplorer:
+    explorer = SessionExplorer(conn, bar, panel)
+    explorer.build(run_id, view)
     return explorer

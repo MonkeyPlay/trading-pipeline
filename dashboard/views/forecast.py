@@ -1,9 +1,10 @@
 # dashboard/views/forecast.py
 """
-Forecast (guideline revision 2, 3F): one stored forecast run, read by its run id -
-never recomputed, never silently switched to a newer run. ``/forecast?run=<id>``
-opens a run directly; picking a session lists its runs, newest first, each with its
-status, so a superseded or late run stays visible.
+Forecast (guideline revision 2, 3F), at the bottom of the Session Explorer: the NQ
+forecast of the session bar's day. A stored run is read by its run id - never
+recomputed, never silently switched to a newer run; ``/?run=<id>`` opens a run
+directly (on its day). The day's runs are listed newest first, each with its status,
+so a superseded or late run stays visible.
 
   provenance     run id, lifecycle (issued at the database clock, or why not), mode,
                  versions, code revision, evidence ids and digest, the run it
@@ -20,17 +21,17 @@ status, so a superseded or late run stays visible.
                  latest outcome revision, beside the run's classes - a view, not a
                  score (stage 4 scores registered runs)
 
-Beside the stored runs, the Forecast now tab (``/forecast?view=preview``) shows the
-latest preview (forecaster/preview.py): the next session's forecast from the data so
-far, made by its own button at any time from the session's Globex open - the latest
-bars collected, then the evidence as of now, its rule-based annotation, analogues and
-both arms, all in memory and never stored. The same chart, per-target view and P1
-record as a stored run, with what is not known yet shown as unavailable.
+Beside the stored runs, the Forecast now tab (``/?view=preview``) shows the latest
+preview (forecaster/preview.py): the next session's forecast from the data so far -
+whatever day the bar shows - made by its own button at any time from the session's
+Globex open: the latest bars collected, then the evidence as of now, its rule-based
+annotation, analogues and both arms, all in memory and never stored. The same chart,
+per-target view and P1 record as a stored run, with what is not known yet shown as
+unavailable.
 
-After a job runs from the header, the sessions, runs and preview are read again
-(``ForecastPage.reload``): the run shown stays shown - a run never changes once
-stored - unless it was of the newest session and a newer session now has runs; a
-Forecast now job switches to its tab.
+After a job runs from the header, the day's runs are read again with the bar
+(``show_day(keep=True)``): the run shown stays shown - a run never changes once
+stored. ``reload`` reads the preview again; a Forecast now job switches to its tab.
 """
 
 from __future__ import annotations
@@ -110,82 +111,69 @@ def _record_grid(snapshot, annotation, aset, run) -> None:
             ui.label(basis).classes(_CELL + " break-words text-[10px]").style(_MUTED + ";" + style)
 
 
-class ForecastPage:
-    def __init__(self, conn, run_id: Optional[str] = None, view: Optional[str] = None, panel=None) -> None:
+class ForecastPanel:
+    """
+    Built at the bottom of the Session Explorer: ``show_day(day)`` follows the
+    session bar's day; ``reload`` reads the preview again after a job.
+    """
+
+    def __init__(self, conn, panel=None) -> None:
         self.conn = conn
-        self._load_runs()
-        self.requested = store.get_forecast_run(conn, run_id) if run_id else None
+        self.day: Optional[str] = None
+        self.runs: List[Dict[str, Any]] = []     # the day's runs, newest first
         self.run: Optional[Dict[str, Any]] = None
         self.outcome_shown = False
-        self.view = "preview" if view == "preview" else "stored"
-        self.arm: Optional[str] = None           # the arm shown for the selected session
-        self.current: Dict[str, Dict[str, Any]] = {}   # per arm the session's newest issued run, in full
+        self.arm: Optional[str] = None           # the arm shown for the day
+        self.current: Dict[str, Dict[str, Any]] = {}   # per arm the day's newest issued run, in full
         self.panel = panel                       # the header's job control: its Forecast now starts the preview
         self.preview: Optional[Dict[str, Any]] = None
 
-    def _load_runs(self) -> None:
-        self.runs = store.list_forecast_runs(self.conn, "2000-01-01", "2100-01-01", profile=defs.DEFAULT_PROFILE)
-        self.by_day: Dict[str, List[Dict[str, Any]]] = {}
-        for r in self.runs:
-            self.by_day.setdefault(r["session_date"], []).append(r)
-        self.days = sorted(self.by_day, reverse=True)
-
     def reload(self) -> None:
-        """The stored runs and the preview read again (see the module docstring)."""
+        """After a job: the preview read again, and the tab of a Forecast now or LLM job shown (the day's runs
+        follow the session bar)."""
         self.preview = pv.load()
         self._render_preview()
         if RUNNER.job is not None and RUNNER.job.key == "preview":
             self.tabs.set_value("preview")
         elif RUNNER.job is not None and RUNNER.job.key == "llm":
             self.tabs.set_value("stored")
-        if not self.days:                                  # built without runs: build it again once there are
-            self._load_runs()
-            if self.days:
-                ui.navigate.to(f"/forecast?view={self.tabs.value}")
-            return
-        day, run_id = self.day_select.value, self.run_select.value
-        newest = day == self.days[0]
-        self._load_runs()
-        if newest and self.days[0] != day:
-            self.day_select.set_options(self.days, value=self.days[0])     # pick_day follows
-        else:
-            self.day_select.set_options(self.days)
-            self.pick_day(day, run_id)
+
+    def show_preview(self) -> None:
+        """The Forecast now tab, scrolled to."""
+        self.tabs.set_value("preview")
+        self.box.set_value(True)
+        self.scroll_into_view()
+
+    def scroll_into_view(self) -> None:
+        ui.timer(0.5, lambda: ui.run_javascript(
+            f"document.getElementById('c{self.box.id}')?.scrollIntoView({{behavior: 'smooth'}})"), once=True)
 
     # -- layout ---------------------------------------------------------------
 
-    def build(self) -> None:
-        with ui.column().classes("w-full p-4 gap-3"):
-            with ui.row().classes("w-full items-center gap-6"):
-                ui.label("Forecast").classes("text-2xl font-medium")
-                with ui.tabs(value=self.view).props("dense no-caps inline-label") as self.tabs:
-                    ui.tab("stored", label="Stored runs", icon="inventory_2")
-                    ui.tab("preview", label="Forecast now", icon="bolt")
-            with ui.tab_panels(self.tabs, value=self.view).props("keep-alive").classes("w-full").style(
+    def build(self, view: Optional[str] = None) -> None:
+        view = "preview" if view == "preview" else "stored"
+        self.box = ui.expansion("Forecast", icon="insights", value=True).classes("w-full")
+        with self.box:
+            with ui.tabs(value=view).props("dense no-caps inline-label align=left") as self.tabs:
+                ui.tab("stored", label="Stored runs", icon="inventory_2")
+                ui.tab("preview", label="Forecast now", icon="bolt")
+            with ui.tab_panels(self.tabs, value=view).props("keep-alive").classes("w-full").style(
                     "background:transparent"):
-                with ui.tab_panel("stored").classes("p-0 gap-3"):
+                with ui.tab_panel("stored").classes("p-0 pt-3 gap-3"):
                     self._build_stored()
-                with ui.tab_panel("preview").classes("p-0 gap-3"):
+                with ui.tab_panel("preview").classes("p-0 pt-3 gap-3"):
                     self._build_preview()
 
     def _build_stored(self) -> None:
-        if not self.days:
-            ui.label("No forecast runs yet. The forecaster issues them (Update data, above - the collector "
-                     "runs it too), or: python scripts/nq_journal.py forecast --start 2025-09-01 --end "
-                     "2026-10-02").style(_MUTED)
-            return
-        ui.label(f"Forecasts from each run's frozen evidence, by arm (stage 4): A the prior ({fc.PRIOR_VERSION}, the "
-                 f"earlier sessions alone, the benchmark); B the baseline ({fc.BASELINE_VERSION}, the rule-based "
-                 f"analogues smoothed with the prior); C the restricted LLM ({fc.RESTRICTED_VERSION}, Claude's "
-                 f"overnight and premarket structure, matched and smoothed like B); D the synthesis "
-                 f"({fc.SYNTHESIS_VERSION}, Claude's own forecast from B's evidence). C and D run only when started "
-                 f"by hand (Update data, Run LLM forecast). A historical replay is research on reconstructed "
-                 f"evidence, never a timely live forecast. The realised outcome and the grading stay hidden until "
-                 f"you show them.").classes("text-sm").style(_MUTED)
-        first = self.requested["session_date"] if self.requested else self.days[0]
+        ui.label(f"Forecasts of the session day's NQ session from each run's frozen evidence, by arm (stage 4): A "
+                 f"the prior ({fc.PRIOR_VERSION}, the earlier sessions alone, the benchmark); B the baseline "
+                 f"({fc.BASELINE_VERSION}, the rule-based analogues smoothed with the prior); C the restricted LLM "
+                 f"({fc.RESTRICTED_VERSION}, Claude's overnight and premarket structure, matched and smoothed like "
+                 f"B); D the synthesis ({fc.SYNTHESIS_VERSION}, Claude's own forecast from B's evidence). C and D run "
+                 f"only when started by hand (Update data, Run LLM forecast). A historical replay is research on "
+                 f"reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
+                 f"hidden until you show them.").classes("text-sm").style(_MUTED)
         with ui.row().classes("w-full items-center gap-4"):
-            self.day_select = ui.select(self.days, value=first, label="Session", with_input=True,
-                                        on_change=lambda e: self.pick_day(e.value)).classes("w-52")
             self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
             ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
         with ui.card().classes("w-full gap-3").style("background:#1c212e"):
@@ -200,29 +188,37 @@ class ForecastPage:
                 "grid-template-columns:repeat(4,minmax(0,1fr))")
             ui.separator().style("background:#2a2e39")
             self.grading = ui.column().classes("w-full gap-2")
-        self.provenance = ui.column().classes("w-full gap-0")
-        with ui.row().classes("w-full no-wrap gap-4 items-start"):
-            with ui.column().classes("grow gap-1 min-w-0"):
-                self.chart = LightweightChart(height=520)
-            with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
-                self.targets = ui.column().classes("w-full gap-0")
-        self.outcome = ui.column().classes("w-full gap-0")
-        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
-                "background:#1c212e"):
-            self.record = ui.column().classes("w-full gap-0")
-        self.pick_day(first, self.requested["run_id"] if self.requested else None)
+        with ui.column().classes("w-full gap-3") as self.run_body:
+            self.provenance = ui.column().classes("w-full gap-0")
+            with ui.row().classes("w-full no-wrap gap-4 items-start"):
+                with ui.column().classes("grow gap-1 min-w-0"):
+                    self.chart = LightweightChart(height=520)
+                with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
+                    self.targets = ui.column().classes("w-full gap-0")
+            self.outcome = ui.column().classes("w-full gap-0")
+            with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
+                    "background:#1c212e"):
+                self.record = ui.column().classes("w-full gap-0")
 
     def _run_label(self, r: Dict[str, Any]) -> str:
         arm = _ARMS.get(r["algorithm_version"], r["algorithm_version"])
         return (f"{r['run_id'][:8]} · {arm} · {r['lifecycle_status']} · {r['mode'].replace('_', ' ')} · "
                 f"{str(r['created_at'])[:16]} UTC")
 
-    def pick_day(self, day: Optional[str], run_id: Optional[str] = None) -> None:
-        """The session's arms (the tiles and their comparison), then the runs of the arm shown - the requested
-        run's, the arm shown before when the session has it, else arm B, else the first the session has."""
-        if not day:
-            return
-        runs = self.by_day.get(day, [])
+    def show_day(self, day: Optional[str], run_id: Optional[str] = None, keep: bool = False) -> None:
+        """
+        The day's runs, read again: ``run_id`` opened when it is one of them; ``keep`` keeps the run shown (a run
+        never changes once stored) - after a job, which may have added runs.
+        """
+        self.day = day
+        self.box.text = f"Forecast of NQ {day}" if day else "Forecast"
+        self.runs = store.list_forecast_runs(self.conn, day, day, profile=defs.DEFAULT_PROFILE) if day else []
+        self.pick_day(self.run_select.value if keep else run_id)
+
+    def pick_day(self, run_id: Optional[str] = None) -> None:
+        """The day's arms (the tiles and their comparison), then the runs of the arm shown - the requested
+        run's, the arm shown before when the day has it, else arm B, else the first the day has."""
+        runs = self.runs
         have = {fc.arm_of(r["algorithm_version"]) for r in runs}
         requested = next((r for r in runs if r["run_id"] == run_id), None)
         if requested is not None:
@@ -230,15 +226,20 @@ class ForecastPage:
         elif self.arm not in have:
             self.arm = "B" if "B" in have else next((a for a in fc.ARMS if a in have), None)
         self.current = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in current_runs(runs).items()}
-        self._render_arms(day, runs)
+        self._render_arms(self.day, runs)
         self._render_grading()
         mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == self.arm]
         self.run_select.set_options({r["run_id"]: self._run_label(r) for r in mine},
                                     value=run_id if requested is not None else (mine[0]["run_id"] if mine else None))
+        self.run_select.set_enabled(bool(mine))
+        self.run_body.set_visibility(bool(mine))
+        if not mine:
+            self.run = None
+            self.chart.apply(dict(_EMPTY_SPEC))
 
     def pick_arm(self, arm: str) -> None:
         self.arm = arm
-        self.pick_day(self.day_select.value)
+        self.pick_day()
 
     def _render_arms(self, day: str, runs: List[Dict[str, Any]]) -> None:
         """One tile per arm: whether it ran for the session (issued, failed or no run) and what it rests on; the
@@ -273,12 +274,12 @@ class ForecastPage:
                     ui.label(detail).classes("text-xs break-words").style(_MUTED)
 
     async def _run_llm_for_day(self) -> None:
-        """Arms C and D for the session shown: the same plan and confirmation as Update data (Claude requests are
+        """Arms C and D for the day shown: the same plan and confirmation as Update data (Claude requests are
         sent only after its Send)."""
         if self.panel is None:
             ui.notify("Arms C and D run from the Update data control in the header.", type="warning")
             return
-        await self.panel.llm_forecast(days=[self.day_select.value], arms="CD", batch=False)
+        await self.panel.llm_forecast(days=[self.day], arms="CD", batch=False)
 
     @staticmethod
     def _arm_status(arm: str, mine: List[Dict[str, Any]], current: Optional[Dict[str, Any]]):
@@ -645,7 +646,8 @@ class ForecastPage:
                         ui.label(value).classes(_CELL + " break-words")
 
 
-def show_forecast_page(conn, run_id: Optional[str] = None, view: Optional[str] = None, panel=None) -> ForecastPage:
-    page = ForecastPage(conn, run_id, view, panel)
-    page.build()
-    return page
+
+def run_day(conn, run_id: Optional[str]) -> Optional[str]:
+    """The session day of the stored run ``run_id``, or None for an unknown or malformed id."""
+    run = store.get_forecast_run(conn, run_id) if run_id else None
+    return run["session_date"] if run is not None else None

@@ -1,7 +1,7 @@
 """
 Drive the dashboard in headless Chromium and screenshot what a user sees.
 
-    python drive.py explorer|forecast [--port 8093] [--out /tmp/dashboard-shots]
+    python drive.py explorer|forecast|evaluation [--port 8093] [--out /tmp/dashboard-shots]
 
 Run with a Python that has Playwright (see SKILL.md); it uses the cached
 headless Chromium under ~/.cache/ms-playwright.
@@ -64,18 +64,41 @@ def explorer(page, url, out):
 
 
 def forecast(page, url, out):
-    """The Forecast page: the newest session's newest run - provenance, frozen chart, per-target table, P1 record
-    (the realised outcome stays hidden)."""
-    page.goto(url + "/forecast", timeout=180000)
-    page.wait_for_selector("text=/^Run [0-9a-f-]{36}/", timeout=180000)
+    """The Session Explorer's forecast (at the bottom): the session day's newest run - provenance, frozen chart,
+    per-target table, P1 record (the realised outcome stays hidden)."""
+    page.goto(url + "/", timeout=180000)
+    page.wait_for_selector(".q-badge", timeout=180000)
+    day = page.get_by_label("Session day (NY trading day)").input_value()
+    box = page.locator(".q-expansion-item", has_text="Forecast of NQ").first
+    box.scroll_into_view_if_needed()
     page.wait_for_timeout(2500)
-    page.screenshot(path=f"{out}/forecast.png", full_page=True)
-    print(page.locator("text=/^Run [0-9a-f-]{36}/").first.inner_text())
+    print("day:", day, "-", box.locator(".q-item").first.inner_text().replace("\n", " "))
+    run = page.locator("text=/^Arm [A-D] · .* Run [0-9a-f-]{36}/")
+    print(run.first.inner_text() if run.count() else "no run shown")
+    box.screenshot(path=f"{out}/forecast.png")
+
+
+def evaluation(page, url, out):
+    """The session day carried from the Session Explorer to Evaluation (the previous session), and its cases."""
+    page.goto(url + "/", timeout=180000)
+    page.wait_for_selector(".q-badge", timeout=180000)
+    page.get_by_role("button", name="Previous session").click()
+    page.wait_for_timeout(2000)
+    day = page.get_by_label("Session day (NY trading day)").input_value()
+    page.get_by_role("button", name="Evaluation", exact=True).click()
+    page.wait_for_url("**/evaluation?*", timeout=60000)
+    page.wait_for_selector("text=Session day (NY trading day)", timeout=60000)
+    page.wait_for_timeout(2000)
+    carried = page.get_by_label("Session day (NY trading day)").input_value()
+    print("explorer day:", day, "evaluation day:", carried, "url:", page.url)
+    found = page.locator(f"text=/^Session day {carried}:/")
+    print(found.first.inner_text() if found.count() else "no session-day section (no experiment?)")
+    page.screenshot(path=f"{out}/evaluation.png", full_page=True)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("step", choices=("explorer", "forecast"))
+    parser.add_argument("step", choices=("explorer", "forecast", "evaluation"))
     parser.add_argument("--port", type=int, default=8093)
     parser.add_argument("--out", default="/tmp/dashboard-shots")
     args = parser.parse_args()

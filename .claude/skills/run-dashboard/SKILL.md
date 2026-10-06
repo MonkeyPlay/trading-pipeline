@@ -1,6 +1,6 @@
 ---
 name: run-dashboard
-description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the Session Explorer (the day calendar, the session chart beside an analogue's - linked by time of day - and the comparison below) and the Forecast page (one stored baseline forecast run). Use to see a dashboard change working, not just its tests.
+description: Launch the NiceGUI dashboard on a spare port against the local database and drive it with headless Chromium (Playwright) - the session bar on every page (the day calendar, instrument, contract, coverage), the Session Explorer (the session chart beside an analogue's - linked by time of day - the comparison below, and the day's forecast at the bottom) and Evaluation (the bar's day carried over). Use to see a dashboard change working, not just its tests.
 ---
 
 # Run and drive the dashboard
@@ -33,7 +33,8 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 
 ```bash
 /tmp/pw/bin/python .claude/skills/run-dashboard/drive.py explorer    # both charts and their link, calendar, previous day, 5m
-/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py forecast    # the Forecast page: the newest run, outcome hidden
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py forecast    # the explorer's forecast: the day's newest run, outcome hidden
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py evaluation  # the previous session's day carried to Evaluation
 ```
 
 `--port` (default 8093) and `--out` (default `/tmp/dashboard-shots`) are optional. The step prints what the page shows and ends with `PROBLEMS: none` or the browser errors. **Look at the screenshots** it writes; then check the server log for tracebacks.
@@ -50,7 +51,9 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
   test dashboard at `tp_test` before starting a job you only want to watch.
 - NiceGUI talks over a websocket: wait for the text you need (`wait_for_selector`), never for network idle.
 - `tp_test` is the disposable database for anything that writes (the test suite resets it).
-- The session day is a calendar: click the field labelled "Session day (NY trading day)", then a
+- The session bar (day, instrument, contract) is on every page and travels in the URL
+  (`?day=&symbol=&contract=`); `/?run=<id>` opens a forecast run on its day, `/?view=preview` the
+  Forecast now tab. The session day is a calendar: click the field labelled "Session day (NY trading day)", then a
   `.q-date__calendar-item--in button` with the day's number (days without bars are `--out`); the
   arrows beside it are the buttons "Previous session" and "Next session".
 - Instrument, contract and analogue are selects: click the field, then the item under

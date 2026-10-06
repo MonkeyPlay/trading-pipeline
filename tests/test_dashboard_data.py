@@ -154,7 +154,7 @@ def test_session_window_and_early_close():
 
 def test_day_contracts_put_the_active_contract_first(market):
     conn, _, sessions = market
-    from dashboard.views.candles import day_contracts
+    from dashboard.components.session_bar import day_contracts
     from database.queries import contracts_for_day, set_active_contracts
     recent = sessions[-1].session_date.isoformat()
     held = contracts_for_day(conn, "NQ", recent)
@@ -225,7 +225,8 @@ def test_moving_averages_follow_the_pine_script():
 
 def test_session_explorer_warms_the_moving_averages_up_on_earlier_days(market):
     conn, _, sessions = market
-    from dashboard.views.candles import SessionPane, day_contracts
+    from dashboard.components.session_bar import day_contracts
+    from dashboard.views.candles import SessionPane
     view = SessionPane(conn)
     view.date, view.timeframe = LAST_DAY, "5m"
     view.contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
@@ -247,7 +248,8 @@ def test_a_session_pane_anchors_its_chart_at_its_own_midnight(market):
     """The explorer's two charts - the session and an analogue on another day - line up by clock time: each spec
     carries its day's 00:00 on the chart's (New York wall) clock, and the analogue's asks to follow the session."""
     conn, _, sessions = market
-    from dashboard.views.candles import SessionPane, day_contracts
+    from dashboard.components.session_bar import day_contracts
+    from dashboard.views.candles import SessionPane
     contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
     pane = SessionPane(conn)
     pane.chart = _Chart()
