@@ -78,10 +78,10 @@ def history_start(first: date, sessions: int) -> date:
 def releases(conn, first: date, last: date) -> Tuple[List[dict], List[Tuple[date, date]]]:
     """The economic_events rows scheduled in the sessions' span and every coverage range."""
     lo, hi = day_start(first), day_start(last) + DAY_SLOTS * MINUTE
-    rows = conn.execute("SELECT scheduled_at, name, tier FROM economic_events "
+    rows = conn.execute("SELECT scheduled_at, name, tier, source FROM economic_events "
                         "WHERE scheduled_at >= %s AND scheduled_at < %s ORDER BY scheduled_at;", (lo, hi)).fetchall()
     cov = conn.execute("SELECT covered_from, covered_to FROM economic_event_coverage;").fetchall()
-    events = [{"at": _utc(r[0]), "name": r[1], "tier": r[2]} for r in rows]
+    events = [{"at": _utc(r[0]), "name": r[1], "tier": r[2], "source": r[3]} for r in rows]
     return events, [(date.fromisoformat(_day(a)), date.fromisoformat(_day(b))) for a, b in cov]
 
 
@@ -132,7 +132,7 @@ def load_days(conn, symbol: str, first, last, as_of: Optional[datetime] = None) 
             group = F.event_group(e["name"], e["tier"])
             slot = slot_at(s.session_date, e["at"])
             if group is not None and 0 <= slot < DAY_SLOTS:
-                rel.append(Release(slot, group, e["name"], e["at"]))
+                rel.append(Release(slot, group, e["name"], e["at"], e["source"]))
         complete = status.get((key, cid)) == "COMPLETE"
         if as_of is not None and _utc(as_of) < day_start(s.session_date) + DAY_SLOTS * MINUTE:
             complete = False

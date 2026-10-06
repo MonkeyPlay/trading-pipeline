@@ -88,6 +88,7 @@ class Release:
     group: str
     name: str
     at: datetime
+    source: Optional[str] = None        # its economic_events source (fan_rw_v2 places earnings by it)
 
 
 @dataclass
@@ -151,18 +152,20 @@ def _windowed_mean(values: np.ndarray, half: int, bounds: Sequence[int]) -> np.n
     return out
 
 
-def seasonal(history: Sequence[Day]) -> np.ndarray:
+def seasonal(history: Sequence[Day], windows=None) -> np.ndarray:
     """
     S (contracts/fan.FAN 'seasonal'): per slot the mean squared 1-minute log return over ``history``, release
-    windows left out, squared returns capped at OUTLIER_CAP x the median of their +-7-slot neighbourhood, a slot
-    with fewer than SEASONAL_MIN_SESSIONS valid returns left to the smoothing, smoothed within the phases. A slot
-    nothing trades in (a futures halt) is 0.
+    windows left out (``windows(day)``: tuples ending in each window's first and end slot; v1's by default),
+    squared returns capped at OUTLIER_CAP x the median of their +-7-slot neighbourhood, a slot with fewer than
+    SEASONAL_MIN_SESSIONS valid returns left to the smoothing, smoothed within the phases. A slot nothing trades in
+    (a futures halt) is 0.
     """
     hw = F.SEASONAL_HALF_WINDOW
+    windows = windows or release_windows
     R = np.full((len(history), DAY_SLOTS), np.nan)
     for i, d in enumerate(history):
         x = d.returns ** 2
-        for _, _, lo, hi in release_windows(d):
+        for *_, lo, hi in windows(d):
             x[lo:hi] = np.nan
         R[i] = x
     padded = np.pad(R, ((0, 0), (hw, hw)), constant_values=np.nan)

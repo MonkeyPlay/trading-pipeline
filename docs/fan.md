@@ -119,6 +119,38 @@ newest candle ([dashboard/components/fan.py](../dashboard/components/fan.py), th
 The model and accuracy take a few seconds to load (the 250 sessions behind the release
 multipliers); the explorer does that off its event loop, once per instrument and day.
 
+## Version 2 (`fan_rw_v2`)
+
+Registered 2026-10-06 (hash `cf1c3910d23b9b0f`) for the intermarket fan experiment
+([docs/fan_experiment.md](fan_experiment.md)): v1 with three changes, chosen on the
+experiment's development sessions before its checks (2025-07-21 to 2026-03-02) -
+[contracts/fan.py](../contracts/fan.py) `FAN_V2`, [forecaster/fan_v2.py](../forecaster/fan_v2.py).
+
+- **Releases by name.** At the release minute CPI moved about 140x its usual minute
+  variance, payrolls about 50x, PPI about 28x, ISM Manufacturing about 2x: v1's one "high"
+  multiplier fitted none of them. v2 estimates each release's own multiplier per minute
+  bucket from its earlier releases, shrunk towards its group's with three releases' weight.
+- **Earnings at the close.** The store dates an earnings release by its 8-K filing, which
+  follows the market's reaction and is not known in advance. v2 gives earnings their own
+  group, placed at 16:00 ET of their trading day with windows to the 17:00 halt; a filing
+  before 15:00 or after the day's end is not placed.
+- **A fat-tailed shape.** The issued distribution at h minutes is sigma_h x Q_h: Q_h the
+  empirical quantiles (200 levels) of the standardised errors of the last 120 sessions,
+  made symmetric so the fan keeps no drift; the normal's with fewer than 20 sessions.
+- **The open: no change.** The 09:30-10:30 minutes were forecast at 0.9-1.0 of their
+  realised variance; the pre-open origins' shortfall came from the 08:30 releases, which the
+  first change addresses.
+
+**The gate** (the manifest's rule, decided once on the checks' 90 sessions, 2026-03-03 to
+2026-07-10, result `72b66bb7`): at NQ 15 minutes v2 lowered CRPS by 0.32 %, interval
+[-0.0385, -0.0075] bps - **fan_rw_v2 is the experiment's baseline**. v2 was also better at
+1, 5, 20, 30 and 120 minutes; at 60 and 240 minutes and in the pre-open slice (one origin
+a session) the intervals include zero. Report:
+[docs/reports/fan_rw_v2_gate_fan_intermarket_v2.md](reports/fan_rw_v2_gate_fan_intermarket_v2.md).
+
+The Session Explorer keeps drawing `fan_rw_v1` until the experiment's holdout opens (its
+manifest): no candidate is shown on the holdout's sessions before then.
+
 ## Running it
 
 ```bash

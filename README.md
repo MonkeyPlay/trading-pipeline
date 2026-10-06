@@ -372,7 +372,12 @@ the holdout, `score` refuses a range that reaches into it.
 python scripts/fan.py experiment-register --dry-run   # the manifest, resolved from the store
 python scripts/fan.py experiment-show                 # what is registered, sealed or open
 python scripts/fan.py panel-audit                     # every instrument on the minute grid, audited
+python scripts/fan.py baseline-gate                   # fan_rw_v2 against fan_rw_v1 on the checks (decided once)
 ```
+
+`fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
+fat-tailed shape - passed the gate on 2026-10-06 and is the experiment's baseline
+([docs/fan.md](docs/fan.md#version-2-fan_rw_v2)).
 
 ## Configuration
 

@@ -77,7 +77,9 @@ The primary is never switched to whichever horizon scores best.
   session differences in date order (5-session blocks, 2000 resamples).
 - **Baseline:** `fan_rw_v1`, replaced by `fan_rw_v2` if v2's difference against v1 (NQ,
   15 minutes, the three checks' sessions) has its whole interval below zero - decided
-  before any model is frozen.
+  before any model is frozen. **Decided 2026-10-06: `fan_rw_v2`** (-0.32 %, interval
+  [-0.0385, -0.0075] bps; journal result `72b66bb7`,
+  [report](reports/fan_rw_v2_gate_fan_intermarket_v2.md), [docs/fan.md](fan.md#version-2-fan_rw_v2)).
 - **Verdict on the holdout:** pass when the whole interval lies below zero; inconclusive
   when it includes zero (not promoted on this evidence); fail when it lies above.
 - **Drawing:** the model draws a target's horizon only where its own holdout interval
@@ -160,8 +162,8 @@ records this as a historical test.
 |---|---|---|
 | 0 | Fix the experiment in advance: the manifest, the `fan_experiment` and `fan_model` kinds (migration 0019), the sealed holdout | done: v2 registered 2026-10-06 |
 | 1 | Data: audit each instrument's hours and gaps; the point-in-time panel (every instrument on the target's minute grid with the age of its last value; no-look-ahead tests) | done: every group present through the checks |
-| 2 | `fan_rw_v2` by rules: a multiplier per release type, a fat-tailed shape, the open | next |
-| 3 | Test harness: the three checks, training-row sampling (every 5 minutes), paired intervals per horizon, phase and slice | |
+| 2 | `fan_rw_v2` by rules: a multiplier per release type, a fat-tailed shape, the open | done: v2 passed the gate and is the baseline; the open needed no rule |
+| 3 | Test harness: the three checks, training-row sampling (every 5 minutes), paired intervals per horizon, phase and slice | next: [forecaster/fan_harness.py](../forecaster/fan_harness.py) already scores two versions on identical origins |
 | 4 | Features, each tagged with its instrument and group | |
 | 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | |
 | 6 | Contribution of each instrument (above) | |
@@ -176,6 +178,7 @@ python scripts/fan.py experiment-register --dry-run   # resolve the manifest fro
 python scripts/fan.py experiment-register             # register it (fixed in advance)
 python scripts/fan.py experiment-show                 # the registered manifest; sealed or open
 python scripts/fan.py panel-audit                     # the panel of the development sessions, audited
+python scripts/fan.py baseline-gate                   # fan_rw_v2 against fan_rw_v1 on the checks (decided once)
 ```
 
 `experiment-register` takes `--holdout-end`, `--holdout-sessions`, `--warm-up`,

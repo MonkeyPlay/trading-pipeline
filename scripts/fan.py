@@ -13,6 +13,7 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py experiment-register                             # ... and registered (fixed in advance)
     python scripts/fan.py experiment-show                                 # what is registered, sealed or open
     python scripts/fan.py panel-audit                                     # every instrument on the minute grid
+    python scripts/fan.py baseline-gate                                   # fan_rw_v2 against fan_rw_v1 on the checks
 
 Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
@@ -41,6 +42,7 @@ from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.session_windows import get_trading_day_date
 from forecaster import fan_experiment as fx
+from forecaster import fan_harness as fh
 from forecaster import fan_panel as fp
 from forecaster.fan_benchmark import InsufficientHistory, fan_from, fit, slot_instant
 from forecaster.fan_data import history_start, load_days
@@ -282,6 +284,43 @@ def cmd_panel_audit(conn, args):
     return 0
 
 
+def cmd_baseline_gate(conn, args):
+    """Chunk 2's gate (forecaster/fan_harness.py): fan_rw_v2 against fan_rw_v1 for the primary target over the
+    experiment's checks - which version is the baseline. Decided once: a stored gate is shown, not run again."""
+    try:
+        fx.load_experiment(conn, args.name)
+    except ValueError as e:
+        print(f"{e}: register it first (experiment-register)")
+        return 1
+    done = [r for r in store.experiment_results(conn, args.name) if r["results"].get("kind") == "baseline_gate"]
+    if done:
+        r = done[-1]
+        print(f"Decided {str(r['computed_at'])[:19]} UTC (result {r['result_id'][:8]}): the baseline of {args.name} "
+              f"is {r['results']['baseline']}. A gate is decided once; it is not run again.")
+        return 0
+    created = store.register_version(conn, F.fan_v2_record())          # the candidate is fixed before it is scored
+    print(f"{F.FAN_V2_VERSION}: {'registered' if created else 'already registered'} "
+          f"(hash {F.fan_v2_record()['definition_hash'][:16]})")
+    started = time.time()
+    res = fh.baseline_gate(conn, args.name)
+    res["code_revision"] = code_revision()
+    result_id = store.save_experiment_result(conn, args.name, res, res["code_revision"])
+    print(f"{len(res['sessions']['scored'])} check sessions scored in {time.time() - started:.0f} s "
+          f"({res['sessions']['first']} to {res['sessions']['last']})")
+    print(f"{'':16} {'v1 CRPS':>8} {'v2 CRPS':>8} {'v2 - v1':>9} {'share':>8}  95 % interval")
+    for k, p in res["results"].items():
+        if p is None:
+            continue
+        iv = p["interval"]
+        print(f"{k:16} {p['base_crps_bps']:>8.4f} {p['other_crps_bps']:>8.4f} {p['diff_bps']:>+9.5f} "
+              f"{100 * (p['diff_share'] or 0):>+7.2f}%  " + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "-")
+              + f"  {res['verdicts'][k]}")
+    print(f"Decision (stored as result {result_id[:8]}): the baseline is {res['baseline']}")
+    if not args.no_report:
+        print(f"Report: {fh.write_gate_report(res, args.report_dir, fh.V2_NOTES)}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The benchmark price fan")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -313,6 +352,10 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="Resolve and print the manifest, register nothing")
     p = sub.add_parser("experiment-show", help="A registered fan experiment and whether its holdout is sealed")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p = sub.add_parser("baseline-gate", help="Decide the baseline: fan_rw_v2 against fan_rw_v1 on the checks")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
     p = sub.add_parser("panel-audit", help="Audit the point-in-time panel of an experiment's development sessions")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--report-dir", default=REPORT_DIR)
@@ -326,7 +369,7 @@ def main(argv=None):
             store.register_version(conn, F.fan_record())
         return {"register": cmd_register, "now": cmd_now, "score": cmd_score,
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
-                "panel-audit": cmd_panel_audit}[args.command](conn, args)
+                "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate}[args.command](conn, args)
     finally:
         conn.close()
 

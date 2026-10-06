@@ -135,3 +135,59 @@ FAN: Dict[str, Any] = {
 
 def fan_record() -> Dict[str, Any]:
     return defs._record(FAN_VERSION, "forecast_algorithm", FAN)
+
+
+# --------------------------------------------------------------------------
+# fan_rw_v2 (forecaster/fan_v2.py): v1 with three changes, chosen on the intermarket experiment's development
+# sessions before its checks (docs/fan.md, "Version 2"). Everything not named here is v1's.
+# --------------------------------------------------------------------------
+
+FAN_V2_VERSION = "fan_rw_v2"
+EARNINGS_SOURCE = "sec_earnings"           # economic_events rows of 8-K Item 2.02 earnings releases
+EARNINGS_GROUP = "earnings"
+EARNINGS_ANCHOR_ET = time(16, 0)          # an earnings release is placed at the regular close of its day ...
+EARNINGS_AFTER_ET = time(15, 0)           # ... when filed from 15:00 ET to the day's end; any other is not placed
+EVENT_GROUPS_V2: Dict[str, Dict[str, Any]] = {
+    **EVENT_GROUPS,
+    EARNINGS_GROUP: {"buckets": ((0, 5), (5, 15), (15, 30), (30, 60)), "fallback": (3.0, 2.0, 1.5, 1.3)},
+}
+SHAPE_SESSIONS = 120                      # the shape: standardised errors of the last 120 complete full sessions ...
+SHAPE_MIN_SESSIONS = 20                   # ... at least 20 of them, else the normal shape
+SHAPE_LEVELS = 200                        # quantile levels tau_k = (k - 1/2) / 200
+SHAPE_HORIZONS: Tuple[int, ...] = (1, 2, 3, 5, 8, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1380)
+
+FAN_V2: Dict[str, Any] = {
+    "kind": "benchmark price fan (no machine learning), version 2",
+    "base": FAN_VERSION,
+    "unchanged": "origin, target, the intraday pattern S (its estimator, smoothing and outlier cap), the level l, "
+                 "the reversion, the bounds, the zero drift and the day's end are fan_rw_v1's",
+    "changes": {
+        "releases_by_name": "the event bump E is estimated per release name (CPI, payrolls, ISM, each company's "
+                            "earnings ...) and minute bucket from its own earlier releases within "
+                            f"{EVENT_SESSIONS} sessions, shrunk towards its group's multiplier - itself v1's "
+                            f"estimator - with {EVENT_PRIOR_RELEASES} releases' weight, floored at 1; a name "
+                            "without earlier releases takes its group's multiplier",
+        "earnings_at_the_close": f"economic_events rows of source {EARNINGS_SOURCE} (8-K Item 2.02 at its EDGAR "
+                                 "acceptance time, which follows the market's reaction to the press release) form "
+                                 f"their own group '{EARNINGS_GROUP}', placed at "
+                                 f"{EARNINGS_ANCHOR_ET:%H:%M} ET of their trading day when filed from "
+                                 f"{EARNINGS_AFTER_ET:%H:%M} ET to the day's end (a release's day and side of the "
+                                 "close are known in advance, its minute is not); any other is not placed",
+        "fat_tailed_shape": f"the issued distribution of the log price at t + h is sigma_h x Q_h, where Q_h are "
+                            f"standardised quantiles at {SHAPE_LEVELS} levels tau_k = (k - 1/2)/{SHAPE_LEVELS}: the "
+                            "empirical quantiles of the errors y / sigma at horizon h of the last "
+                            f"{SHAPE_SESSIONS} complete full sessions before the target (each scored on its own "
+                            "walk-forward fit), made symmetric (Q(tau) = (q(tau) - q(1 - tau)) / 2, so no drift and "
+                            f"no skew); estimated at horizons {list(SHAPE_HORIZONS)} and interpolated in log "
+                            f"minutes; the normal's quantiles with fewer than {SHAPE_MIN_SESSIONS} sessions",
+    },
+    "events": {"groups": {g: {"buckets": [list(b) for b in v["buckets"]], "fallback": list(v["fallback"])}
+                          for g, v in EVENT_GROUPS_V2.items()},
+               "seasonal_exclusion": "S leaves out the minutes of every v2 release window (earnings: 16:00-17:00)"},
+    "open": "no change: on the development sessions before the checks the 09:30-10:30 minutes were forecast at "
+            "0.9-1.0 of their realised variance; the pre-open origins' shortfall came from the 08:30 releases",
+}
+
+
+def fan_v2_record() -> Dict[str, Any]:
+    return defs._record(FAN_V2_VERSION, "forecast_algorithm", FAN_V2)
