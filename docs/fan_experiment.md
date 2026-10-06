@@ -582,6 +582,53 @@ after three reproducibility fixes):
   computes for a session range equal the cached development frames exactly. Nothing is
   registered and the holdout is sealed.
 
+## The holdout (chunk 7)
+
+**Frozen** 2026-10-06 on the user's go-ahead: `fan_intermarket_v2_lin_pois_ivx_frozen`
+(definition `cb831885906a169f`), `lin_pois_ivx` trained once on the 243 development sessions,
+from the clean commit `dde9789` (source snapshot `408e55643a9fe58a`, archived under
+data/fan_cache/snapshots), data `59bd1c5a0daa6fd1`. **Scored once** (journal result
+`18c0ba82`, [report](reports/fan_holdout_fan_intermarket_v2_NQ.md)): the 60 holdout sessions,
+2026-07-13 to 2026-10-05, from the stored definition, never refitted.
+
+**Verdict at the primary horizon: pass** - NQ at 15 minutes, CRPS -0.14 %, interval
+[-0.01619, -0.00003] bps: the whole interval below zero, its upper end barely so.
+
+| Horizon | Model minus v2 | 95 % interval (bps) | Verdict |
+|---|---|---|---|
+| 1 min | +0.04 % | [-0.00065, +0.00157] | inconclusive |
+| 5 min | -0.13 % | [-0.00699, -0.00120] | better |
+| **15 min (primary)** | **-0.14 %** | **[-0.01619, -0.00003]** | **pass** |
+| 20 min | -0.16 % | [-0.02102, +0.00069] | inconclusive |
+| 30 min | -0.17 % | [-0.03274, +0.00397] | inconclusive |
+| 60 min | -0.27 % | [-0.08110, +0.01172] | inconclusive |
+| 120 min | -0.07 % | [-0.09152, +0.06775] | inconclusive |
+| 240 min | +0.35 % | [-0.10356, +0.27708] | inconclusive |
+| pre-open 16 / 31 / 61 min | -0.10 / -0.16 / -0.33 % | each across zero | inconclusive |
+
+What else the one evaluation shows:
+
+- **Smaller than on the checks.** -0.14 % against the checks' -0.37 % at 15 minutes - about
+  what selecting the best of some 25 runs on the same 90 sessions predicts (the search
+  review's warning). The pass is real by the rule fixed in advance, and marginal.
+- **Where.** Overnight is where it gains (-0.24 to -0.47 % at 5-60 minutes, each interval
+  below zero), and midday at 5 minutes; after the close it loses (+1.8 to +3.0 % at 1-30
+  minutes, significant at 1, 5 and 30) - the hour the checks had already shown too wide.
+- **Concentrated.** Better in 62 % of sessions, but the five best carry 69 % of the gain
+  (42 % on the checks); no calendar week's removal undoes it.
+- **Too narrow.** The model's 90 % bands covered 88.2-88.8 % at 1-60 minutes against v2's
+  89.4-90.0 %, misses on both sides; its mean 15-minute width 1.8 % below v2's (on the checks
+  it had matched v2's). After the close it was too wide (93.8 %). Its 90 % interval score was
+  better at 5-60 minutes (43.82 against 44.17 bps at 15), worse at 120 and 240.
+
+**What follows, by the manifest.** The model draws NQ's fan only at the horizons whose own
+holdout interval lies below zero - 5 and 15 minutes; v2 draws every other horizon, the
+pre-open slice and ES and RTY (chunk 9). The holdout is spent: a second evaluation needs a
+new experiment version, reported as having seen this one. That the model reads VXN is part
+of what passed, but this result against v2 does not by itself show that reading another
+market adds value - that would need its own matched comparison. The forward record
+(chunk 8) now gathers untouched evidence.
+
 **The freeze (each step the user's decision).** The candidate is `lin_pois_ivx`, unchanged
 (the fourth review: E's edge against `gbm_own` is not a comparison with the nominee, whose
 direct paired comparison with E shows no difference). Remaining, in order: commit the code;
@@ -636,8 +683,8 @@ records this as a historical test.
 | 3 | Test harness: the three checks, training-row sampling (every 5 minutes), paired intervals per horizon, phase and slice | done: `scripts/fan.py checks`; the identity differs by exactly zero, `phase_scale` gains nothing (above) |
 | 4 | Features, each tagged with its instrument and group | done: 119 instrument features + 4 base columns, `scripts/fan.py features` (above) |
 | 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | done: `gbm_own` -0.24 % at 15 min; `gbm_all` no better; with VXN's implied against NQ's realised variance -0.35 to -0.40 % whatever the model; nominee `lin_pois_ivx`; replay passed; the search reviewed (SPA p 0.003 against v2) - above |
-| 6 | Contribution of each instrument (above) | next |
-| 7 | Freeze one model (`fan_model`) and score it once on the holdout | ready: `freeze` and `holdout` built; `lin_pois_ivx` dry run and rehearsal passed; registering and scoring await the user |
+| 6 | Contribution of each instrument (above) | partly, in the research: each group added alone to NQ's own costs, and the one cross-market quantity that helps is VXN's implied against NQ's realised variance (SPA against `gbm_own`, p 0.0045); drop one, Shapley shares and precision not run - they can still follow on the checks |
+| 7 | Freeze one model (`fan_model`) and score it once on the holdout | done: `lin_pois_ivx` frozen (`cb831885906a169f`); holdout **pass**, marginal - -0.14 % at 15 min, interval [-0.01619, -0.00003] bps; draws NQ at 5 and 15 min |
 | 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | |
 | 9 | Dashboard: the model draws the horizons it passed | |
 
