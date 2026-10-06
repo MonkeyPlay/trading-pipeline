@@ -26,7 +26,10 @@ dashboard's database connection or its event loop:
                the journal step), then the preview while one is possible - one
                run a minute while auto mode is on (AUTO, the Session Explorer's
                Auto button), so the chart, the fan and the analogue preview follow
-               the session
+               the session; each run also issues any pending mark of the
+               intermarket fan's forward record (python scripts/fan.py forward
+               issue, forecaster/fan_forward.py: every 15 minutes and 09:29 ET,
+               once the delayed feed has stored the mark's origin bar)
 
 A job is one or more steps, each a process run in turn; Stop ends the running step
 and skips the rest.
@@ -278,15 +281,28 @@ class JobRunner:
             self._log = None
 
 
+def forward_command() -> List[str]:
+    return [sys.executable, os.path.join("scripts", "fan.py"), "forward", "issue"]
+
+
+def forward_due(now: datetime) -> bool:
+    """Whether an auto run tries the fan's forward record (forecaster/fan_forward.py): every run while a session is
+    in progress - the feed is delayed, so a mark is issued by the first run that finds its origin bar stored; the
+    issue itself skips what is issued and says once when a mark's bar is still missing."""
+    return current_session(now) is not None
+
+
 def auto_steps(now: datetime) -> List[Tuple[str, List[str]]]:
     """An auto run's steps at ``now``: the session in progress collected (and the journal step), then the preview
-    while one is possible (forecaster/preview.py)."""
+    while one is possible (forecaster/preview.py), and on an issue minute the fan's forward record."""
     steps = [("collector", collector_command(0))]
     try:
         preview_target(now)
         steps.append(("preview", preview_command()))
     except PreviewUnavailable:
         pass
+    if forward_due(now):
+        steps.append(("forward", forward_command()))
     return steps
 
 

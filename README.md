@@ -383,6 +383,7 @@ python scripts/fan.py replay                          # live-style replay: every
 python scripts/fan.py search                          # SPA and StepM over every stored checks run
 python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition (registers without --dry-run)
 python scripts/fan.py holdout                         # the frozen model on the sealed holdout - once
+python scripts/fan.py forward report                  # the forward record: live issues, scored once final
 ```
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
@@ -395,7 +396,11 @@ against its usual, its recent move, its change since the close, volume, age - ea
 with its instrument and group. `gbm_own` / `gbm_own_iv` / `gbm_all` are the learned fan: v2's
 width scaled per origin by gradient boosting on those features (forecaster/fan_model.py);
 `gbm_own_iv` adds VXN's implied over NQ's realised variance, the cross-market quantity that
-helps, and `gbm_own_ivx` both sides of that comparison beside the ratio. Every checks report
+helps, and `gbm_own_ivx` both sides of that comparison beside the ratio. `lin_pois_ivx` was frozen and passed the sealed holdout
+on 2026-10-06 - marginally (-0.14 % at 15 minutes); it now draws NQ at 5 and 15 minutes.
+Its forward record runs from `scripts/fan_forward.sh` (cron, every 15 minutes - it collects
+NQ and VXN on client id `IB_CLIENT_ID + 2` and issues) or the dashboard's Auto mode, and
+`scripts/run_pipeline.sh` scores it daily. Every checks report
 includes calibration (band coverage, misses on each side, widths, PIT) and how concentrated
 the gain is.
 

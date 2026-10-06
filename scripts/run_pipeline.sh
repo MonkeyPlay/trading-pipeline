@@ -35,3 +35,8 @@ log "Fetching recent candles from IB Gateway..."
 python3 -m collector.ib_collector --days 5 >> "$LOG_FILE" 2>&1
 
 log "Daily collection completed."
+
+# The intermarket fan's forward record: score every issue whose session is now final (chunk 8). A failure here never
+# fails the collection.
+log "Scoring the fan's forward record..."
+python3 scripts/fan.py forward score >> "$LOG_FILE" 2>&1 || log "forward score failed (see above)"

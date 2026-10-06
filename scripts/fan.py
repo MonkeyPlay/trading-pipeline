@@ -24,6 +24,9 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run       # the frozen definition, registered without --dry-run
     python scripts/fan.py holdout --rehearse --definition data/fan_cache/freeze/<version>.json   # the code path, in sample
     python scripts/fan.py holdout                                         # the frozen model on the holdout - once
+    python scripts/fan.py forward issue                                   # the forward record: this mark's forecast
+    python scripts/fan.py forward score                                   # ... scored once its session is final
+    python scripts/fan.py forward report                                  # ... the record so far
 
 Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
@@ -54,6 +57,7 @@ from features import calendar as cal
 from features.session_windows import get_trading_day_date
 from forecaster import fan_experiment as fx
 from forecaster import fan_features as ff
+from forecaster import fan_forward as fwd
 from forecaster import fan_harness as fh
 from forecaster import fan_model as fm
 from forecaster import fan_panel as fp
@@ -634,6 +638,61 @@ def cmd_holdout(conn, args):
     return 0
 
 
+def cmd_forward(conn, args):
+    """Chunk 8, the forward record (forecaster/fan_forward.py): issue the frozen model's forecast for the current mark,
+    score the issues of final sessions, or report the record so far."""
+    exp = fx.load_experiment(conn, args.name)
+    model = fx.frozen_model(conn, exp)
+    if model is None:
+        print(f"{args.name} has no frozen model: nothing to record")
+        return 1
+    if args.action == "issue":
+        if args.at and not args.dry_run:
+            print("--at reads the store as of a past moment: only with --dry-run (the record is prospective)")
+            return 1
+        now = (cal.NY_TZ.localize(datetime.strptime(args.at, "%Y-%m-%d %H:%M:%S")).astimezone(timezone.utc)
+               if args.at else datetime.now(timezone.utc))
+        results = fwd.issue(conn, model, exp, now, code_revision(), CACHE_DIR, dry_run=args.dry_run)
+        if not results:
+            print("No mark pending: no session in progress")
+            return 0
+        lo, hi = fwd.CHART_LEVELS.index(0.05), fwd.CHART_LEVELS.index(0.95)
+        failed = False
+        for res in results:
+            mark = res["mark"]
+            print(f"{res['status']}: the mark {_et(mark.at)} ({mark.session}, origin slot {mark.origin_slot}"
+                  + (", the 09:29 cutoff" if mark.cutoff else "") + ")")
+            failed |= res["status"] == "failed"
+            rec = res.get("issue")
+            if rec:
+                print(f"  origin price {rec['origin_price']:.2f}; shape {rec['shape_id'][:12]}; inputs at the origin: "
+                      + ", ".join(f"{s} {v['age_minutes']:.0f} min old" for s, v in rec["inputs"]["instruments"].items()
+                                  if v["age_minutes"] is not None))
+                for h, f in rec["forecast"].items():
+                    print(f"  {h:>4} min  sigma {f['sigma'] * 1e4:6.2f} bps  multiplier {f['multiplier']:.3f}  90 %: "
+                          f"v2 {f['base'][lo]:.2f}-{f['base'][hi]:.2f}, model {f['model'][lo]:.2f}-{f['model'][hi]:.2f}")
+        return 1 if failed else 0
+    if args.action == "score":
+        done = fwd.score(conn, model, code_revision())
+        print(f"Scored {done['scored']} issue(s); {done['waiting']} wait for their session to be final")
+        return 0
+    s = fwd.summary(conn, model)
+    print(f"{s['model']}: attempts " + (", ".join(f"{k} {v}" for k, v in sorted(s["runs"].items())) or "none"))
+    print(f"{'h':>4} {'issues':>7} {'sessions':>8} {'v2 CRPS':>8} {'model':>8} {'share':>8}  interval        "
+          f"{'cover90 v2/model':>17} {'revised':>8}")
+    for h, e in s["horizons"].items():
+        p = e["paired"]
+        iv = p["interval"] if p else None
+        print(f"{h:>4} {e['issues']:>7} {e['sessions']:>8} {p['base_crps_bps']:>8.4f} {p['other_crps_bps']:>8.4f} "
+              f"{100 * (p['diff_share'] or 0):>+7.2f}%  " + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "(too few)      ")
+              + f" {100 * e['cover90_base']:>7.1f} / {100 * e['cover90_model']:.1f} {100 * e['revised_share']:>7.1f}%")
+    if not args.no_report:
+        path = os.path.join(args.report_dir, f"fan_forward_{s['model']}.md")
+        meta = {"code_revision": code_revision(), "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+        print(f"Report: {fwd.write_report(s, meta, path)}")
+    return 0
+
+
 def _run_path(name, target, candidate):
     return os.path.join(CACHE_DIR, "checks", f"{name}_{target}_{candidate}.json")
 
@@ -760,6 +819,13 @@ def main(argv=None):
                    "(after a backfill revised development sessions)")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("forward", help="The forward record (chunk 8): issue, score or report")
+    p.add_argument("action", choices=("issue", "score", "report"))
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--dry-run", action="store_true", help="issue: build and print, write nothing")
+    p.add_argument("--at", help="issue --dry-run: as of this ET time 'YYYY-MM-DD HH:MM:SS' instead of now")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="report: print only")
     p = sub.add_parser("freeze", help="Train the chosen candidate on all of development and freeze it (chunk 7)")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--candidate", required=True, choices=sorted(n for n, s in fm.MODELS.items()
@@ -812,7 +878,7 @@ def main(argv=None):
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
                 "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
                 "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay,
-                "freeze": cmd_freeze, "holdout": cmd_holdout}[args.command](conn, args)
+                "freeze": cmd_freeze, "holdout": cmd_holdout, "forward": cmd_forward}[args.command](conn, args)
     finally:
         conn.close()
 

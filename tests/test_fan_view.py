@@ -133,4 +133,6 @@ def test_auto_mode_runs_once_a_minute_while_a_session_is_in_progress():
     assert auto.due(_ny(tue, 17, 30).replace(second=10)) is None              # no session in progress
     steps = dict(auto_steps(_ny(tue, 8, 0)))
     assert steps["collector"][-8:-6] == ["--days", "0"] and "preview" in steps   # today only, then the preview
-    assert list(dict(auto_steps(_ny(tue, 11, 0)))) == ["collector"]          # nothing to preview after 09:31
+    assert list(dict(auto_steps(_ny(tue, 11, 3)))) == ["collector", "forward"]   # nothing to preview after 09:31;
+    assert dict(auto_steps(_ny(tue, 11, 0)))["forward"][-2:] == ["forward", "issue"]  # the forward record's pending marks
+    assert list(dict(auto_steps(_ny(tue, 17, 30)))) == ["collector"]                 # no session: nothing pending

@@ -629,6 +629,49 @@ of what passed, but this result against v2 does not by itself show that reading 
 market adds value - that would need its own matched comparison. The forward record
 (chunk 8) now gathers untouched evidence.
 
+## The forward record (chunk 8)
+
+[forecaster/fan_forward.py](../forecaster/fan_forward.py) issues the frozen model and v2 live
+and scores them later - untouched evidence after the holdout, and the only check on what a
+replay cannot see (a bar read live may be revised later):
+
+- **When.** Every 15 minutes of the trading day from 18:15 ET to the 17:00 halt, and at 09:29
+  ET (the P1 cutoff, which adds the pre-open slice's 16, 31 and 61 minutes). Each issue is
+  centred on the bar that closes at its mark. **The IB feed here is delayed** (2026-10-06:
+  NQ's bars reach the store about 11 minutes late, VXN's about 16): a mark is issued by the
+  first run that finds its origin bar stored, within 30 minutes of the mark, from the bars
+  closed by the mark only - the database's `recorded_at` shows each issue's latency. The
+  first attempt, at the 15:15 ET mark on 2026-10-06, found the store at 15:04 and was
+  recorded as stale - which is how the delay was found; the next run, at 15:28, issued the
+  15:00 and 15:15 marks (latency 28 and 13 minutes), the first entries of the record.
+- **From what.** The store as it stood at the mark - bars closed by then
+  (`load_panel(as_of)`, `load_days(as_of)`), the path the replay validated; v2's shape from
+  the 120 sessions before, each session's errors cached once it is complete (equal to the
+  walk-forward's exactly, tested and checked on real sessions); the multiplier from the
+  frozen definition alone.
+- **What is kept** (migration 0021, append-only, the database's clock): every attempt
+  (`fan_forward_runs`: issued; stale - the origin bar not stored yet, said once per mark;
+  failed); per session the shape (`fan_forward_shapes`,
+  the 200 levels the CRPS reads); per issue (`fan_forward_issues`) the origin and its price
+  as read, the features the model read, v2's variance per horizon, per instrument its last
+  bar's age and when the store fetched that day, and per horizon v2's sigma, the model's
+  multiplier and both fans' 13 quantiles; once the session is final
+  (`fan_forward_scores`) the realised move from the origin price as read, the origin bar's
+  later revision, both CRPS and both PITs.
+- **How it runs.** `scripts/fan_forward.sh` - every 15 minutes by cron (with the delayed
+  feed a mark is then issued one run after it; the 09:29 mark needs no timer of its own) -
+  waits 10 s, collects NQ and VXN on its own IB client id (`IB_CLIENT_ID + 2`) and issues
+  every pending mark; the dashboard's Auto mode tries every minute while a session is in
+  progress, so a mark is issued as soon as its bar arrives;
+  `scripts/run_pipeline.sh` (daily) scores; `scripts/fan.py forward report` summarises
+  ([report](reports/fan_forward_fan_intermarket_v2_lin_pois_ivx_frozen.md)). Scheduling is
+  the user's: no cron line or timer is installed by this work. Scoring runs once a session
+  is final in the store (its bars collected more than 2 hours after the halt); the first
+  real scoring is the next daily run's, so `score`'s store path is tested only through its
+  pure part so far.
+- **Nothing is chosen from it.** The frozen model stays as registered; the record says how
+  it does from here on. An interval appears once 10 sessions are scored.
+
 **The freeze (each step the user's decision).** The candidate is `lin_pois_ivx`, unchanged
 (the fourth review: E's edge against `gbm_own` is not a comparison with the nominee, whose
 direct paired comparison with E shows no difference). Remaining, in order: commit the code;
@@ -685,7 +728,7 @@ records this as a historical test.
 | 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | done: `gbm_own` -0.24 % at 15 min; `gbm_all` no better; with VXN's implied against NQ's realised variance -0.35 to -0.40 % whatever the model; nominee `lin_pois_ivx`; replay passed; the search reviewed (SPA p 0.003 against v2) - above |
 | 6 | Contribution of each instrument (above) | partly, in the research: each group added alone to NQ's own costs, and the one cross-market quantity that helps is VXN's implied against NQ's realised variance (SPA against `gbm_own`, p 0.0045); drop one, Shapley shares and precision not run - they can still follow on the checks |
 | 7 | Freeze one model (`fan_model`) and score it once on the holdout | done: `lin_pois_ivx` frozen (`cb831885906a169f`); holdout **pass**, marginal - -0.14 % at 15 min, interval [-0.01619, -0.00003] bps; draws NQ at 5 and 15 min |
-| 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | |
+| 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | running: first issues 2026-10-06 15:00 and 15:15 ET; `forward issue / score / report`, `scripts/fan_forward.sh`, the dashboard's Auto mode, migration 0021; continuous once scheduled (cron, the user's) |
 | 9 | Dashboard: the model draws the horizons it passed | |
 
 ## Commands
@@ -706,6 +749,10 @@ python scripts/fan.py search                          # SPA and StepM over every
 python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition, registered without --dry-run
 python scripts/fan.py holdout --rehearse --definition data/fan_cache/freeze/fan_intermarket_v2_lin_pois_ivx_frozen.json
 python scripts/fan.py holdout                         # the frozen model on the holdout - once
+python scripts/fan.py forward issue                   # the forward record: this mark's forecast (--dry-run to look)
+python scripts/fan.py forward score                   # ... every issue of a final session, once
+python scripts/fan.py forward report                  # ... the record so far
+scripts/fan_forward.sh                                # cron, every 15 minutes: collect NQ and VXN, then issue
 ```
 
 `experiment-register` takes `--holdout-end`, `--holdout-sessions`, `--warm-up`,
