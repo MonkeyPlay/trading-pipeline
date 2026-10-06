@@ -32,7 +32,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -46,7 +46,9 @@ AUDIT_TIMES = ("18:00", "03:00", "08:00", "09:29", "09:45", "12:00", "16:00", "1
 _BARS = """
     SELECT timestamp_utc, close, volume FROM bars
      WHERE contract_id = %s AND interval = '1m' AND price_type = %s AND trading_day BETWEEN %s AND %s
+       AND timestamp_utc <= %s
      ORDER BY timestamp_utc;"""
+_FOREVER = datetime(9999, 1, 1, tzinfo=timezone.utc)
 
 
 def _epoch_minutes(values) -> np.ndarray:
@@ -100,8 +102,12 @@ class Panel:
         return self.close[i, j], self.age[i, j], self.volume[i, j]
 
 
-def load_panel(conn, sessions: Sequence[str], symbols: Sequence[str], carry_days: int = CARRY_DAYS) -> Panel:
-    """The panel of ``sessions`` (trading days, YYYY-MM-DD) for ``symbols``, each on its active contract."""
+def load_panel(conn, sessions: Sequence[str], symbols: Sequence[str], carry_days: int = CARRY_DAYS,
+               as_of: Optional[datetime] = None) -> Panel:
+    """The panel of ``sessions`` (trading days, YYYY-MM-DD) for ``symbols``, each on its active contract; with
+    ``as_of`` (aware) only the bars that had closed by then - a bar starting at minute m closes at m + 1 - as a
+    forecast issued at ``as_of`` would have read the store."""
+    last_start = _FOREVER if as_of is None else as_of.astimezone(timezone.utc) - timedelta(minutes=1)
     sessions = sorted(str(s)[:10] for s in sessions)
     n, k = len(sessions), len(symbols)
     close = np.full((n, k, DAY_SLOTS), np.nan)
@@ -122,7 +128,7 @@ def load_panel(conn, sessions: Sequence[str], symbols: Sequence[str], carry_days
                 by_contract[active[d]].append(i)
         for cid, rows in by_contract.items():
             first = date.fromisoformat(sessions[rows[0]]) - timedelta(days=carry_days + 1)
-            bars = conn.execute(_BARS, (cid, inst.what_to_show, first, sessions[rows[-1]])).fetchall()
+            bars = conn.execute(_BARS, (cid, inst.what_to_show, first, sessions[rows[-1]], last_start)).fetchall()
             minutes = _epoch_minutes([b[0] for b in bars])
             order = np.argsort(minutes, kind="stable")
             minutes = minutes[order]
@@ -133,6 +139,23 @@ def load_panel(conn, sessions: Sequence[str], symbols: Sequence[str], carry_days
                 close[i, j], age[i, j], volume[i, j] = series(starts[sessions[i]], minutes, closes, volumes,
                                                               carry_days * DAY_SLOTS)
     return Panel(sessions, list(symbols), close, age, volume, contract)
+
+
+def fingerprint(conn, symbols: Sequence[str], first: str, last: str) -> str:
+    """The stored data a run read, as one hash: per instrument the count, the exact decimal sum of closes and of
+    volumes of its 1-minute bars from ``first`` to ``last`` (every contract). A backfill or a revised bar changes it."""
+    import hashlib
+    h = hashlib.sha256()
+    for symbol in sorted(symbols):
+        inst = Config.instrument(symbol)
+        n, c, v = conn.execute(
+            "SELECT count(*), coalesce(sum(round(b.close::numeric, 6)), 0), coalesce(sum(round(b.volume::numeric, 3)), 0) "
+            "FROM bars b "
+            "JOIN contracts k ON k.contract_id = b.contract_id WHERE k.symbol = %s AND b.interval = '1m' "
+            "AND b.price_type = %s AND b.trading_day BETWEEN %s AND %s;", (symbol, inst.what_to_show, first, last)
+        ).fetchone()
+        h.update(f"{symbol}|{int(n)}|{c}|{v}\n".encode())                # exact decimals: no summation-order noise
+    return h.hexdigest()[:16]
 
 
 # --------------------------------------------------------------------------

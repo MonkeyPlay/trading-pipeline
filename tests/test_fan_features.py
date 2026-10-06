@@ -105,6 +105,21 @@ def test_known_values_on_a_deterministic_market():
     assert table.X[i, t, _col(table, "VIX.level")] == pytest.approx(np.log(panel.close[i, 1, t]), rel=1e-6)
 
 
+def test_implied_over_realised_reads_the_targets_previous_five_days():
+    panel = _panel()
+    table = ff.build(panel, "NQ", START)
+    c = _col(table, "VIX.iv_rv")
+    day = (DAY_SLOTS - 1) * A * A                         # every minute but the first moves A
+    i, t = 12, 700
+    want = np.log((panel.close[i, 1, t] / 100) ** 2 / ff.TRADING_DAYS / day)
+    assert table.X[i, t, c] == pytest.approx(want, rel=1e-5)
+    assert np.isnan(table.X[:ff.IV_RV_SESSIONS, :, c]).all()          # five sessions of the target first
+    assert "NQ.iv_rv" not in [f.name for f in table.features] and "SPY.iv_rv" not in [f.name for f in table.features]
+    rv5d = table.X[i, t, _col(table, "NQ.rv5d")]
+    assert rv5d == pytest.approx(np.log(day), rel=1e-6)                 # the comparison's other side
+    assert np.isnan(table.X[:ff.IV_RV_SESSIONS, :, _col(table, "NQ.rv5d")]).all()
+
+
 def test_the_change_since_the_close_reads_13_00_after_an_early_close():
     panel = _panel(seed=6)
     early = panel.sessions.index("2025-11-28")

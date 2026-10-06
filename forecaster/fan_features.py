@@ -17,8 +17,14 @@ Per instrument, at origin slot t of a session, from values known at t only:
            futures and stocks only (an index has no volume)
   age      log(1 + minutes since its last bar closed)
   day_rv   the previous session's whole realised variance over its usual: log(ratio + 0.01)
+  rv5d     the log of its mean realised daily variance over the previous IV_RV_SESSIONS sessions
+           (all of them with data, else missing) - the level iv_rv compares against
   level    the log of its value - the volatility indices only (VIX and VXN are implied
            volatilities; another instrument's price level says nothing about size)
+  iv_rv    the volatility indices only: the daily variance its value implies, (value / 100)^2
+           / 252, over the target's mean realised daily variance of the previous IV_RV_SESSIONS
+           sessions (log ratio) - what the options market expects against what the target has
+           done; the one cross-market quantity the target's own history cannot hold
 
 "Usual": the mean over the previous NORM_SESSIONS full sessions in which the instrument has
 data, NaN with fewer than NORM_MIN - a feature that needs history is missing until it has
@@ -63,7 +69,9 @@ RV_WINDOWS = (5, 15, 60, 240)
 RET_WINDOWS = (15, 60)
 VOLUME_WINDOW = 60
 LEVEL_GROUPS = ("volatility",)
-FEATURE_FORMAT = 1            # bump when a feature's definition changes
+IV_RV_SESSIONS = 5            # the target's realised daily variance behind iv_rv
+TRADING_DAYS = 252            # an implied volatility is annual: its daily variance is (value / 100)^2 / 252
+FEATURE_FORMAT = 3            # bump when a feature's definition changes (2: iv_rv; 3: rv5d)
 RATIO_FLOOR = 0.01            # log(ratio + 0.01): a minute without trades stays finite
 BASE = ("base.log_sigma", "base.release_ahead", "base.minute", "base.weekday")
 _CLOSE_SLOT = {"full": slot_of_time(time(16, 0)) - 1, "early_close": slot_of_time(time(13, 0)) - 1}
@@ -84,9 +92,9 @@ def _families(symbol: str) -> List[str]:
         raise ValueError(f"unknown instrument {symbol!r}")
     if inst.sec_type != "IND":
         fams.append(f"vol{VOLUME_WINDOW}")
-    fams += ["age", "day_rv"]
+    fams += ["age", "day_rv", "rv5d"]
     if _group(symbol) in LEVEL_GROUPS:
-        fams.append("level")
+        fams += ["level", "iv_rv"]
     return fams
 
 
@@ -137,10 +145,12 @@ def _standardised(x: np.ndarray, usual: np.ndarray) -> np.ndarray:
 
 
 def instrument_features(close: np.ndarray, age: np.ndarray, volume: np.ndarray, has: np.ndarray, full: np.ndarray,
-                        close_slot: np.ndarray, families: Sequence[str]) -> Dict[str, np.ndarray]:
+                        close_slot: np.ndarray, families: Sequence[str],
+                        target_day_rv: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
     """One instrument's ``families`` (sessions x 1440 each) from its panel rows; ``has``: the sessions it has data
     for, ``full``: full-schedule sessions (the usual is read from those with data), ``close_slot``: each session's
-    regular-close bar."""
+    regular-close bar; ``target_day_rv``: per session the target's mean realised daily variance of the sessions
+    before it (iv_rv)."""
     n = len(close)
     t = np.arange(DAY_SLOTS)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -151,8 +161,9 @@ def instrument_features(close: np.ndarray, age: np.ndarray, volume: np.ndarray, 
     C = np.concatenate([np.zeros((n, 1)), np.cumsum(r * r, axis=1)], axis=1)
     src = has & full
     out: Dict[str, np.ndarray] = {}
-    for w in sorted({int(f[2:]) for f in families if f.startswith("rv")} | {int(f[3:]) for f in families
-                                                                            if f.startswith("ret")}):
+    windows = {int(f[2:]) for f in families if f.startswith("rv") and f[2:].isdigit()}
+    windows |= {int(f[3:]) for f in families if f.startswith("ret") and f[3:].isdigit()}
+    for w in sorted(windows):
         lo = np.maximum(0, t - w + 1)
         rv = C[:, t + 1] - C[:, lo]
         usual = _usual(rv, src)
@@ -181,8 +192,13 @@ def instrument_features(close: np.ndarray, age: np.ndarray, volume: np.ndarray, 
         day = np.full(n, np.nan)
         day[1:] = np.where(has[:-1], ratio[:-1], np.nan)   # known from the next session's first minute
         out["day_rv"] = np.repeat(day[:, None], DAY_SLOTS, axis=1)
+    if "rv5d" in families:
+        out["rv5d"] = np.repeat(np.log(_prior_days(C[:, -1], has))[:, None], DAY_SLOTS, axis=1)
     if "level" in families:
         out["level"] = lp.copy()
+    if "iv_rv" in families and target_day_rv is not None:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out["iv_rv"] = np.log((close / 100) ** 2 / TRADING_DAYS / target_day_rv[:, None])
     for k in out:
         out[k] = np.where(has[:, None] & np.isfinite(lp), out[k], np.nan)
     return out
@@ -218,6 +234,33 @@ class FeatureTable:
         return np.hstack([B.astype(np.float32), X]), base + [self.features[j] for j in cols]
 
 
+def _prior_days(day: np.ndarray, has: np.ndarray, k: int = IV_RV_SESSIONS) -> np.ndarray:
+    """Per session, the mean of ``day`` over the ``k`` sessions before it - NaN unless all ``k`` have data."""
+    x = np.where(has, day, np.nan)
+    out = np.full(len(x), np.nan)
+    for i in range(k, len(x)):
+        w = x[i - k:i]
+        if np.isfinite(w).all():
+            out[i] = w.mean()
+    return out
+
+
+def target_day_rv(panel: Panel, target: str, k: int = IV_RV_SESSIONS) -> Optional[np.ndarray]:
+    """Per session, the mean over the ``k`` sessions before it of the target's realised daily variance (the sum of its
+    squared 1-minute log returns over the day's grid); NaN for the first ``k``. None without the target."""
+    if target not in panel.symbols:
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        lp = np.log(panel.close[:, panel.symbols.index(target)])
+    r = np.zeros_like(lp)
+    r[:, 1:] = lp[:, 1:] - lp[:, :-1]
+    day = (np.nan_to_num(r) ** 2).sum(axis=1)
+    out = np.full(len(day), np.nan)
+    for i in range(k, len(day)):
+        out[i] = day[i - k:i].mean()
+    return out
+
+
 def build(panel: Panel, target: str, first_complete: Dict[str, Optional[str]]) -> FeatureTable:
     """The feature table of ``panel`` (every open session in date order) for ``target``; an instrument's features
     are missing before its ``first_complete`` session."""
@@ -228,11 +271,12 @@ def build(panel: Panel, target: str, first_complete: Dict[str, Optional[str]]) -
     specs = [f for f in catalogue(panel.symbols, target) if f.instrument is not None]
     col = {f.name: i for i, f in enumerate(specs)}
     X = np.full((len(sessions), DAY_SLOTS, len(specs)), np.nan, dtype=np.float32)
+    day_rv = target_day_rv(panel, target)
     for j, sym in enumerate(panel.symbols):
         start = first_complete.get(sym)
         has = np.array([start is not None and d >= start for d in sessions]) & np.isfinite(panel.close[:, j]).any(axis=1)
         feats = instrument_features(panel.close[:, j], panel.age[:, j], panel.volume[:, j], has, full, close_slot,
-                                    _families(sym))
+                                    _families(sym), day_rv)
         for fam, arr in feats.items():
             X[:, :, col[f"{sym}.{fam}"]] = arr
     return FeatureTable(list(sessions), target, specs, X)

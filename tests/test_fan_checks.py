@@ -157,3 +157,46 @@ def test_roles_follow_the_manifest(setup):
     assert (role("h15", "ES"), role("h5", "RTY"), role("pre_open_16", "ES")) == ("secondary", "exploratory",
                                                                                    "exploratory")
     assert role("h15:midday") == role("h15:release") == "exploratory"
+
+
+def test_training_rows_can_start_at_another_minute_of_the_five(setup):
+    _, frames, _ = setup
+    fr = next(iter(frames.values()))
+    r = fh.frame_rows(fr, every=5, offset=2)
+    assert set(r.slot[r.horizon == 15] % 5) == {2} and list(r.slot[r.horizon == 16]) == [fh.PRE_OPEN_ORIGIN]
+
+
+def test_calibration_counts_misses_on_each_side_and_widths(setup):
+    _, frames, manifest = setup
+    res = fh.run_checks(frames, manifest, "NQ", lambda: _Fixed(1.6))
+    b, c = res["calibration"]["base|h15|all"], res["calibration"]["cand|h15|all"]
+    assert b["n"] == c["n"] == res["results"]["h15"]["origins"]
+    for k in ("0.50", "0.90"):
+        assert c["coverage"][k] > b["coverage"][k]                                  # wider covers more
+        assert c["width_bps"][k] == pytest.approx(1.6 * b["width_bps"][k], rel=1e-9)
+        assert b["coverage"][k] == pytest.approx(1 - b["below"][k] - b["above"][k])
+    assert abs(b["coverage"]["0.90"] - 0.90) < 0.05 and sum(b["pit"]) == pytest.approx(1.0)
+    assert "base|h15|midday" in res["calibration"]
+
+
+def test_concentration_of_the_gain():
+    rows = [{"h15": (1.0, 1.0 + x, 10)} for x in (-0.5, -0.1, -0.1, 0.2, -0.1, -0.1, -0.1)]
+    days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-09", "2026-03-10", "2026-03-16", "2026-03-17"]
+    c = fh.concentration(rows, days, "h15")
+    assert c["sessions"] == 7 and c["improved"] == pytest.approx(6 / 7) and c["weeks"] == 3
+    assert c["top5_share"] == pytest.approx(-0.9 / -0.8)                    # five best carry more than the total
+    assert c["worst5_bps"] == pytest.approx(-0.2) and c["leave_week_out"]["weeks_flipping_sign"] == 0
+
+
+def test_two_stored_runs_pair_on_identical_sessions(setup):
+    _, frames, manifest = setup
+    a = fh.run_checks(frames, manifest, "NQ", fh.Identity)
+    b = fh.run_checks(frames, manifest, "NQ", lambda: _Fixed(1.6))
+    assert len(a["per_session"]) == 3 * BLOCK and set(a["per_session"]) == set(b["per_session"])
+    c = fh.compare_runs(a, b)
+    assert c["sessions"] == 3 * BLOCK and c["verdicts"]["h15"] == "worse"
+    assert c["results"]["h15"]["diff_bps"] == pytest.approx(b["results"]["h15"]["diff_bps"])   # identity: v2 itself
+    other = dict(b, per_session={d: {k: [v[0] * 2, v[1], v[2]] for k, v in r.items()}
+                                 for d, r in b["per_session"].items()})
+    with pytest.raises(ValueError):
+        fh.compare_runs(a, other)                                    # a different baseline is not comparable

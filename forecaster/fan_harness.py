@@ -71,6 +71,7 @@ PRE_OPEN_ORIGIN = slot_of_time(time(9, 28))              # the bar ending 09:29:
 PRE_OPEN_MINUTES = (16, 31, 61)                          # to 09:45, 10:00 and 10:30
 FRAME_HORIZONS = tuple(sorted(set(REPORT_HORIZONS) | set(PRE_OPEN_MINUTES)))
 TRAIN_EVERY = 5                                          # training rows: origins on the 5-minute marks (slot 0 = 18:00)
+COVERAGE = (0.50, 0.80, 0.90, 0.95)                      # the central bands the calibration reports
 FRAME_FORMAT = 1                                         # bump when a cached frame's content changes
 Version = Tuple[FanModel, Callable[[int], np.ndarray]]   # a fitted model and its standardised quantiles per horizon
 # How fan_rw_v2's changes were chosen: diagnostics on the development sessions before the checks (2025-07-21 to
@@ -359,6 +360,10 @@ class Rows:
         """The realised move in the baseline's sigmas."""
         return self.y / np.sqrt(self.var)
 
+    def take(self, sel: np.ndarray) -> "Rows":
+        """The rows ``sel`` (a mask or indices) selects."""
+        return Rows(*(getattr(self, f)[sel] for f in Rows.__dataclass_fields__))
+
     @staticmethod
     def concat(parts: Sequence["Rows"]) -> "Rows":
         if not parts:
@@ -366,10 +371,10 @@ class Rows:
         return Rows(*(np.concatenate([getattr(p, f) for p in parts]) for f in Rows.__dataclass_fields__))
 
 
-def frame_rows(fr: Frame, horizons: Sequence[int] = REPORT_HORIZONS, every: int = 1) -> Rows:
-    """The frame's scored origins at ``horizons`` whose slot is a multiple of ``every``, and the pre-open slice's
-    one origin at PRE_OPEN_MINUTES. An origin is scored with a price at both ends inside the trading day and a
-    positive baseline variance."""
+def frame_rows(fr: Frame, horizons: Sequence[int] = REPORT_HORIZONS, every: int = 1, offset: int = 0) -> Rows:
+    """The frame's scored origins at ``horizons`` whose slot is ``offset`` past a multiple of ``every``, and the
+    pre-open slice's one origin at PRE_OPEN_MINUTES. An origin is scored with a price at both ends inside the
+    trading day and a positive baseline variance."""
     t = np.arange(DAY_SLOTS)
     lp = fr.log_price
     parts = []
@@ -378,7 +383,7 @@ def frame_rows(fr: Frame, horizons: Sequence[int] = REPORT_HORIZONS, every: int 
         ok = np.isfinite(lp) & (t + h < fr.end)
         ok[ok] &= np.isfinite(lp[(t + h)[ok]])
         ok &= np.isfinite(fr.var[i]) & (np.nan_to_num(fr.var[i]) > fan_v2.MIN_VARIANCE)
-        sel = ok & (t % every == 0) if h in horizons else np.zeros(DAY_SLOTS, dtype=bool)
+        sel = ok & (t % every == offset % every) if h in horizons else np.zeros(DAY_SLOTS, dtype=bool)
         if h in PRE_OPEN_MINUTES:
             sel[PRE_OPEN_ORIGIN] = ok[PRE_OPEN_ORIGIN]
         o = t[sel]
@@ -394,8 +399,8 @@ class Candidate:
     A learned fan in the checks. ``fit`` gets the training rows - the development sessions before the check,
     sampled every TRAIN_EVERY minutes plus the pre-open slice's origin - and ``predict`` gives each row a
     multiplier of the baseline's sigma (finite, > 0). The candidate's fan is the baseline's, sigma x multiplier,
-    with the baseline's shape. Features beyond the rows (the panel, chunk 4) are the candidate's own: a row names
-    its session and origin slot.
+    with the baseline's shape unless shape() gives its own. Features beyond the rows (the panel, chunk 4) are the
+    candidate's own: a row names its session and origin slot.
     """
     name = "candidate"
 
@@ -404,6 +409,10 @@ class Candidate:
 
     def predict(self, rows: Rows) -> np.ndarray:
         raise NotImplementedError
+
+    def shape(self, h: int) -> Optional[np.ndarray]:
+        """The candidate's own standardised quantiles at TAU for ``h`` minutes ahead, or None for the baseline's."""
+        return None
 
 
 class Identity(Candidate):
@@ -464,9 +473,11 @@ def check_keys() -> List[str]:
     return keys + [f"pre_open_{m}" for m in PRE_OPEN_MINUTES]
 
 
-def score_frame(fr: Frame, rows: Rows, mult: np.ndarray) -> Dict[str, Tuple[float, float, int]]:
-    """One check session, the frame's ``rows`` (frame_rows, every origin) and the candidate's sigma multipliers:
-    ``{key: (baseline mean CRPS, candidate mean CRPS, origins)}`` in basis points over check_keys()."""
+def score_frame(fr: Frame, rows: Rows, mult: np.ndarray,
+                shapes: Optional[Dict[int, np.ndarray]] = None) -> Dict[str, Tuple[float, float, int]]:
+    """One check session, the frame's ``rows`` (frame_rows, every origin) and the candidate's sigma multipliers (and
+    its own ``shapes`` per horizon, the baseline's where absent): ``{key: (baseline mean CRPS, candidate mean CRPS,
+    origins)}`` in basis points over check_keys()."""
     mult = np.asarray(mult, dtype=float)
     if mult.shape != (len(rows),) or not np.all(np.isfinite(mult) & (mult > 0)):
         raise ValueError("a candidate must give every row a finite multiplier above zero")
@@ -475,9 +486,10 @@ def score_frame(fr: Frame, rows: Rows, mult: np.ndarray) -> Dict[str, Tuple[floa
     for h in np.unique(rows.horizon):
         s = rows.horizon == h
         Q = fr.shape[FRAME_HORIZONS.index(int(h))]
+        Qc = Q if not shapes or shapes.get(int(h)) is None else shapes[int(h)]
         sc = sb[s] * mult[s]
         cb[s] = sb[s] * crps(rows.y[s] / sb[s], Q) * 1e4
-        cc[s] = sc * crps(rows.y[s] / sc, Q) * 1e4
+        cc[s] = sc * crps(rows.y[s] / sc, Qc) * 1e4
     out: Dict[str, Tuple[float, float, int]] = {}
 
     def put(key: str, sel: np.ndarray) -> None:
@@ -496,47 +508,152 @@ def score_frame(fr: Frame, rows: Rows, mult: np.ndarray) -> Dict[str, Tuple[floa
 
 
 def run_checks(frames: Dict[str, Frame], manifest: Dict[str, Any], target: str,
-               make: Callable[[], Candidate], every: int = TRAIN_EVERY) -> Dict[str, Any]:
+               make: Callable[[], Candidate], every: int = TRAIN_EVERY, offset: int = 0) -> Dict[str, Any]:
     """
     The manifest's three checks for ``target``: per check a fresh candidate (``make()``) fitted on the rows of the
-    development sessions before the check (every ``every`` minutes), then it and the baseline scored on every origin
-    of the check's sessions. Paired intervals (paired) per check and pooled over the checks' sessions in date order.
-    A session excluded for the target or without a frame is neither trained on nor scored.
+    development sessions before the check (every ``every`` minutes from ``offset``), then it and the baseline scored
+    on every origin of the check's sessions. Paired intervals (paired) per check and pooled over the checks' sessions
+    in date order; the calibration of both (calibrate) and how concentrated the primary horizon's gain is
+    (concentration). A session excluded for the target or without a frame is neither trained on nor scored.
     """
     sp = manifest["split"]
     dev = sp["development"]["sessions"]
     excluded = set(manifest["data"]["excluded"].get(target, []))
     keys = check_keys()
+    main = [f"h{h}" for h in REPORT_HORIZONS] + [f"pre_open_{m}" for m in PRE_OPEN_MINUTES]
+    primary = manifest["horizons"]["primary"]["minutes"]
     pooled: List[Dict[str, Tuple[float, float, int]]] = []
+    pooled_days: List[str] = []
+    cal: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+    features: Optional[List[str]] = None
     checks = []
     name = None
     for b in sp["checks"]["blocks"]:
         first, last = b["sessions"]["first"], b["sessions"]["last"]
         train_days = [d for d in dev if d < first and d not in excluded and d in frames]
         wanted = [d for d in dev if first <= d <= last and d not in excluded]
-        train = Rows.concat([frame_rows(frames[d], every=every) for d in train_days])
+        train = Rows.concat([frame_rows(frames[d], every=every, offset=offset) for d in train_days])
         cand = make()
         name = cand.name
         cand.fit(train)
-        per, scored = [], []
+        names = getattr(cand, "feature_names", None)
+        if names is not None and features is None:
+            features = list(names)
+        shapes = {h: q for h in FRAME_HORIZONS if (q := cand.shape(h)) is not None}
+        fitted = cand.describe() if hasattr(cand, "describe") else None
+        per, scored, mults = [], [], []
         for d in wanted:
             if d not in frames:
                 continue
             rows = frame_rows(frames[d])
-            per.append(score_frame(frames[d], rows, cand.predict(rows)))
+            mult = cand.predict(rows)
+            per.append(score_frame(frames[d], rows, mult, shapes))
+            calibrate(frames[d], rows, mult, cal, shapes)
+            mults.append(np.asarray(mult, dtype=float)[rows.horizon == primary])
             scored.append(d)
         pooled += per
+        pooled_days += scored
+        mults = np.concatenate(mults) if mults else np.zeros(0)
         checks.append({"check": b["check"],
                        "train": {"first": train_days[0], "last": train_days[-1], "sessions": len(train_days),
                                  "rows": len(train)},
                        "sessions": {"first": first, "last": last, "wanted": len(wanted), "scored": scored,
                                     "missing": [d for d in wanted if d not in scored]},
+                       "multiplier": ({f"p{q}": float(np.percentile(mults, q)) for q in (5, 50, 95)}
+                                      if len(mults) else None),
+                       "own_shape": sorted(shapes) if shapes else None,
+                       "fitted": fitted,
                        "results": {k: paired(per, k) for k in keys}})
     results = {k: paired(pooled, k) for k in keys}
     return {"kind": "checks", "experiment": manifest.get("name"), "target": target, "candidate": name,
-            "train_every": every, "uncertainty": dict(F.BOOTSTRAP), "checks": checks, "results": results,
-            "verdicts": {k: _verdict(v) for k, v in results.items()},
-            "roles": {k: _role(k, manifest, target) for k in keys}}
+            "train_every": every, "train_offset": offset, "uncertainty": dict(F.BOOTSTRAP), "checks": checks,
+            "results": results, "verdicts": {k: _verdict(v) for k, v in results.items()},
+            "roles": {k: _role(k, manifest, target) for k in keys},
+            "per_session": {d: {k: list(r[k]) for k in main if k in r} for d, r in zip(pooled_days, pooled)},
+            "features": features,
+            "features_hash": (hashlib.sha256("\n".join(features).encode()).hexdigest()[:16]
+                              if features is not None else None),
+            "calibration": {f"{who}|h{h}|{scope}": _cal_summary(t) for (who, h, scope), t in cal.items()},
+            "concentration": concentration(pooled, pooled_days, f"h{primary}")}
+
+
+# --------------------------------------------------------------------------
+# Calibration and concentration
+# --------------------------------------------------------------------------
+
+def _cal_add(acc: Dict, key: Tuple[str, int, str], pit: np.ndarray, width: np.ndarray, iscore: np.ndarray) -> None:
+    t = acc.setdefault(key, {"n": 0, "lower": np.zeros(len(COVERAGE)), "upper": np.zeros(len(COVERAGE)),
+                             "width": np.zeros(len(COVERAGE)), "score": np.zeros(len(COVERAGE)), "pit": np.zeros(10)})
+    lo = (1 - np.array(COVERAGE)) / 2
+    t["n"] += len(pit)
+    t["lower"] += (pit[:, None] < lo[None, :]).sum(axis=0)
+    t["upper"] += (pit[:, None] > 1 - lo[None, :]).sum(axis=0)
+    t["width"] += width.sum(axis=0)
+    t["score"] += iscore.sum(axis=0)
+    t["pit"] += np.histogram(pit, bins=10, range=(0, 1))[0]
+
+
+def calibrate(fr: Frame, rows: Rows, mult: np.ndarray, acc: Dict,
+              shapes: Optional[Dict[int, np.ndarray]] = None) -> None:
+    """Adds one check session to ``acc``: per (baseline | candidate, report horizon, all | origin phase) the PIT of
+    every realised move in its fan (where it fell in the issued distribution), the misses below and above each
+    central band of COVERAGE, the bands' widths and their interval scores (Gneiting and Raftery 2007: the width
+    plus 2 / alpha times the miss - lower is better) in basis points."""
+    sb = np.sqrt(rows.var)
+    cov = np.array(COVERAGE)
+    alpha = 1 - cov
+    for h in REPORT_HORIZONS:
+        s = rows.horizon == h
+        if not s.any():
+            continue
+        Qb = fr.shape[FRAME_HORIZONS.index(h)]
+        Qc = Qb if not shapes or shapes.get(h) is None else shapes[h]
+        phase = rows.phase[s]
+        y = rows.y[s][:, None]
+        for who, scale, Q in (("base", sb[s], Qb), ("cand", sb[s] * np.asarray(mult)[s], Qc)):
+            lo = scale[:, None] * np.interp(alpha / 2, TAU, Q)[None, :]
+            hi = scale[:, None] * np.interp(1 - alpha / 2, TAU, Q)[None, :]
+            pit = np.interp(rows.y[s] / scale, Q, TAU, left=0.0, right=1.0)
+            width = (hi - lo) * 1e4
+            iscore = width + (2 / alpha)[None, :] * (np.maximum(lo - y, 0) + np.maximum(y - hi, 0)) * 1e4
+            _cal_add(acc, (who, h, "all"), pit, width, iscore)
+            for p, (name, _, _) in enumerate(PHASES):
+                k = phase == p
+                if k.any():
+                    _cal_add(acc, (who, h, name), pit[k], width[k], iscore[k])
+
+
+def _cal_summary(t: Dict[str, Any]) -> Dict[str, Any]:
+    n = max(t["n"], 1)
+    return {"n": int(t["n"]),
+            "coverage": {f"{c:.2f}": float(1 - (t["lower"][i] + t["upper"][i]) / n) for i, c in enumerate(COVERAGE)},
+            "below": {f"{c:.2f}": float(t["lower"][i] / n) for i, c in enumerate(COVERAGE)},
+            "above": {f"{c:.2f}": float(t["upper"][i] / n) for i, c in enumerate(COVERAGE)},
+            "width_bps": {f"{c:.2f}": float(t["width"][i] / n) for i, c in enumerate(COVERAGE)},
+            "interval_score_bps": {f"{c:.2f}": float(t["score"][i] / n) for i, c in enumerate(COVERAGE)},
+            "pit": [float(x / n) for x in t["pit"]]}
+
+
+def concentration(pooled: Sequence[Dict[str, Tuple[float, float, int]]], days: Sequence[str],
+                  key: str) -> Optional[Dict[str, Any]]:
+    """How the candidate's difference at ``key`` spreads over the sessions: the share of sessions it improved, the
+    share of the total gain its five best sessions carry, and the mean difference with each calendar week left
+    out in turn (a sensitivity check - difficult days stay in the score)."""
+    pairs = [(d, r[key][1] - r[key][0]) for d, r in zip(days, pooled) if key in r]
+    if not pairs:
+        return None
+    diff = np.array([x for _, x in pairs])
+    week = np.array(["{}-W{:02d}".format(*date.fromisoformat(d).isocalendar()[:2]) for d, _ in pairs])
+    total = float(diff.sum())
+    best = np.sort(diff)[:5]
+    weeks = sorted(set(week))
+    loo = {wk: float(diff[week != wk].mean()) for wk in weeks if (week != wk).any()}
+    return {"sessions": len(diff), "improved": float((diff < 0).mean()), "mean_diff_bps": float(diff.mean()),
+            "top5_share": float(best.sum() / total) if total < 0 else None,
+            "worst5_bps": float(np.sort(diff)[-5:].sum()),
+            "weeks": len(weeks), "leave_week_out": {"min": min(loo.values()), "max": max(loo.values()),
+                                                    "weeks_flipping_sign": int(sum(v >= 0 for v in loo.values()))
+                                                    if total < 0 else None}}
 
 
 def checks(conn, name: str, target: str, make: Callable[[], Candidate], cache_dir: Optional[str] = None,
@@ -552,6 +669,23 @@ def checks(conn, name: str, target: str, make: Callable[[], Candidate], cache_di
     res.update(experiment=name, experiment_hash=exp["definition_hash"], baseline=baseline,
                baseline_hash=rec["definition_hash"])
     return res
+
+
+def compare_runs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Two stored checks runs (run_checks results with 'per_session') paired on the sessions both scored: per main
+    key, b's candidate minus a's - their CRPS on identical sessions and origins - with the manifest's interval."""
+    days = sorted(set(a["per_session"]) & set(b["per_session"]))
+    out = {}
+    for k in [f"h{h}" for h in REPORT_HORIZONS] + [f"pre_open_{m}" for m in PRE_OPEN_MINUTES]:
+        rows = []
+        for d in days:
+            ra, rb = a["per_session"][d].get(k), b["per_session"][d].get(k)
+            if ra and rb:
+                if abs(ra[0] - rb[0]) > 1e-9 * max(1.0, abs(ra[0])) or ra[2] != rb[2]:
+                    raise ValueError(f"{d} {k}: the two runs scored different baselines or origins")
+                rows.append({k: (ra[1], rb[1], ra[2])})
+        out[k] = paired(rows, k)
+    return {"sessions": len(days), "results": out, "verdicts": {k: _verdict(v) for k, v in out.items()}}
 
 
 def _role(key: str, manifest: Dict[str, Any], target: str) -> str:
@@ -640,12 +774,16 @@ def write_checks_report(res: Dict[str, Any], report_dir: str) -> str:
          "basis points (K = 200) on identical origins; candidate minus baseline per session, 95 % moving-block "
          "bootstrap (5-session blocks, 2000 resamples). Negative is better; ✓ marks a whole interval below zero, "
          "✗ above.", "",
-         "| Check | Trained on | Training rows | Checked | Scored |", "|---|---|---|---|---|"]
+         *([f"**Features** ({len(res['features'])} columns, hash `{res['features_hash']}`): "
+            + ", ".join(f"`{n}`" for n in res["features"]) + ".", ""] if res.get("features") else []),
+         "| Check | Trained on | Training rows | Checked | Scored | Multiplier at the primary horizon (5 / 50 / 95 %) |",
+         "|---|---|---|---|---|---|"]
     for c in res["checks"]:
-        t, s = c["train"], c["sessions"]
+        t, s, mu = c["train"], c["sessions"], c.get("multiplier")
         L.append(f"| {c['check']} | {t['first']} to {t['last']} ({t['sessions']}) | {t['rows']:,} | "
                  f"{s['first']} to {s['last']} | {len(s['scored'])} of {s['wanted']}"
-                 + (f" (missing {', '.join(s['missing'])})" if s["missing"] else "") + " |")
+                 + (f" (missing {', '.join(s['missing'])})" if s["missing"] else "") + " | "
+                 + (f"{mu['p5']:.2f} / {mu['p50']:.2f} / {mu['p95']:.2f}" if mu else "-") + " |")
     L += ["", "## By horizon, the checks pooled", "",
           "| Horizon | Role | Sessions | Origins | Baseline CRPS | Candidate CRPS | Difference | Share | "
           "95 % interval | Verdict |", "|---|---|---|---|---|---|---|---|---|---|"]
@@ -671,7 +809,75 @@ def write_checks_report(res: Dict[str, Any], report_dir: str) -> str:
                  + " | ".join(_share(res["results"].get(f"h{h}:{name}")) for h in REPORT_HORIZONS) + " |")
     L.append("| a release ahead | " + " | ".join(_share(res["results"].get(f"h{h}:release"))
                                                for h in REPORT_HORIZONS) + " |")
+    L += _concentration_lines(res) + _calibration_lines(res)
     L.append("")
     with open(path, "w") as fh:
         fh.write("\n".join(L))
     return path
+
+
+def _concentration_lines(res: Dict[str, Any]) -> List[str]:
+    c = res.get("concentration")
+    if not c:
+        return []
+    lw = c["leave_week_out"]
+    return ["", "## How concentrated the primary horizon's gain is", "",
+            f"Over {c['sessions']} check sessions the candidate's CRPS was lower than the baseline's in "
+            f"**{100 * c['improved']:.0f} %** of sessions (mean difference {c['mean_diff_bps']:+.5f} bps). "
+            + (f"Its five best sessions carry {100 * c['top5_share']:.0f} % of the total gain; " if c["top5_share"]
+               is not None else "There is no total gain; ")
+            + f"its five worst add {c['worst5_bps']:+.4f} bps. With each of the {c['weeks']} calendar weeks left "
+            f"out in turn the mean difference stays between {lw['min']:+.5f} and {lw['max']:+.5f} bps"
+            + (f" ({lw['weeks_flipping_sign']} week(s) whose removal turns it to no gain)."
+               if lw["weeks_flipping_sign"] is not None else ".")
+            + " A sensitivity check: difficult days stay in the score."]
+
+
+def _calibration_lines(res: Dict[str, Any]) -> List[str]:
+    cal = res.get("calibration") or {}
+    if not cal:
+        return []
+    cov = [f"{c:.2f}" for c in COVERAGE]
+    pct = lambda x: f"{100 * x:.1f}"
+    L = ["", "## Calibration, the checks pooled", "",
+         "Where each realised move fell in its fan. Coverage of the central 50 / 80 / 90 / 95 % bands (ideal: the "
+         "band's own share), the 90 % band's misses below and above (ideal 5.0 % each), its mean width and its mean "
+         "interval score (width plus 2 / alpha times the miss; lower is better) in basis points - baseline -> "
+         "candidate.", "",
+         "| Horizon | Origins | Coverage 50 / 80 / 90 / 95 % | Below 90 % band | Above 90 % band | 90 % width (bps) "
+         "| 90 % interval score (bps) |",
+         "|---|---|---|---|---|---|---|"]
+
+    def row(label: str, scope: str, h: int) -> Optional[str]:
+        b, c = cal.get(f"base|h{h}|{scope}"), cal.get(f"cand|h{h}|{scope}")
+        if not b or not c:
+            return None
+        bc = " / ".join(pct(b["coverage"][k]) for k in cov)
+        cc = " / ".join(pct(c["coverage"][k]) for k in cov)
+        bi, ci = b.get("interval_score_bps", {}).get("0.90"), c.get("interval_score_bps", {}).get("0.90")
+        return (f"| {label} | {b['n']:,} | {bc} -> {cc} | {pct(b['below']['0.90'])} -> {pct(c['below']['0.90'])} | "
+                f"{pct(b['above']['0.90'])} -> {pct(c['above']['0.90'])} | {b['width_bps']['0.90']:.2f} -> "
+                f"{c['width_bps']['0.90']:.2f} | "
+                + (f"{bi:.2f} -> {ci:.2f} |" if bi is not None else "- |"))
+
+    for h in REPORT_HORIZONS:
+        r = row(f"{h} min", "all", h)
+        if r:
+            L.append(r)
+    primary = next((k for k, v in res["roles"].items() if v == "primary"), "h15")
+    hp = int(primary[1:]) if primary.startswith("h") and ":" not in primary else 15
+    L += ["", f"By origin phase, {hp} minutes ahead:", "",
+          "| Phase | Origins | Coverage 50 / 80 / 90 / 95 % | Below 90 % band | Above 90 % band | 90 % width (bps) "
+          "| 90 % interval score (bps) |",
+          "|---|---|---|---|---|---|---|"]
+    for name, a, b_ in PHASES:
+        r = row(f"{name.replace('_', ' ')} {a}-{b_}", name, hp)
+        if r:
+            L.append(r)
+    b, c = cal.get(f"base|h{hp}|all"), cal.get(f"cand|h{hp}|all")
+    if b and c:
+        L += ["", f"PIT deciles, {hp} minutes ahead (ideal 10.0 each; a U shape means too narrow, a hump too wide):",
+              "", "| | " + " | ".join(f"{10 * i}-{10 * i + 10}" for i in range(10)) + " |", "|---|" + "---|" * 10,
+              "| baseline | " + " | ".join(pct(x) for x in b["pit"]) + " |",
+              "| candidate | " + " | ".join(pct(x) for x in c["pit"]) + " |"]
+    return L

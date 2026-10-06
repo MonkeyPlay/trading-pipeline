@@ -377,6 +377,10 @@ python scripts/fan.py panel-audit                     # every instrument on the 
 python scripts/fan.py baseline-gate                   # fan_rw_v2 against fan_rw_v1 on the checks (decided once)
 python scripts/fan.py checks --candidate phase_scale  # a candidate against the baseline on the three checks
 python scripts/fan.py features                        # every instrument's features, screened (development)
+python scripts/fan.py checks --candidate gbm_own_ivx  # the learned fan on the checks (gbm_own, gbm_own_iv, gbm_all)
+python scripts/fan.py compare gbm_own_ivx lin_pois_ivx   # two stored runs paired on identical sessions
+python scripts/fan.py replay                          # live-style replay: every input as the store served it
+python scripts/fan.py search                          # SPA and StepM over every stored checks run
 ```
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
@@ -386,7 +390,12 @@ development sessions before each check and scores it against the baseline per ho
 origin phase and the pre-open slice; the baseline's frames are cached in `data/fan_cache/`.
 `features` builds what a candidate reads at an origin - per instrument, how much it moves
 against its usual, its recent move, its change since the close, volume, age - each tagged
-with its instrument and group.
+with its instrument and group. `gbm_own` / `gbm_own_iv` / `gbm_all` are the learned fan: v2's
+width scaled per origin by gradient boosting on those features (forecaster/fan_model.py);
+`gbm_own_iv` adds VXN's implied over NQ's realised variance, the cross-market quantity that
+helps, and `gbm_own_ivx` both sides of that comparison beside the ratio. Every checks report
+includes calibration (band coverage, misses on each side, widths, PIT) and how concentrated
+the gain is.
 
 ## Configuration
 

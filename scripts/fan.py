@@ -17,6 +17,10 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py checks --candidate phase_scale                  # a candidate against the baseline, 3 checks
     python scripts/fan.py checks --candidate identity --target ES         # ... the harness's self-check, on ES
     python scripts/fan.py features                                        # the features, audited (development)
+    python scripts/fan.py checks --candidate gbm_all                      # the learned fan on the checks
+    python scripts/fan.py compare gbm_own_ivx lin_pois_ivx                # two stored runs, paired (B minus A)
+    python scripts/fan.py search                                          # SPA and StepM over every stored run
+    python scripts/fan.py replay                                          # live-style replay of the leading candidates
 
 Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
@@ -47,7 +51,10 @@ from features.session_windows import get_trading_day_date
 from forecaster import fan_experiment as fx
 from forecaster import fan_features as ff
 from forecaster import fan_harness as fh
+from forecaster import fan_model as fm
 from forecaster import fan_panel as fp
+from forecaster import fan_replay as frp
+from forecaster import fan_search as fsr
 from forecaster.fan_benchmark import InsufficientHistory, fan_from, fit, slot_instant
 from forecaster.fan_data import history_start, load_days
 from forecaster.fan_scoring import score_sessions, summarise, write_report
@@ -337,17 +344,38 @@ def cmd_checks(conn, args):
     target = args.target or m["targets"]["primary"]
     started = time.time()
     try:
-        res = fh.checks(conn, args.name, target, fh.CANDIDATES[args.candidate], CACHE_DIR, args.refresh)
+        spec = fm.MODELS.get(args.candidate) or fm.TRIALS.get(args.candidate)
+        if spec is not None:
+            frames = fh.load_frames(conn, args.name, target, CACHE_DIR)[2] if spec.needs_frames else None
+            table = load_features(conn, m, target) if spec.features is not None else None
+            make = fm.candidate(args.candidate, table, frames)
+        else:
+            make = fh.CANDIDATES[args.candidate]
+        res = fh.checks(conn, args.name, target, make, CACHE_DIR, args.refresh)
     except ValueError as e:
         print(f"Not run: {e}")
         return 1
     res["code_revision"] = code_revision()
+    symbols = [s for s, a in m["instruments"]["availability"].items() if a["status"] == "included"]
+    res["provenance"] = {
+        "code_revision": res["code_revision"],
+        "data_fingerprint": fp.fingerprint(conn, symbols, m["split"]["window"]["start"],
+                                           m["split"]["development"]["last"]),
+        "feature_format": ff.FEATURE_FORMAT, "frame_format": fh.FRAME_FORMAT,
+        "spec": ({"kind": spec.kind, "features": spec.features, "base": spec.base, "note": spec.note,
+                  "settings": {**fm.SETTINGS, **spec.settings} if spec.kind in ("gbm", "crps_boost") else
+                  ({"alpha": fm.LINEAR_ALPHA} if spec.kind == "linear" else {})}
+                 if spec is not None else {"kind": "reference"}),
+    }
     print(f"{res['candidate']} against {res['baseline']} on {args.name}'s checks, {target} "
-          f"({time.time() - started:.0f} s):")
+          f"({time.time() - started:.0f} s)" + (f"; features {len(res['features'])}, hash {res['features_hash']}"
+                                                 if res.get("features") is not None else "") + ":")
     for c in res["checks"]:
         t, s = c["train"], c["sessions"]
+        mu = c["multiplier"]
         print(f"  check {c['check']}: trained on {t['sessions']} sessions ({t['rows']:,} rows), scored "
-              f"{len(s['scored'])} of {s['wanted']} ({s['first']} to {s['last']})")
+              f"{len(s['scored'])} of {s['wanted']} ({s['first']} to {s['last']}); multiplier 5/50/95 % "
+              + (f"{mu['p5']:.2f} / {mu['p50']:.2f} / {mu['p95']:.2f}" if mu else "-"))
     print(f"{'':16} {'role':12} {'base CRPS':>9} {'cand CRPS':>9} {'difference':>11} {'share':>8}  95 % interval")
     for k in [f"h{h}" for h in fh.REPORT_HORIZONS] + [f"pre_open_{x}" for x in fh.PRE_OPEN_MINUTES]:
         p = res["results"].get(k)
@@ -357,8 +385,126 @@ def cmd_checks(conn, args):
         print(f"{k:16} {res['roles'][k]:12} {p['base_crps_bps']:>9.4f} {p['other_crps_bps']:>9.4f} "
               f"{p['diff_bps']:>+11.5f} {100 * (p['diff_share'] or 0):>+7.2f}%  "
               + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "-") + f"  {res['verdicts'][k]}")
+    stored = _run_path(args.name, target, res["candidate"])
+    os.makedirs(os.path.dirname(stored), exist_ok=True)
+    with open(stored, "w") as fh_:
+        json.dump(res, fh_)
+    print(f"Run stored: {stored}")
     if not args.no_report:
         print(f"Report: {fh.write_checks_report(res, args.report_dir)}")
+    return 0
+
+
+def cmd_search(conn, args):
+    """The multiple-comparison review of the development search (forecaster/fan_search.py): Hansen's SPA and Romano
+    and Wolf's StepM over every stored checks run, against v2 and against gbm_own."""
+    m = fx.load_experiment(conn, args.name)["definition"]
+    target = args.target or m["targets"]["primary"]
+    folder = os.path.join(CACHE_DIR, "checks")
+    prefix = f"{args.name}_{target}_"
+    runs = {}
+    for f in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if f.startswith(prefix) and f.endswith(".json"):
+            with open(os.path.join(folder, f)) as fh_:
+                r = json.load(fh_)
+            if r["candidate"] not in fsr.EXCLUDED:
+                runs[r["candidate"]] = r
+    if len(runs) < 2:
+        print("Fewer than two stored runs: run scripts/fan.py checks first")
+        return 1
+    key = f"h{args.horizon}"
+    res = fsr.review(runs, key)
+    print(f"{len(runs)} stored runs of {args.name} ({target}), {key}, {res['v2']['sessions']} sessions")
+    for part in ("v2", "own"):
+        r = res[part]
+        if r is None:
+            continue
+        print(f"against {r['benchmark']}: SPA p lower {r['spa']['p']['lower']:.3f}, consistent "
+              f"{r['spa']['p']['consistent']:.3f}, upper {r['spa']['p']['upper']:.3f}; StepM (5 %) names "
+              + (", ".join(r["better"]) or "none"))
+    if not args.no_report:
+        print(f"Report: {fsr.write_report(res, runs, args.name, target, key, args.report_dir)}")
+    return 0
+
+
+def cmd_replay(conn, args):
+    """A live-style replay of the leading candidates on predefined check sessions (forecaster/fan_replay.py):
+    every input rebuilt as the store served it at issuance, against the research path."""
+    m = fx.load_experiment(conn, args.name)["definition"]
+    target = args.target or m["targets"]["primary"]
+    started = time.time()
+    _, _, frames = fh.load_frames(conn, args.name, target, CACHE_DIR)
+    table = load_features(conn, m, target)
+    avail = m["instruments"]["availability"]
+    symbols = [s for s, a in avail.items() if a["status"] == "included"]
+    dev = m["split"]["development"]["sessions"]
+    blocks = m["split"]["checks"]["blocks"]
+    check_of = {d: b["check"] for b in blocks for d in dev
+                if b["sessions"]["first"] <= d <= b["sessions"]["last"] and d in frames}
+    col = [f.name for f in table.features].index(f"{target}.day_rv")
+    day_rv = {d: float(table.X[table.sessions.index(d), 0, col]) for d in check_of}
+    first, last = min(check_of), max(check_of)
+    releases = [d.session_date.isoformat() for d in load_days(conn, target, date.fromisoformat(first),
+                                                                date.fromisoformat(last))
+                if d.releases_known and any(r.group in ("high", "fomc") for r in d.releases)]
+    picked = frp.pick_sessions(sorted(check_of), day_rv, releases)
+    candidates = {}
+    for name in args.candidate:
+        candidates[name] = {}
+        for b in blocks:
+            if not any(check_of[d] == b["check"] for days in picked.values() for d in days):
+                continue
+            train = fh.Rows.concat([fh.frame_rows(frames[d], every=fh.TRAIN_EVERY) for d in dev
+                                    if d < b["sessions"]["first"] and d in frames])
+            c = fm.candidate(name, table, frames)()
+            c.fit(train)
+            candidates[name][b["check"]] = c
+    res = frp.replay(conn, target, picked, table, frames, symbols,
+                     {s: avail[s]["first_complete"] for s in symbols}, candidates, check_of)
+    print(f"Replay of {', '.join(args.candidate)} on {sum(len(v) for v in picked.values())} sessions "
+          f"({time.time() - started:.0f} s): {'passed' if res['passed'] else 'FAILED'}")
+    for kind, days in picked.items():
+        print(f"  {kind:9} {', '.join(days)}")
+    for k, v in res["checks"].items():
+        print(f"  {k:12} compared {v['compared']:>6,}  failed {v['failed']:>4}  largest relative difference "
+              f"{v['max_rel']:.2e}" + (f"  e.g. {v['examples'][0]}" if v["examples"] else ""))
+    if not args.no_report:
+        meta = {"experiment": args.name, "target": target, "code_revision": code_revision(),
+                "candidates": args.candidate,
+                "data_fingerprint": fp.fingerprint(conn, symbols, m["split"]["window"]["start"], dev[-1])}
+        print(f"Report: {frp.write_report(res, meta, args.report_dir)}")
+    return 0 if res["passed"] else 1
+
+
+def _run_path(name, target, candidate):
+    return os.path.join(CACHE_DIR, "checks", f"{name}_{target}_{candidate}.json")
+
+
+def cmd_compare(conn, args):
+    """Two stored checks runs paired on identical sessions and origins: B minus A per horizon (development)."""
+    m = fx.load_experiment(conn, args.name)["definition"]
+    target = args.target or m["targets"]["primary"]
+    runs = []
+    for c in (args.a, args.b):
+        path = _run_path(args.name, target, c)
+        if not os.path.exists(path):
+            print(f"No stored run of {c}: run scripts/fan.py checks --candidate {c} first")
+            return 1
+        with open(path) as fh_:
+            runs.append(json.load(fh_))
+    try:
+        res = fh.compare_runs(*runs)
+    except ValueError as e:
+        print(f"Not comparable: {e}")
+        return 1
+    print(f"{args.b} minus {args.a}, {res['sessions']} check sessions ({target}); negative: {args.b} better")
+    for k, p in res["results"].items():
+        if p is None:
+            continue
+        iv = p["interval"]
+        print(f"{k:16} {p['base_crps_bps']:>9.4f} {p['other_crps_bps']:>9.4f} {p['diff_bps']:>+11.5f} "
+              f"{100 * (p['diff_share'] or 0):>+7.2f}%  " + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "-")
+              + f"  {res['verdicts'][k]}")
     return 0
 
 
@@ -395,8 +541,7 @@ def cmd_features(conn, args):
     first_check = m["split"]["checks"]["blocks"][0]["sessions"]["first"]
     days = [d for d in m["split"]["development"]["sessions"] if d < first_check and d in frames]
     rows = fh.Rows.concat([fh.frame_rows(frames[d], horizons=(args.horizon,), every=fh.TRAIN_EVERY) for d in days])
-    keep = rows.horizon == args.horizon
-    rows = fh.Rows(*(getattr(rows, f)[keep] for f in fh.Rows.__dataclass_fields__))
+    rows = rows.take(rows.horizon == args.horizon)
     result = ff.audit(table, rows)
     print(f"{len(result)} features ({len(table.features)} from {len(set(f.instrument for f in table.features))} "
           f"instruments) on {len(table.sessions)} sessions, audited on {len(days)} sessions before {first_check} ({len(rows):,} rows, {args.horizon} min) in "
@@ -450,12 +595,30 @@ def main(argv=None):
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
     p = sub.add_parser("checks", help="A candidate against the decided baseline on the three checks (development)")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
-    p.add_argument("--candidate", choices=sorted(fh.CANDIDATES), required=True)
+    p.add_argument("--candidate", choices=sorted(fh.CANDIDATES) + sorted(fm.MODELS) + sorted(fm.TRIALS),
+                   required=True)
     p.add_argument("--target", help="The primary target by default; a secondary one (ES, RTY) by name")
     p.add_argument("--refresh", action="store_true", help="Recompute the baseline's cached frames "
                    "(after a backfill revised development sessions)")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("replay", help="Live-style replay of the leading candidates on predefined check sessions")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", help="The primary target by default")
+    p.add_argument("--candidate", action="append", default=None, help="Repeat; default lin_pois_ivx and gbm_own_ivx")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("search", help="Multiple-comparison review of the stored checks runs (SPA, StepM)")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", help="The primary target by default")
+    p.add_argument("--horizon", type=int, default=fx.PRIMARY_HORIZON)
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("compare", help="Two stored checks runs paired on identical sessions (B minus A)")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", help="The primary target by default")
+    p.add_argument("a", help="The reference candidate")
+    p.add_argument("b", help="The candidate compared with it")
     p = sub.add_parser("features", help="The features on the development sessions, audited")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--target", help="The primary target by default")
@@ -468,6 +631,8 @@ def main(argv=None):
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
     args = parser.parse_args(argv)
+    if args.command == "replay" and not args.candidate:
+        args.candidate = ["lin_pois_ivx", "gbm_own_ivx"]
 
     init_database(args.db)
     conn = get_db_connection(args.db)
@@ -477,7 +642,7 @@ def main(argv=None):
         return {"register": cmd_register, "now": cmd_now, "score": cmd_score,
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
                 "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
-                "features": cmd_features}[args.command](conn, args)
+                "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay}[args.command](conn, args)
     finally:
         conn.close()
 
