@@ -138,6 +138,134 @@ rates, dollar, equity ETFs) and by single instrument -
 Each with a paired interval; one that includes zero is reported as no detectable
 contribution.
 
+## The learned model: where it fits and when it is trained
+
+Noted 2026-10-06, before chunk 3.
+
+**Where it fits.** The model does not replace the benchmark: it sits on top of
+`fan_rw_v2` and scales its width. v2 gives, from any minute, the spread to each horizon
+(sigma_h) and the fat-tailed shape (Q_h); the model gives one number per origin and
+horizon - how much wider or narrower than v2 the fan should be:
+
+```
+fan_rw_v2 (rules)  ->  sigma_h, shape Q_h
+                              |
+panel (every instrument,      v
+point in time) -> features -> model -> multiplier m_h -> fan = sigma_h x m_h x Q_h
+```
+
+- It learns the size of moves only: v2's median (zero drift) is kept, so it makes no
+  claim about direction - the size of NQ's moves is predictable, their direction was
+  found not to be.
+- It reads the features of chunk 4, built on the point-in-time panel
+  ([forecaster/fan_panel.py](../forecaster/fan_panel.py)): each instrument's last value
+  and that value's age at the origin, never anything after it.
+- In the code: a module beside [forecaster/fan_v2.py](../forecaster/fan_v2.py) that
+  wraps v2; registered as kind `fan_model` naming this experiment and its hash; scored
+  by the harness against v2 on identical origins.
+- On the chart (chunk 9) it draws only the horizons whose holdout interval lies below
+  zero; v2 draws the rest. The P1 arms A-D are untouched - they answer another question.
+
+**When it is trained.**
+
+1. Not before the harness (chunk 3) and the features (chunk 4) are fixed. Trained
+   first, the evaluation or the features could be picked to flatter it, and its verdict
+   would mean nothing.
+2. Development: on each check in turn, from the development sessions before it only
+   (153, 183 and 213 sessions). Own instrument first, then every instrument, then each
+   instrument's contribution (chunk 6).
+3. Freeze: trained once on all 243 development sessions and registered (chunk 7). Only
+   that frozen model opens the holdout, and it is scored there once.
+4. After a pass it stays frozen through the forward record (chunk 8); refitting it on
+   newer sessions is a new registered version. The rule-based baseline refits itself
+   every session; the learned model does not.
+
+Training reads only the stored data, offline - no market hours, no IB connection; what
+constrains it is the order above, not the clock.
+
+**What to expect.** 243 sessions are enough for a small, heavily regularised gradient
+boosting model, not a large one: origins within a session are strongly correlated, so
+the real sample is nearer 243 than the ~68,000 rows of a 5-minute sampling. The
+instruments are expected to change the fan's width by a few percent; scored at every
+origin, the 60-session holdout can confirm a gain of about 2 %. A modest real effect is
+detectable, and an inconclusive verdict is entirely possible.
+
+## The checks harness (chunk 3)
+
+[forecaster/fan_harness.py](../forecaster/fan_harness.py) runs a candidate - a learned
+fan - against the decided baseline on the three checks, as the manifest fixes them:
+
+- **The baseline as issued.** Every development session's `fan_rw_v2`, walk-forward:
+  from every origin its variance to each horizon, its shape and the releases ahead (a
+  *frame*). Computed once from the stored bars (about 30 s for NQ) and cached in
+  `data/fan_cache/` (not in git), keyed by the experiment, the baseline's definition and
+  the estimator code; `--refresh` recomputes after a backfill. Its CRPS reproduces the
+  gate's v2 column exactly.
+- **Rows.** One per origin and horizon: the baseline's variance, the realised move, the
+  origin's phase, a release ahead. Training rows sample the origins on the 5-minute marks
+  (153 sessions give about 323,000 rows); the checks score every origin. Both add the
+  pre-open slice's origin at 16, 31 and 61 minutes.
+- **A candidate** is fitted on the training rows of the development sessions before its
+  check - never the check's own or later sessions (tested) - and gives each row a
+  multiplier of the baseline's sigma; its fan keeps the baseline's shape. A fresh
+  candidate per check. Features (chunk 4) are the candidate's own: a row names its session
+  and origin.
+- **Comparisons.** Candidate minus baseline per session on identical origins, paired
+  intervals per check (30 sessions) and pooled (90), for every report horizon, every
+  horizon x origin phase, origins with a release ahead, and the pre-open slice. Below 10
+  sessions (two bootstrap blocks) there is no interval.
+- **Nothing is stored** in the journal: a check's result is development. The report goes
+  to `docs/reports/fan_checks_<experiment>_<target>_<candidate>.md`.
+
+Two reference candidates: `identity` (the baseline itself - every difference exactly
+zero, the harness's self-check) and `phase_scale` (one constant width per horizon and
+origin phase, learned from the training rows). On 2026-10-06 `phase_scale` beat v2
+nowhere that matters: inconclusive at 15 minutes (+0.03 %), worse at 60-240 minutes and
+in the pre-open slice
+([report](reports/fan_checks_fan_intermarket_v2_NQ_phase_scale.md)). v2's width by time
+of day is already right, so a learned model has to read something besides the clock to
+gain.
+
+Not built yet: the exploratory horizon to the regular close (a horizon that varies with
+the origin), and the attribution's precision measures (band width and coverage, chunk 6).
+
+## The features (chunk 4)
+
+[forecaster/fan_features.py](../forecaster/fan_features.py) computes, from the
+point-in-time panel, what a candidate reads at an origin - 119 instrument features over
+the 12 instruments plus 4 base columns, each tagged with its instrument and group (the
+target's own instrument is `own`; the base columns are in every model):
+
+| Family | What, at origin t | Instruments |
+|---|---|---|
+| `rv5`, `rv15`, `rv60`, `rv240` | realised variance of the last w minutes over the usual for those minutes (log ratio): moving more than usual for the time of day | all |
+| `ret15`, `ret60` | the return over the last w minutes, in the usual sigma | all |
+| `chg` | the change since the previous session's regular close (13:00 after an early close), in the usual sigma | all |
+| `vol60` | volume over the last 60 minutes over the usual (log ratio) | futures and ETFs (an index has no volume) |
+| `age` | log(1 + minutes since its last bar) | all |
+| `day_rv` | the previous session's realised variance over the usual | all |
+| `level` | the log of its value | VIX, VXN (implied volatilities) |
+| `base.*` | the baseline's sigma to the row's horizon, a release ahead, the minute of the day, the weekday | - |
+
+"Usual" is the mean over the previous 20 full sessions with data - missing with fewer
+than 10, so a feature needs history before it has a value. An instrument's features are
+missing before its first complete session; a value with no new bar keeps its age beside
+it and is never filled in; a ratio or standardised move whose usual is zero (the
+instrument is shut at that minute, e.g. VXN overnight) is missing, not zero. Missing is
+NaN, which the gradient boosting of chunk 5 reads as missing. Tests show nothing after
+the origin and nothing from a later session is read.
+
+`scripts/fan.py features` builds the table for every open session from the window start
+to the end of development (266 sessions, 8 s - no cache needed) and screens each feature
+on the 153 development sessions before the first check, origins every 5 minutes, 15
+minutes ahead: its coverage and its rank correlation with |z|, the realised move in the
+baseline's sigmas ([report](reports/fan_features_fan_intermarket_v2_NQ.md)). On
+2026-10-06 the strongest were "moving more than usual" - VXN, RTY, ES, NQ itself and VIX
+(+0.10 to +0.12): when they move more than usual, v2 is too narrow. Recent falls go with
+larger errors (`ret60` -0.08) - the size of the next move, not its direction. The rates
+and the dollar showed little (at most +0.05). A univariate screen only; chunk 5's model
+decides what matters together.
+
 ## The sealed holdout
 
 Until a model frozen against the experiment opens it, no candidate (`fan_rw_v2`, a model)
@@ -163,9 +291,9 @@ records this as a historical test.
 | 0 | Fix the experiment in advance: the manifest, the `fan_experiment` and `fan_model` kinds (migration 0019), the sealed holdout | done: v2 registered 2026-10-06 |
 | 1 | Data: audit each instrument's hours and gaps; the point-in-time panel (every instrument on the target's minute grid with the age of its last value; no-look-ahead tests) | done: every group present through the checks |
 | 2 | `fan_rw_v2` by rules: a multiplier per release type, a fat-tailed shape, the open | done: v2 passed the gate and is the baseline; the open needed no rule |
-| 3 | Test harness: the three checks, training-row sampling (every 5 minutes), paired intervals per horizon, phase and slice | next: [forecaster/fan_harness.py](../forecaster/fan_harness.py) already scores two versions on identical origins |
-| 4 | Features, each tagged with its instrument and group | |
-| 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | |
+| 3 | Test harness: the three checks, training-row sampling (every 5 minutes), paired intervals per horizon, phase and slice | done: `scripts/fan.py checks`; the identity differs by exactly zero, `phase_scale` gains nothing (above) |
+| 4 | Features, each tagged with its instrument and group | done: 119 instrument features + 4 base columns, `scripts/fan.py features` (above) |
+| 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | next |
 | 6 | Contribution of each instrument (above) | |
 | 7 | Freeze one model (`fan_model`) and score it once on the holdout | |
 | 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | |
@@ -179,6 +307,9 @@ python scripts/fan.py experiment-register             # register it (fixed in ad
 python scripts/fan.py experiment-show                 # the registered manifest; sealed or open
 python scripts/fan.py panel-audit                     # the panel of the development sessions, audited
 python scripts/fan.py baseline-gate                   # fan_rw_v2 against fan_rw_v1 on the checks (decided once)
+python scripts/fan.py checks --candidate phase_scale  # a candidate against the baseline on the three checks
+python scripts/fan.py checks --candidate identity --target ES --no-report   # the self-check, on a secondary target
+python scripts/fan.py features                        # the features on development, screened before the checks
 ```
 
 `experiment-register` takes `--holdout-end`, `--holdout-sessions`, `--warm-up`,

@@ -56,10 +56,12 @@ IB Gateway/TWS ──▶ collector ──▶ TimescaleDB ──▶ NiceGUI dashb
 ## Quick start
 
 ```bash
-cd trading-pipeline
-source .venv/bin/activate
+source .venv/bin/activate      # from the project directory
 python -m dashboard.app        # then open http://127.0.0.1:8080
 ```
+
+`address already in use` means a dashboard is already running on that port: open it, or
+stop it (`pkill -f dashboard.app`) and start again.
 
 That serves the dashboard against whatever is already in the `trading_pipeline` database
 (`DATABASE_URL`).
@@ -373,11 +375,18 @@ python scripts/fan.py experiment-register --dry-run   # the manifest, resolved f
 python scripts/fan.py experiment-show                 # what is registered, sealed or open
 python scripts/fan.py panel-audit                     # every instrument on the minute grid, audited
 python scripts/fan.py baseline-gate                   # fan_rw_v2 against fan_rw_v1 on the checks (decided once)
+python scripts/fan.py checks --candidate phase_scale  # a candidate against the baseline on the three checks
+python scripts/fan.py features                        # every instrument's features, screened (development)
 ```
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
 fat-tailed shape - passed the gate on 2026-10-06 and is the experiment's baseline
-([docs/fan.md](docs/fan.md#version-2-fan_rw_v2)).
+([docs/fan.md](docs/fan.md#version-2-fan_rw_v2)). `checks` trains a candidate on the
+development sessions before each check and scores it against the baseline per horizon,
+origin phase and the pre-open slice; the baseline's frames are cached in `data/fan_cache/`.
+`features` builds what a candidate reads at an origin - per instrument, how much it moves
+against its usual, its recent move, its change since the close, volume, age - each tagged
+with its instrument and group.
 
 ## Configuration
 

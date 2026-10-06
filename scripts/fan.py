@@ -14,6 +14,9 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py experiment-show                                 # what is registered, sealed or open
     python scripts/fan.py panel-audit                                     # every instrument on the minute grid
     python scripts/fan.py baseline-gate                                   # fan_rw_v2 against fan_rw_v1 on the checks
+    python scripts/fan.py checks --candidate phase_scale                  # a candidate against the baseline, 3 checks
+    python scripts/fan.py checks --candidate identity --target ES         # ... the harness's self-check, on ES
+    python scripts/fan.py features                                        # the features, audited (development)
 
 Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
@@ -42,6 +45,7 @@ from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.session_windows import get_trading_day_date
 from forecaster import fan_experiment as fx
+from forecaster import fan_features as ff
 from forecaster import fan_harness as fh
 from forecaster import fan_panel as fp
 from forecaster.fan_benchmark import InsufficientHistory, fan_from, fit, slot_instant
@@ -52,6 +56,7 @@ from forecaster.provenance import code_revision
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("fan")
 REPORT_DIR = os.path.join(_PROJECT_ROOT, "docs", "reports")
+CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "fan_cache")      # the checks' baseline frames (not in git)
 SHOWN_QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 
 
@@ -321,6 +326,93 @@ def cmd_baseline_gate(conn, args):
     return 0
 
 
+def cmd_checks(conn, args):
+    """Chunk 3's harness (forecaster/fan_harness.py): a candidate against the decided baseline on the experiment's
+    three checks - development, never the verdict; nothing is stored in the journal."""
+    try:
+        m = fx.load_experiment(conn, args.name)["definition"]
+    except ValueError as e:
+        print(f"{e}: register it first (experiment-register)")
+        return 1
+    target = args.target or m["targets"]["primary"]
+    started = time.time()
+    try:
+        res = fh.checks(conn, args.name, target, fh.CANDIDATES[args.candidate], CACHE_DIR, args.refresh)
+    except ValueError as e:
+        print(f"Not run: {e}")
+        return 1
+    res["code_revision"] = code_revision()
+    print(f"{res['candidate']} against {res['baseline']} on {args.name}'s checks, {target} "
+          f"({time.time() - started:.0f} s):")
+    for c in res["checks"]:
+        t, s = c["train"], c["sessions"]
+        print(f"  check {c['check']}: trained on {t['sessions']} sessions ({t['rows']:,} rows), scored "
+              f"{len(s['scored'])} of {s['wanted']} ({s['first']} to {s['last']})")
+    print(f"{'':16} {'role':12} {'base CRPS':>9} {'cand CRPS':>9} {'difference':>11} {'share':>8}  95 % interval")
+    for k in [f"h{h}" for h in fh.REPORT_HORIZONS] + [f"pre_open_{x}" for x in fh.PRE_OPEN_MINUTES]:
+        p = res["results"].get(k)
+        if p is None:
+            continue
+        iv = p["interval"]
+        print(f"{k:16} {res['roles'][k]:12} {p['base_crps_bps']:>9.4f} {p['other_crps_bps']:>9.4f} "
+              f"{p['diff_bps']:>+11.5f} {100 * (p['diff_share'] or 0):>+7.2f}%  "
+              + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "-") + f"  {res['verdicts'][k]}")
+    if not args.no_report:
+        print(f"Report: {fh.write_checks_report(res, args.report_dir)}")
+    return 0
+
+
+def load_features(conn, m, target):
+    """The feature table (forecaster/fan_features.py) of every open session from the experiment's window start to
+    the end of development - never the holdout."""
+    dev = m["split"]["development"]["sessions"]
+    fx.guard(conn, m["split"]["window"]["start"], dev[-1])
+    avail = m["instruments"]["availability"]
+    symbols = [s for s, a in avail.items() if a["status"] == "included"]
+    sessions = [s.session_date.isoformat() for s in cal.sessions_between(
+        date.fromisoformat(m["split"]["window"]["start"]), date.fromisoformat(dev[-1]))]
+    panel = fp.load_panel(conn, sessions, symbols)
+    return ff.build(panel, target, {s: avail[s]["first_complete"] for s in symbols})
+
+
+def cmd_features(conn, args):
+    """Chunk 4: the features on the development sessions, audited - each feature's coverage and its rank correlation
+    with the baseline's error size, on the development sessions before the first check."""
+    try:
+        exp = fx.load_experiment(conn, args.name)
+    except ValueError as e:
+        print(f"{e}: register it first (experiment-register)")
+        return 1
+    m = exp["definition"]
+    target = args.target or m["targets"]["primary"]
+    started = time.time()
+    try:
+        _, _, frames = fh.load_frames(conn, args.name, target, CACHE_DIR)
+    except ValueError as e:
+        print(f"Not run: {e}")
+        return 1
+    table = load_features(conn, m, target)
+    first_check = m["split"]["checks"]["blocks"][0]["sessions"]["first"]
+    days = [d for d in m["split"]["development"]["sessions"] if d < first_check and d in frames]
+    rows = fh.Rows.concat([fh.frame_rows(frames[d], horizons=(args.horizon,), every=fh.TRAIN_EVERY) for d in days])
+    keep = rows.horizon == args.horizon
+    rows = fh.Rows(*(getattr(rows, f)[keep] for f in fh.Rows.__dataclass_fields__))
+    result = ff.audit(table, rows)
+    print(f"{len(result)} features ({len(table.features)} from {len(set(f.instrument for f in table.features))} "
+          f"instruments) on {len(table.sessions)} sessions, audited on {len(days)} sessions before {first_check} ({len(rows):,} rows, {args.horizon} min) in "
+          f"{time.time() - started:.0f} s")
+    print(f"{'feature':22} {'group':14} {'coverage':>8} {'rank corr':>9}")
+    for r in sorted(result, key=lambda r: -abs(r["spearman"] or 0))[:args.top]:
+        print(f"{r['name']:22} {r['group']:14} {100 * r['coverage']:>7.1f}% "
+              + (f"{r['spearman']:>+9.3f}" if r["spearman"] is not None else f"{'-':>9}"))
+    if not args.no_report:
+        meta = {"experiment": args.name, "target": target, "format": ff.FEATURE_FORMAT,
+                "code_revision": code_revision(), "sessions": len(days), "first": days[0], "last": days[-1],
+                "every": fh.TRAIN_EVERY, "horizon": args.horizon, "rows": len(rows)}
+        print(f"Report: {ff.write_audit(result, meta, args.report_dir)}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The benchmark price fan")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -356,6 +448,21 @@ def main(argv=None):
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("checks", help="A candidate against the decided baseline on the three checks (development)")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--candidate", choices=sorted(fh.CANDIDATES), required=True)
+    p.add_argument("--target", help="The primary target by default; a secondary one (ES, RTY) by name")
+    p.add_argument("--refresh", action="store_true", help="Recompute the baseline's cached frames "
+                   "(after a backfill revised development sessions)")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("features", help="The features on the development sessions, audited")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", help="The primary target by default")
+    p.add_argument("--horizon", type=int, default=fx.PRIMARY_HORIZON, help="Minutes ahead the audit reads")
+    p.add_argument("--top", type=int, default=25, help="Print this many features, strongest first")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
     p = sub.add_parser("panel-audit", help="Audit the point-in-time panel of an experiment's development sessions")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--report-dir", default=REPORT_DIR)
@@ -369,7 +476,8 @@ def main(argv=None):
             store.register_version(conn, F.fan_record())
         return {"register": cmd_register, "now": cmd_now, "score": cmd_score,
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
-                "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate}[args.command](conn, args)
+                "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
+                "features": cmd_features}[args.command](conn, args)
     finally:
         conn.close()
 

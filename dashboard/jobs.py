@@ -64,6 +64,7 @@ MAX_LINES = 5000          # output kept in memory for the pages; the log file ke
 STOP_GRACE_S = 15         # after Stop, seconds before a job that has not exited is killed
 AUTO_SECOND = 5           # an auto run starts this many seconds into a minute, once the minute's bar has closed
 AUTO_TITLE = "Auto update"
+AUTO_STEP_TIMEOUT_S = 180  # an auto step running longer than this is hung (a normal run takes ~75 s in all): killed, so the next minute can run
 
 
 def collector_command(days: int) -> List[str]:
@@ -167,16 +168,19 @@ class JobRunner:
         self._process: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
         self._log: Optional[TextIO] = None
+        self.step_timeout: Optional[float] = None
 
     @property
     def busy(self) -> bool:
         return self.job is not None and self.job.running
 
-    def start(self, key: str, title: str, steps: List[Tuple[str, List[str]]]) -> Job:
+    def start(self, key: str, title: str, steps: List[Tuple[str, List[str]]],
+              step_timeout: Optional[float] = None) -> Job:
         """Starts the job of ``steps`` - ``(label, command)`` pairs, run in turn - on the running event loop; raises
-        RuntimeError while another runs."""
+        RuntimeError while another runs. A step still running after ``step_timeout`` seconds is killed and fails."""
         if self.busy:
             raise RuntimeError(f"{self.job.title} is still running")
+        self.step_timeout = step_timeout
         self.job = Job(key, title, [Step(label, command) for label, command in steps], datetime.now(timezone.utc))
         self._task = asyncio.get_running_loop().create_task(self._run(self.job))
         return self.job
@@ -192,6 +196,11 @@ class JobRunner:
             process.send_signal(signal.SIGINT)
             asyncio.get_running_loop().call_later(STOP_GRACE_S, self._kill, process)
         return True
+
+    def _timed_out(self, job: Job, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is None:
+            self._add(job, f"Dashboard: step exceeded {self.step_timeout:.0f} s - killed")
+            process.kill()
 
     @staticmethod
     def _kill(process: asyncio.subprocess.Process) -> None:
@@ -221,9 +230,16 @@ class JobRunner:
                 *step.command, cwd=self.cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"}, limit=1 << 20)
-            async for raw in self._process.stdout:
-                self._add(job, raw.decode(errors="replace").rstrip())
-            return await self._process.wait()
+            process = self._process
+            watchdog = (asyncio.get_running_loop().call_later(self.step_timeout, self._timed_out, job, process)
+                        if self.step_timeout else None)
+            try:
+                async for raw in process.stdout:
+                    self._add(job, raw.decode(errors="replace").rstrip())
+                return await process.wait()
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
         except Exception as e:                        # not started, or its output could not be read
             self._add(job, f"Dashboard: {type(e).__name__}: {e}")
             if self._process is not None and self._process.returncode is None:
@@ -322,7 +338,7 @@ class AutoMode:
                     break
                 now = datetime.now(timezone.utc)
                 if self.due(now):
-                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now))
+                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now), AUTO_STEP_TIMEOUT_S)
                     self._last_minute = now.replace(second=0, microsecond=0)
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
