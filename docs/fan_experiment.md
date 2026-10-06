@@ -658,19 +658,143 @@ replay cannot see (a bar read live may be revised later):
   multiplier and both fans' 13 quantiles; once the session is final
   (`fan_forward_scores`) the realised move from the origin price as read, the origin bar's
   later revision, both CRPS and both PITs.
-- **How it runs.** `scripts/fan_forward.sh` - every 15 minutes by cron (with the delayed
-  feed a mark is then issued one run after it; the 09:29 mark needs no timer of its own) -
-  waits 10 s, collects NQ and VXN on its own IB client id (`IB_CLIENT_ID + 2`) and issues
-  every pending mark; the dashboard's Auto mode tries every minute while a session is in
-  progress, so a mark is issued as soon as its bar arrives;
+- **How it runs.** `scripts/fan_forward.sh`, two cron lines, both on the forward record's
+  own IB client id (`IB_CLIENT_ID + 2`) and one lock, so they never collect at once:
+  - `fan_forward.sh mark` at minutes 0, 15, 29, 30 and 45 - **the live attempt**
+    (`scripts/fan.py forward mark`): within 60 s of a mark (minute 29 is for 09:29 ET; any
+    other :29 does nothing) it collects NQ and VXN at once, again every 2 s until the mark's
+    origin bar is stored or 20 s before the 60 s live deadline, then issues that mark alone.
+  - `fan_forward.sh` every 2 minutes - **the catch-up**: waits 10 s, collects, and issues
+    every pending mark of the last 30 minutes whose origin bar is now stored. On this feed
+    this is what issues the marks: the delayed-feed evaluation.
+
+  The dashboard's Auto mode also tries every minute while a session is in progress.
   `scripts/run_pipeline.sh` (daily) scores; `scripts/fan.py forward report` summarises
   ([report](reports/fan_forward_fan_intermarket_v2_lin_pois_ivx_frozen.md)). Scheduling is
   the user's: no cron line or timer is installed by this work. Scoring runs once a session
-  is final in the store (its bars collected more than 2 hours after the halt); the first
-  real scoring is the next daily run's, so `score`'s store path is tested only through its
-  pure part so far.
+  is final in the store (its bars collected more than 2 hours after the halt).
+- **Timing, per trigger** (`fan_forward.timing`, in every report and on the Evaluation
+  page). Every run row records what ran it - the mark trigger, the catch-up, Auto mode or
+  a hand - when that started, when its collection ended and when the computation started.
+  Per rule version and trigger the report gives the marks tried, issued, found without their
+  origin bar (the first run to find a mark so says so, even when a later run issues it -
+  unlike the operations' stale, a mark never issued) and failed, how many issues were out
+  within the version's live deadline, and in seconds after
+  the mark the issue's latency and its parts: the trigger's start, the collection, the
+  computation - and when the origin bar reached the store, the feed's part. **Getting the
+  data on time and getting the forecast out on time are separate requirements**: on this
+  feed the mark trigger's attempts are stale (its rows show the collections it made before
+  the deadline), which says the data was late; the pipeline's own part is measured on any
+  feed. Runs before 2026-10-07's session have no trigger recorded ("not recorded"); the five
+  issues with a known receipt time came 17-19 s after their origin bar reached the store,
+  10-22 minutes after the mark. One issue takes about 8 s to compute (most of it reading the history), so the
+  mark trigger leaves itself 20 s before the deadline.
 - **Nothing is chosen from it.** The frozen model stays as registered; the record says how
   it does from here on. An interval appears once 10 sessions are scored.
+
+**Timing, after the fifth and sixth reviews** (2026-10-06). The first forward entries were
+computed late - the 15:00 mark's at 15:27:58, after its 1- to 20-minute targets had passed -
+and reading only bars dated before a mark does not make a late calculation an on-time
+forecast.
+
+- **The delay is the provider's.** `scripts/ib_feed_check.py` asks IB for live data on NQ
+  and VXN: IB answers error 354 (not subscribed) for both, and the newest 1-minute bar in
+  IB's own history had closed 9.7 minutes earlier for NQ and 14.7 for VXN (16:01 ET) -
+  CME's and CBOE's delayed data. The pipeline adds about a minute (collection, issuing).
+  **The live 5- and 15-minute forecasts cannot be validated on this account**: that needs a
+  real-time market data subscription, and then the issuance latency measured.
+- **Classes, by rule version.** Every issue names the rule version it was made under, and
+  is classified under that version's stored parameters - never under this code's current
+  constants (tested: changing them leaves an older version's classes alone). Rules v2
+  (`..._forward_v2`, registered 16:34:54 ET, the current ones): **live** - issued within
+  60 s of its mark, the intended live forecast (none on this feed); **delayed origin** - at
+  least 75 % of the horizon left: a forecast anchored to an older price, reported only as
+  the separately labelled **delayed-feed evaluation**, a different experiment that says
+  nothing about live 5- and 15-minute forecasts; **late**; **expired** - issued at or after
+  its target. Rules v1 (`..._forward_v1`, 16:05:48 ET) called the delayed-origin class "on
+  time" - the misleading label v2 replaces; its issues keep v1's classes, reported apart.
+  The 15:00 and 15:15 issues were made under no rules and are reported as legacy research.
+  The review point - 20 sessions with such issues at a horizon, or 2027-01-29 - is an initial
+  operational and calibration check, not enough sessions to confirm a difference the size
+  of the holdout's -0.14 %.
+- **Receipt times** (migrations 0022, 0023). Per bar, `first_stored_at` - when it first
+  reached the store; unknown (NULL) for every bar held from before, and kept unknown through
+  the collector's rewrites (0022's first version gave such bars their rewrite time; 0023
+  reset those times to unknown) - and `version_stored_at` - when its current values did,
+  renewed when IB revises them. Each issue records, per instrument, both times for the bar
+  at its origin, and for every bar it could have read (the v2 history for NQ, the feature
+  window for VXN): their count, the latest version time, how many have no known time, and an
+  md5 of their values - with the model's inputs themselves (features, v2's variances), so
+  each issued forecast is reproducible from its record.
+- **Operations in every report, per rule version**: the marks the trading calendar expected
+  from the version's activation - sessions with no attempt and outages included - those
+  attempted, issued, stale (said once per mark), failed and missed; and, as a diagnostic, the
+  same counted from each session's first attempt.
+- **Tests.** Pure: the class boundaries (exactly at, just before and after the live limit,
+  the 75 % limit and the target), classification by stored version, the denominator with a
+  silent session and a morning outage; the mark trigger - which mark is due (a mark's first
+  minute, 09:29 ET, nothing at any other :29), collecting until the origin bar is stored or
+  the deadline nears and never starting a collection after it - and the timing per trigger
+  against each version's own deadline. Against a disposable database (`tp_test`;
+  tests/test_fan_forward_db.py, tests/test_bar_receipts.py): a restart catching up a half
+  hour of marks, a stale origin bar said once and issued when it arrives, receipt times
+  through rewrites and revisions with unknown arrivals kept unknown, the availability record,
+  scoring twice adding nothing, a revised origin bar measured, the journal refusing a delete,
+  a mark-triggered issue keeping its trigger and timed by it, and the explorer drawing the
+  recorded issue where there is one and computing elsewhere. With `TEST_DATABASE_URL` set,
+  all 371 tests of the repository run and pass. The database test's issues are made for past
+  marks, so they are expired - the eligible classes are covered by the pure tests.
+- **Cadence.** The 2-minute catch-up serves the delayed-feed evaluation: on this feed a
+  60-minute forecast has at least 75 % of itself left only when issued within 15 minutes of
+  its mark. It cannot meet the 60 s live deadline - it may start almost two minutes after a
+  mark, before collecting and computing - so live validation runs on the mark trigger
+  (above, after the seventh review), and needs real-time data besides.
+
+## The dashboard (chunk 9)
+
+- **Session Explorer** ([dashboard/components/fan.py](../dashboard/components/fan.py),
+  [forecaster/fan_live.py](../forecaster/fan_live.py)): the fan is `fan_rw_v2` for every
+  instrument with a fan - the experiment's baseline, drawn **as issued** with its own
+  fat-tailed shape. On **NQ** the frozen model adds **brackets** in a colour of their own - the
+  5-95 % whisker, the 25-75 % box and the median - on the candles 5 and 15 minutes ahead, the
+  horizons whose own holdout interval lay below zero (read from the stored holdout result:
+  nothing is drawn while there is none); v2 draws every other horizon. Neither fan is adjusted
+  for display, so the distance between them is the model's multiplier alone, and the readout
+  gives v2's range at exactly the bracket's horizon beside the model's.
+- **Recorded or recomputed.** Where the forward record issued the model from the origin shown
+  (each 15-minute mark, and 09:29 ET), the brackets are that issue - the **recorded forecast**,
+  read from the journal: solid, labelled "rec", and the line above the chart gives when it was
+  recorded, how long after its mark, each horizon's class under its rules and v2's ranges as
+  issued. Anywhere else they are computed from the frozen definition and the bars stored now
+  (hollow, dashed): at the newest candle the current forecast, said to be not recorded; in
+  playback a **recomputed historical preview**, which the line says first. The computation
+  reads only bars dated before the origin, and on the test inputs it equals the forward
+  record's issue from the same origin (tests/test_fan_forward_db.py) - but it cannot undo a
+  later revision or know which VXN values had arrived by then, so only a recorded forecast
+  says what the model showed at the time.
+- **Accuracy fade and coverage** (`fan_live.v2_accuracy`): over the last 30 complete sessions
+  before the day, walk-forward - each session fitted on the sessions before it and drawn with
+  the shape it was issued with, from the 120 sessions before it - and scored as drawn: v2's
+  quantile-form CRPS on that shape, its skill against a flat random walk with normal errors,
+  and how often its 50 and 90 % bands held. NQ to 2026-10-05: skill 8.45 % at 1 minute to
+  2.65 % at 240; the 90 % band held 87.6-89.5 % ([docs/fan.md](fan.md), "The chart", has the
+  rest and what the chart showed before).
+- The line above the chart says how old the origin is when the feed is behind ("13 min ago:
+  the feed is delayed, so the fan starts in the past").
+- **Evaluation** ([dashboard/components/fan_experiment_panel.py](../dashboard/components/fan_experiment_panel.py)),
+  above the P1 experiments: the frozen model and where it draws, the holdout's one scoring
+  per horizon with its verdicts, and the forward record per rule version - the marks the
+  calendar expected and what became of them, the issues by horizon and class, the latest
+  issues with their latency and both 90 % ranges at 15 minutes.
+- Seen in a headless browser (the run-dashboard skill, with the session pinned to
+  2026-10-06 during the halt): the brackets at 5 and 15 minutes inside v2's fog, the readout,
+  playback, the Evaluation section - no page error.
+- **After the seventh review** (2026-10-06): v2's widening removed (a horizon whose recent
+  band held less than 90 % had been drawn widened, the brackets not - so a multiplier of x1.10
+  need not have looked 10 % wider); the coverage measured out of sample (it had used today's
+  shape, made partly from the sessions it measured - 0.3-0.7 points too high on NQ) and the
+  skill on the distribution drawn (it had used normals); recorded forecasts read from the
+  journal and playback labelled as a recomputed preview.
 
 **The freeze (each step the user's decision).** The candidate is `lin_pois_ivx`, unchanged
 (the fourth review: E's edge against `gbm_own` is not a comparison with the nominee, whose
@@ -707,7 +831,8 @@ experiment and its definition hash and listing its training sessions - developme
 One model per experiment version is scored on the holdout; a second evaluation needs a
 new version and is reported as having seen the first result.
 
-Exempt: the Session Explorer keeps drawing `fan_rw_v1` with its recent accuracy - an
+Exempt (until the holdout opened, 2026-10-06 - the explorer has drawn v2 and the frozen model
+since, "The dashboard" below): the Session Explorer keeps drawing `fan_rw_v1` with its recent accuracy - an
 operational display of the registered benchmark; nothing is developed from it.
 
 **Seen before registration:** `fan_rw_v1` was scored over every session to 2026-10-05,
@@ -728,8 +853,8 @@ records this as a historical test.
 | 5 | Model: gradient boosting per horizon on how much wider or narrower than the baseline the fan should be; own instrument only, then all | done: `gbm_own` -0.24 % at 15 min; `gbm_all` no better; with VXN's implied against NQ's realised variance -0.35 to -0.40 % whatever the model; nominee `lin_pois_ivx`; replay passed; the search reviewed (SPA p 0.003 against v2) - above |
 | 6 | Contribution of each instrument (above) | partly, in the research: each group added alone to NQ's own costs, and the one cross-market quantity that helps is VXN's implied against NQ's realised variance (SPA against `gbm_own`, p 0.0045); drop one, Shapley shares and precision not run - they can still follow on the checks |
 | 7 | Freeze one model (`fan_model`) and score it once on the holdout | done: `lin_pois_ivx` frozen (`cb831885906a169f`); holdout **pass**, marginal - -0.14 % at 15 min, interval [-0.01619, -0.00003] bps; draws NQ at 5 and 15 min |
-| 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | running: first issues 2026-10-06 15:00 and 15:15 ET; `forward issue / score / report`, `scripts/fan_forward.sh`, the dashboard's Auto mode, migration 0021; continuous once scheduled (cron, the user's) |
-| 9 | Dashboard: the model draws the horizons it passed | |
+| 8 | Forward record: benchmark and model fans logged every 15 minutes, scored once final | running under rules v2: delayed-feed only on this account (live 5- and 15-minute validation needs real-time data); `forward define / issue / score / report`, `scripts/fan_forward.sh`, the dashboard's Auto mode, migrations 0021-0023; continuous once scheduled (cron, the user's) |
+| 9 | Dashboard: the model draws the horizons it passed | done: the explorer draws v2 and, on NQ, the learned fan's brackets at 5 and 15 min; Evaluation shows the holdout and the forward record (above) |
 
 ## Commands
 
@@ -749,7 +874,8 @@ python scripts/fan.py search                          # SPA and StepM over every
 python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition, registered without --dry-run
 python scripts/fan.py holdout --rehearse --definition data/fan_cache/freeze/fan_intermarket_v2_lin_pois_ivx_frozen.json
 python scripts/fan.py holdout                         # the frozen model on the holdout - once
-python scripts/fan.py forward issue                   # the forward record: this mark's forecast (--dry-run to look)
+python scripts/fan.py forward issue                   # the forward record: the pending marks (--dry-run to look)
+python scripts/fan.py forward mark                    # ... the live attempt at the mark due now (fan_forward.sh mark)
 python scripts/fan.py forward score                   # ... every issue of a final session, once
 python scripts/fan.py forward report                  # ... the record so far
 scripts/fan_forward.sh                                # cron, every 15 minutes: collect NQ and VXN, then issue

@@ -93,31 +93,57 @@ from, and what a learned fan must improve on.
 
 ## The chart
 
+**Since 2026-10-06 the explorer draws `fan_rw_v2`** - the intermarket experiment's baseline,
+once its holdout opened - with v2's own shape and its accuracy measured on v2
+([forecaster/fan_live.py](../forecaster/fan_live.py)); on NQ the experiment's frozen learned
+fan adds brackets at the horizons it passed on the holdout (5 and 15 minutes;
+[docs/fan_experiment.md](fan_experiment.md), "The dashboard").
+
 The Session Explorer draws the fan on the session in progress only, to the right of its
 newest candle ([dashboard/components/fan.py](../dashboard/components/fan.py), the
 `DensityFan` primitive in
 [dashboard/components/lightweight_chart.js](../dashboard/components/lightweight_chart.js)):
 
 - **Columns:** one per candle ahead at the chart's timeframe (at most 120, to the day's end),
-  the distribution of the candle's close - the fan at its last minute. Blank candles extend
+  the distribution of the candle's close - v2's fan at its last minute, **as issued**: no
+  display adjustment, so the learned fan's brackets and the fog compare directly (a
+  multiplier of x1.10 is a bracket 10 % wider than v2 at its horizon). Blank candles extend
   the time axis into the future.
 - **The price fade:** each column is a vertical gradient with a stop at each issued quantile,
   its opacity proportional to the normal density there (exp(-z^2 / 2)): the median fully
   opaque, the 1 / 99 % quantiles nearly clear.
-- **The accuracy fade:** each column's opacity is also scaled by its confidence: the fan's CRPS
-  skill against the flat reference at that horizon, measured by `recent_accuracy`
-  ([forecaster/fan_scoring.py](../forecaster/fan_scoring.py)) walk-forward over the last 30
-  complete sessions before the day, divided by its skill one minute ahead, interpolated in
-  log minutes, never below 0.25. Where the fan knows no more than one volatility for the
-  whole day it stays a faint band. Over the 30 NQ sessions to 2026-10-05 the skill was 8.1 %
-  at 1 minute and 2.5 % at 240 minutes.
-- **Widening:** a horizon whose measured 90 % band held less than 90 % is drawn widened by
-  the factor that would have made it hold (never narrowed); the issued fan is unchanged.
-- **Playback** recomputes the fan from any earlier candle of the session - the model is
-  fitted once per instrument and day, a fan from an origin takes well under a millisecond.
+- **The accuracy fade:** each column's opacity is also scaled by its confidence: v2's CRPS
+  skill at that horizon against a flat random walk with normal errors (one volatility for
+  every trading minute), divided by its skill one minute ahead, interpolated in log minutes,
+  never below 0.25. Where the fan knows no more than that random walk it stays a faint band.
+  It is measured walk-forward over the last 30 complete sessions before the day
+  (`fan_live.v2_accuracy`): each session fitted on the sessions before it and **drawn with
+  the shape it was issued with** - the errors of the 120 sessions before it, never its own -
+  and scored as drawn, the manifest's quantile-form CRPS on that shape. The line under the
+  chart gives the 90 % band's coverage, measured the same way.
+- **Playback** shows the fan from any earlier candle of the session - a **recomputed
+  historical preview**, and the line under the chart says so: computed from the bars stored
+  now, it reads only bars dated before the origin, but it cannot show what a revised or
+  late-arriving bar would have changed. Where the forward record issued the learned fan from
+  that origin (every 15 minutes, and 09:29 ET), the brackets are the **recorded forecast**,
+  read from the journal with when it was recorded: only that says what the model showed at
+  the time ([docs/fan_experiment.md](fan_experiment.md), "The dashboard").
+
+**Measured on NQ** (the 30 sessions to 2026-10-05): v2's skill 8.45 % at 1 minute, 7.29 % at
+15 and 2.65 % at 240; its 90 % band held 89.5 % at 1 minute, 89.2 % at 15 and 87.6 % at 240,
+its 50 % band 45.9-50.4 %.
+
+**Until 2026-10-06 (the seventh review)** the fade was measured with today's shape for every
+measured session - partly in-sample, since those sessions had made the shape - and with
+normal distributions where the fan draws a fat-tailed one; and a horizon whose band had held
+less than 90 % was drawn widened to hold it, while the learned brackets were not, so their
+distance from the fog mixed the model's multiplier with a display-only adjustment. Measured
+that way the same sessions gave 89.8 % at 1 minute and 88.3 % at 240 - in-sample coverage
+0.3-0.7 points too high - and skill 8.11 % and 2.59 %.
 
 The model and accuracy take a few seconds to load (the 250 sessions behind the release
-multipliers); the explorer does that off its event loop, once per instrument and day.
+multipliers; minutes the first time, while v2's per-session errors are computed and cached);
+the explorer does that off its event loop, once per instrument and day.
 
 ## Version 2 (`fan_rw_v2`)
 
@@ -148,7 +174,8 @@ experiment's development sessions before its checks (2025-07-21 to 2026-03-02) -
 a session) the intervals include zero. Report:
 [docs/reports/fan_rw_v2_gate_fan_intermarket_v2.md](reports/fan_rw_v2_gate_fan_intermarket_v2.md).
 
-The Session Explorer keeps drawing `fan_rw_v1` until the experiment's holdout opens (its
+The Session Explorer kept drawing `fan_rw_v1` until the experiment's holdout opened (2026-10-06;
+since then it draws v2, "The chart" above) (its
 manifest): no candidate is shown on the holdout's sessions before then.
 
 ## Running it
@@ -189,5 +216,7 @@ earlier complete sessions is skipped as `insufficient_history`.
   any session outside its coverage, there are no event bumps.
 - **Early-close and holiday sessions** are not scored (a fan is still issued on an
   early close, ending at its close).
-- **Not stored, not live-scored yet.** The chart draws fans but logs none; a prospective record
-  (fans logged at a fixed cadence while they are issued) is still to come.
+- **What the chart draws is not stored.** On NQ the forward record logs v2 and the learned fan
+  every 15 minutes and at 09:29 ET while they are issued, and scores them once the session is
+  final ([docs/fan_experiment.md](fan_experiment.md), chunk 8); every other fan drawn is
+  computed on demand.

@@ -174,7 +174,10 @@ its status and bar count ([dashboard/components/coverage_map.py](dashboard/compo
 Pages:
 
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
-  registered experiments (guideline stage 4): each manifest, its stored scorings (paired arm
+  first the **intermarket fan experiment**: the frozen learned fan and where it draws, its
+  sealed holdout's one scoring per horizon, and the forward record per rule version (the marks
+  expected and what became of them, the issues by class, the latest with their latency).
+  Then the registered P1 experiments (guideline stage 4): each manifest, its stored scorings (paired arm
   differences with intervals, every target, where the differences sit) and its frozen cases,
   each linked to its forecast run in the Session Explorer. Under the manifest, the **session
   day** in the experiment: inside its sessions or not, and per arm its frozen case.
@@ -196,22 +199,34 @@ Pages:
     contract, so they start the session settled, as on TradingView
     ([features/calculations.py](features/calculations.py)).
   - **The session in progress** (from its 18:00 ET Globex open to 17:00 ET): drawn whole, from
-    the Globex open, with the **benchmark price fan** to the right of its newest candle
+    the Globex open, with the **price fan** `fan_rw_v2` - the intermarket experiment's baseline,
+    with its own fat-tailed shape - to the right of its newest candle
     ([dashboard/components/fan.py](dashboard/components/fan.py), model in
-    [docs/fan.md](docs/fan.md)): per candle ahead (up to 120, to the day's end) the
-    distribution of its close, as a neutral fog whose opacity follows the density - the most
-    likely price most opaque - and fades with the fan's measured skill against a flat random
-    walk at that horizon (walk-forward over the last 30 sessions, relative to its skill one
-    minute ahead, never below a faint floor). A horizon whose measured 90 % band held less than
-    90 % is drawn widened to hold it. The median stays at the origin's price: the fan forecasts
-    how far, not which way. Scheduled releases ahead are marked where the fan widens; the
-    crosshair over a column reads its 5 / 50 / 95 % prices; the line above the charts gives the
-    90 % ranges 15, 30 and 60 minutes ahead and how the fades were measured. The fan follows the
-    active contract (another contract shows none).
+    [docs/fan.md](docs/fan.md)); on **NQ** the frozen **learned fan** adds blue brackets (5-95 %
+    whisker, 25-75 % box, median) on the candles 5 and 15 minutes ahead - the horizons it passed on
+    the sealed holdout; v2 draws every other horizon ([docs/fan_experiment.md](docs/fan_experiment.md)).
+    The line above the chart says how old the fan's origin is when the feed is delayed. Per candle
+    ahead (up to 120, to the day's end) the
+    distribution of its close as v2 issues it (no display adjustment, so the brackets compare
+    with it directly), as a neutral fog whose opacity follows the density - the most
+    likely price most opaque - and fades with v2's measured skill against a flat random
+    walk at that horizon (walk-forward over the last 30 sessions, each drawn with the shape it
+    was issued with; relative to its skill one minute ahead, never below a faint floor). The
+    median stays at the origin's price: the fan forecasts how far, not which way. Scheduled
+    releases ahead are marked where the fan widens; the crosshair over a column reads its
+    5 / 50 / 95 % prices (and on the learned fan's two candles its range, v2's at exactly that
+    horizon, and whether it was recorded); the line above the charts gives the 90 % ranges 15,
+    30 and 60 minutes ahead and how the fades and the band's coverage were measured. The fan
+    follows the active contract (another contract shows none). Where the forward record issued
+    the learned fan from the origin shown (every 15 minutes and 09:29 ET), its brackets are that
+    **recorded forecast**, read from the journal (solid, "rec"); elsewhere they are computed
+    from the bars stored now (hollow, dashed).
     **Playback** steps back through the session's candles (the slider, or the arrows a candle at
-    a time) with the fan as it stood at each - the later candles hidden, or drawn grey with
-    **Show what followed**; the levels and opening range are the ones known by then. **Live**
-    returns to the newest candle; **Fan** hides it.
+    a time) with the fan from each - a **recomputed historical preview**, as the line above the
+    chart says: from the bars stored now, so not a record of what was shown then (only a
+    recorded forecast is). The later candles are hidden, or drawn grey with **Show what
+    followed**; the levels and opening range are the ones known by then. **Live** returns to the
+    newest candle; **Fan** hides it.
     **Auto** (beside Fit) collects the session in progress from IB and forecasts once a minute -
     the collector for today only with its journal step, then the preview while one is possible
     ([dashboard/jobs.py](dashboard/jobs.py) `AUTO`) - and moves the explorer to the session in
@@ -398,9 +413,21 @@ width scaled per origin by gradient boosting on those features (forecaster/fan_m
 `gbm_own_iv` adds VXN's implied over NQ's realised variance, the cross-market quantity that
 helps, and `gbm_own_ivx` both sides of that comparison beside the ratio. `lin_pois_ivx` was frozen and passed the sealed holdout
 on 2026-10-06 - marginally (-0.14 % at 15 minutes); it now draws NQ at 5 and 15 minutes.
-Its forward record runs from `scripts/fan_forward.sh` (cron, every 15 minutes - it collects
-NQ and VXN on client id `IB_CLIENT_ID + 2` and issues) or the dashboard's Auto mode, and
-`scripts/run_pipeline.sh` scores it daily. Every checks report
+Its forward record runs from `scripts/fan_forward.sh` - two cron lines (neither installed by
+this work), both collecting NQ and VXN on client id `IB_CLIENT_ID + 2` under one lock:
+
+```
+0,15,29,30,45 * * * *  /path/to/trading-pipeline/scripts/fan_forward.sh mark   # the live attempt at each mark (and 09:29 ET)
+*/2 * * * *            /path/to/trading-pipeline/scripts/fan_forward.sh        # the catch-up: the delayed-feed evaluation
+```
+
+- or the dashboard's Auto mode, and `scripts/run_pipeline.sh` scores it daily. The IB feed
+on this account is delayed (no real-time subscription; `scripts/ib_feed_check.py` measures
+it): no forecast is live, so the live 5- and 15-minute forecasts cannot be validated on it.
+Every report classifies each issue under the rule version it was made under - live, delayed
+origin (the separately labelled delayed-feed evaluation), late, expired - counts the marks the
+calendar expected, and times each trigger against the 60 s live deadline (the feed's part -
+when the origin bar arrived - apart from the pipeline's). Every checks report
 includes calibration (band coverage, misses on each side, widths, PIT) and how concentrated
 the gain is.
 

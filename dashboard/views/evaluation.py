@@ -16,8 +16,11 @@ stored scorings and its frozen cases.
   cases        per session and arm the official run - each a link as above - and the
                outcome revision it is scored on
 
+Above them, the intermarket fan experiment - its frozen model, its holdout and its
+forward record (dashboard/components/fan_experiment_panel.py).
+
 Nothing is computed here that is not stored: scoring is
-``python scripts/nq_journal.py experiment-score``.
+``python scripts/nq_journal.py experiment-score`` (``python scripts/fan.py`` for the fan).
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from urllib.parse import urlencode
 from nicegui import ui
 
 from contracts import nq_prompt_v2 as defs
+from dashboard.components import fan_experiment_panel
 from dashboard.components.session_bar import SessionBar
 from database import journal_store as store
 
@@ -72,6 +76,11 @@ class EvaluationPage:
     def build(self) -> None:
         with ui.column().classes("w-full px-4 pb-4 gap-3"):
             ui.label("Evaluation").classes("text-2xl font-medium")
+            with ui.expansion("Intermarket fan experiment", value=True).classes("w-full"):
+                try:
+                    fan_experiment_panel.render(self.conn)
+                except Exception as e:                    # the P1 evaluation below stays usable
+                    ui.label(f"Could not read the fan experiment: {type(e).__name__}: {e}").style(_MUTED)
             if not self.experiments:
                 ui.label("No registered experiment yet. Register one before looking at any score: python "
                          "scripts/nq_journal.py experiment-register --name hist_dev_v1 --start 2025-09-02 --end "

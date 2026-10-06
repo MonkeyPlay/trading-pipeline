@@ -243,6 +243,13 @@ class TimeShade {
  * the most opaque and the whole fan fades where the model's measured skill does.
  * The median (the origin's price: the fan has no drift), the origin and the
  * scheduled releases ahead are drawn with it. Under the candles, like the shades.
+ *
+ * The learned fan (fan.model, dashboard/components/fan.py): on the candles of
+ * the horizons it passed on the holdout, a bracket of its own colour - the 5-95 %
+ * whisker, the 25-75 % box and the median - beside the fog it is compared with.
+ * A recorded forecast (the forward record's issue from this origin) is solid and
+ * labelled "rec"; one computed from the bars stored now is hollow, its whiskers
+ * dashed.
  */
 class DensityFanRenderer {
   constructor(view) {
@@ -295,6 +302,40 @@ class DensityFanRenderer {
         prev = c;
       }
 
+      // The learned fan's brackets.
+      if (v.marks.length) {
+        const rgb = fan.model_rgb || "77, 182, 255";
+        const w = Math.max(2, Math.round(v.half * 0.9 * hr));
+        ctx.lineWidth = Math.max(1, Math.round(1.5 * hr));
+        ctx.font = `${Math.round(10 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.textBaseline = "bottom";
+        for (const m of v.marks) {
+          const x = Math.round(m.x * hr);
+          const y5 = m.ys[fan.band[0]] * vr, y95 = m.ys[fan.band[1]] * vr;
+          const y25 = m.ys[fan.quartiles[0]] * vr, y75 = m.ys[fan.quartiles[1]] * vr;
+          const y50 = m.ys[fan.median] * vr;
+          ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
+          ctx.setLineDash(m.recorded ? [] : [Math.round(3 * vr), Math.round(2 * vr)]);
+          ctx.beginPath();
+          ctx.moveTo(x, y95); ctx.lineTo(x, y75);
+          ctx.moveTo(x, y25); ctx.lineTo(x, y5);
+          ctx.moveTo(x - w / 2, y95); ctx.lineTo(x + w / 2, y95);
+          ctx.moveTo(x - w / 2, y5); ctx.lineTo(x + w / 2, y5);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          if (m.recorded) {
+            ctx.fillStyle = `rgba(${rgb}, 0.18)`;
+            ctx.fillRect(x - w, Math.min(y75, y25), 2 * w, Math.abs(y25 - y75));
+          }
+          ctx.strokeRect(x - w, Math.min(y75, y25), 2 * w, Math.abs(y25 - y75));
+          ctx.beginPath();
+          ctx.moveTo(x - w, y50); ctx.lineTo(x + w, y50);
+          ctx.stroke();
+          ctx.fillStyle = `rgba(${rgb}, 0.95)`;
+          ctx.fillText(`${m.minutes}m${m.recorded ? " rec" : ""}`, x - w, y95 - Math.round(3 * vr));
+        }
+      }
+
       // Scheduled releases ahead: where the fan widens.
       ctx.font = `${Math.round(11 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textBaseline = "bottom";
@@ -319,6 +360,7 @@ class DensityFanPaneView {
     this.cols = [];
     this.origin = null;
     this.releases = [];
+    this.marks = [];
     this.half = 3;
   }
 
@@ -329,6 +371,7 @@ class DensityFanPaneView {
     this.cols = [];
     this.origin = null;
     this.releases = [];
+    this.marks = [];
     if (!fan || !src._chart || !src._series) return;
     const timeScale = src._chart.timeScale();
     const series = src._series;
@@ -346,6 +389,13 @@ class DensityFanPaneView {
     for (const r of fan.releases) {
       const x = timeScale.timeToCoordinate(r.time);
       if (x !== null) this.releases.push({ x, label: r.label });
+    }
+    for (const m of (fan.model && fan.model.marks) || []) {
+      const x = timeScale.timeToCoordinate(m.time);
+      if (x === null) continue;
+      const ys = m.q.map((p) => series.priceToCoordinate(p));
+      if (ys.some((y) => y === null)) continue;
+      this.marks.push({ x, ys, minutes: m.minutes, recorded: fan.model.source === "recorded" });
     }
   }
 
@@ -387,6 +437,13 @@ class DensityFan {
     return this._fan.columns.find((c) => c.time === time) || null;
   }
 
+  /** The learned fan's bracket at chart time `time`, if one is drawn there. */
+  markAt(time) {
+    const model = this._fan && this._fan.model;
+    if (!model) return null;
+    return model.marks.find((m) => m.time === time) || null;
+  }
+
   updateAllViews() {
     this._paneViews.forEach((view) => view.update());
   }
@@ -402,7 +459,7 @@ class DensityFan {
     const timeScale = this._chart.timeScale();
     let lo = Infinity;
     let hi = -Infinity;
-    for (const c of fan.columns) {
+    for (const c of fan.columns.concat((fan.model && fan.model.marks) || [])) {
       const i = timeScale.timeToIndex(c.time, false);
       if (i === null || i < startTimePoint || i > endTimePoint) continue;
       lo = Math.min(lo, c.q[fan.band[0]]);
@@ -940,6 +997,17 @@ export default {
         const f = this.fan._fan;
         this.readout = `Fan +${column.minutes} min  5% ${fmt(column.q[f.band[0]])}  ` +
           `50% ${fmt(column.q[f.median])}  95% ${fmt(column.q[f.band[1]])}`;
+        const mark = this.fan.markAt(param.time);
+        if (mark) {
+          this.readout += `  ·  learned +${mark.minutes} min  5% ${fmt(mark.q[f.band[0]])}  ` +
+            `95% ${fmt(mark.q[f.band[1]])} (x${mark.multiplier.toFixed(2)})`;
+          if (mark.base) {
+            this.readout += `  ·  v2 +${mark.minutes} min  5% ${fmt(mark.base[f.band[0]])}  ` +
+              `95% ${fmt(mark.base[f.band[1]])}`;
+          }
+          this.readout += f.model.source === "recorded"
+            ? `  ·  recorded ${f.model.recorded_at_et} ET` : "  ·  computed, not recorded";
+        }
       } else {
         this.readout = "";
       }

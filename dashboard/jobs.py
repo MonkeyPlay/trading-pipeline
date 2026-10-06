@@ -281,8 +281,11 @@ class JobRunner:
             self._log = None
 
 
-def forward_command() -> List[str]:
-    return [sys.executable, os.path.join("scripts", "fan.py"), "forward", "issue"]
+def forward_command(started: Optional[datetime] = None) -> List[str]:
+    """The forward record's pending marks, recorded as issued by Auto mode (fan_forward.TRIGGERS) - with the time
+    its run ``started``, before the collection, so the record times the whole run."""
+    cmd = [sys.executable, os.path.join("scripts", "fan.py"), "forward", "issue", "--trigger", "auto"]
+    return cmd + (["--triggered-at", started.astimezone(timezone.utc).isoformat()] if started else [])
 
 
 def forward_due(now: datetime) -> bool:
@@ -302,7 +305,7 @@ def auto_steps(now: datetime) -> List[Tuple[str, List[str]]]:
     except PreviewUnavailable:
         pass
     if forward_due(now):
-        steps.append(("forward", forward_command()))
+        steps.append(("forward", forward_command(now)))
     return steps
 
 

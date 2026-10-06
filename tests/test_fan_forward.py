@@ -3,11 +3,13 @@
 The forward record (forecaster/fan_forward.py, chunk 8): its issue times, the baseline's
 shape built session by session exactly as fan_rw_v2's walk-forward builds it, an issue's
 multipliers from the frozen definition alone with both fans ordered, and its scoring from
-the origin price as read against the session's final prices.
+the origin price as read against the session's final prices; the mark trigger (which mark
+is due, collecting until the origin bar is stored or the deadline nears) and the timing of
+each trigger against the stored rules' deadline.
 """
 
 from dataclasses import replace
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -124,3 +126,149 @@ def test_the_pending_marks_are_the_last_half_hours_oldest_first():
     assert fwd.pending_marks(_et(date(2026, 10, 10), 12, 0)) == []                 # a Saturday: nothing pending
     across = fwd.pending_marks(_et(date(2026, 10, 6), 18, 20))                     # the new session's first mark
     assert [(m.session, at(m)) for m in across] == [(date(2026, 10, 7), (18, 15))]
+
+
+# ---------------------------------------------------------------------------
+# Timing rules, by the stored version (pure)
+# ---------------------------------------------------------------------------
+
+V2 = {"params": {"live_seconds": 60, "remaining_share": 0.75, "grace_minutes": 30, "mark_minutes": 15}}
+V1 = {"timeliness": {"on_time": "at least 75 % of the horizon remains at issuance: issued_at <= mark + 0.25 x h"}}
+
+
+def test_the_boundaries_of_live_delayed_origin_late_and_expired():
+    from datetime import timedelta, timezone
+    p = fwd.rules_params(V2)
+    mark = datetime(2026, 10, 7, 14, 0, tzinfo=timezone.utc)
+    at = lambda s: mark + timedelta(seconds=s)
+    assert fwd.classify(p, mark, at(60), 5) == "live"                     # exactly the live limit
+    assert fwd.classify(p, mark, at(60.001), 5) == "delayed_origin"        # just over it: 79.99 % of 5 min left
+    assert fwd.classify(p, mark, at(75), 5) == "delayed_origin"            # exactly 75 % left
+    assert fwd.classify(p, mark, at(75.001), 5) == "late"                  # just under
+    assert fwd.classify(p, mark, at(299.999), 5) == "late"                 # a moment before the target
+    assert fwd.classify(p, mark, at(300), 5) == "expired"                  # at the target
+    assert fwd.classify(p, mark, at(301), 5) == "expired"
+    assert fwd.classify(p, mark, at(59), 1) == "live" and fwd.classify(p, mark, at(60), 1) == "expired"
+    assert fwd.classify(p, mark, at(690), 60) == "delayed_origin"          # 11.5 min late: 80.8 % of an hour left
+    assert fwd.classify(p, mark, at(690), 15) == "late"                    # ... but 23 % of 15 minutes
+
+
+def test_an_issue_is_classified_by_its_own_versions_stored_rules(monkeypatch):
+    from datetime import timedelta, timezone
+    mark = datetime(2026, 10, 7, 14, 0, tzinfo=timezone.utc)
+    issued = mark + timedelta(seconds=40)
+    p1, p2 = fwd.rules_params(V1), fwd.rules_params(V2)
+    assert p1 == {"labels": "v1", "live_seconds": None, "remaining_share": 0.75}
+    assert fwd.classify(p1, mark, issued, 15) == "on_time" and fwd.classify(p2, mark, issued, 15) == "live"
+    monkeypatch.setattr(fwd, "LIVE_SECONDS", 1)                            # today's defaults change ...
+    monkeypatch.setattr(fwd, "REMAINING_SHARE", 0.99)
+    monkeypatch.setitem(fwd.RULES, "params", {"live_seconds": 1, "remaining_share": 0.99})
+    assert fwd.classify(fwd.rules_params(V1), mark, issued, 15) == "on_time"     # ... the stored versions do not
+    assert fwd.classify(fwd.rules_params(V2), mark, issued, 15) == "live"
+    assert fwd.rules_params(None) is None
+
+
+def _mark(d, hh, mm):
+    return _et(d, hh, mm).astimezone(timezone.utc)
+
+
+def test_the_denominator_counts_every_expected_mark_from_activation():
+    a, b = date(2026, 10, 7), date(2026, 10, 8)                           # two full sessions
+    start, now = _mark(a, 10, 0), _mark(b, 17, 30)
+    attempts = [(_mark(b, 14, 0), "issued"), (_mark(b, 14, 15), "stale"), (_mark(b, 14, 30), "issued")]
+    issues = [{"issue_id": "1", "record": "rules_v2", "mark_at": _mark(b, 14, 0), "issued_at": _mark(b, 14, 0)
+               + timedelta(seconds=30), "horizons": ["5", "60"]},
+              {"issue_id": "2", "record": "rules_v2", "mark_at": _mark(b, 14, 30), "issued_at": _mark(b, 14, 41),
+               "horizons": ["5", "60"]},
+              {"issue_id": "3", "record": None, "mark_at": _mark(a, 9, 0), "issued_at": _mark(a, 9, 20),
+               "horizons": ["15"]}]
+    out = fwd.summarise([("rules_v2", V2, start)], attempts, issues, [], now)
+    g, legacy = out
+    o = g["operations"]
+    marks_a = len([t for t in fwd.session_marks(a) if t >= start])        # 10:00 onwards, no attempt that day
+    assert o["expected"] == marks_a + len(fwd.session_marks(b)) and o["sessions_expected"] == 2
+    assert o["sessions_attempted"] == 1 and o["attempted"] == 3 and o["issued_expected"] == 2 and o["stale"] == 1
+    assert o["missed"] == o["expected"] - 3                               # the silent session and b's morning count
+    assert o["since_first_attempt"]["missed"] < o["missed"]               # the old measure would hide them
+    classes = {(r["horizon"], r["class"]) for r in g["horizons"]}
+    assert classes == {(5, "live"), (60, "live"), (5, "expired"), (60, "delayed_origin")}
+    assert legacy["version"] is None and {r["class"] for r in legacy["horizons"]} == {"legacy"}
+
+
+# ---------------------------------------------------------------------------
+# The mark trigger and the timing (pure)
+# ---------------------------------------------------------------------------
+
+def test_the_mark_trigger_acts_in_a_marks_first_minute_only():
+    d = date(2026, 10, 7)
+    m = fwd.mark_due(_et(d, 10, 15, 0))
+    assert m.at == _mark(d, 10, 15) and not m.cutoff                      # at the mark itself
+    assert fwd.mark_due(_et(d, 10, 16, 0)) == m                           # exactly MARK_WINDOW later
+    assert fwd.mark_due(_et(d, 10, 16, 1)) is None                        # past it: the catch-up's
+    cutoff = fwd.mark_due(_et(d, 9, 29, 20))
+    assert cutoff.cutoff and cutoff.at == _mark(d, 9, 29)                 # 09:29 ET: minute 29 of the cron line
+    assert fwd.mark_due(_et(d, 10, 29, 5)) is None                        # any other :29 does nothing
+    assert fwd.mark_due(_et(d, 9, 30, 10)).at == _mark(d, 9, 30)
+    assert fwd.mark_due(_et(d, 17, 0, 10)) is None and fwd.mark_due(_et(date(2026, 10, 10), 12, 0, 5)) is None
+
+
+class _Clock:
+    def __init__(self, start):
+        self.t = start
+
+    def __call__(self):
+        return self.t
+
+
+def test_the_mark_trigger_collects_until_the_bar_is_stored_or_the_deadline_nears():
+    t0 = datetime(2026, 10, 7, 14, 15, 1, tzinfo=timezone.utc)
+    clock = _Clock(t0)
+
+    def collect():
+        clock.t += timedelta(seconds=6)                                   # a collection takes 6 s
+        return 0
+
+    pause = lambda: setattr(clock, "t", clock.t + timedelta(seconds=2))
+    stored = iter([False, False, True])
+    got = fwd.collect_until(collect, lambda: next(stored), t0 + timedelta(seconds=40), clock, pause)
+    assert [g["stored"] for g in got] == [False, False, True]             # stops once the origin bar is in
+    assert got[-1]["end"] == (t0 + timedelta(seconds=22)).isoformat()
+    clock.t = t0
+    never = fwd.collect_until(collect, lambda: False, t0 + timedelta(seconds=40), clock, pause)
+    assert len(never) == 5 and not never[-1]["stored"]                    # ending 6, 14, 22, 30, 38 s; the pause hits 40
+    assert all(datetime.fromisoformat(g["start"]) < t0 + timedelta(seconds=40) for g in never)   # none starts after
+    clock.t = t0 + timedelta(seconds=50)
+    assert len(fwd.collect_until(collect, lambda: False, t0, clock, pause)) == 1   # past the deadline: once
+
+
+def test_timing_measures_each_trigger_against_its_rules_deadline():
+    d = date(2026, 10, 7)
+    m1, m2, m3 = _mark(d, 14, 0), _mark(d, 14, 15), _mark(d, 14, 30)
+    s = lambda t, sec: (t + timedelta(seconds=sec)).isoformat()
+    mark_trig = lambda t: {"trigger": {"kind": "mark", "triggered_at": s(t, 1), "collected_at": s(t, 9)},
+                           "started_at": s(t, 10)}
+    runs = [{"mark_at": m1, "status": "issued", "issue_id": "a", "detail": mark_trig(m1)},       # out at +25 s
+            {"mark_at": m2, "status": "stale", "issue_id": None, "detail": mark_trig(m2)},       # bar missing at +40 s
+            {"mark_at": m2, "status": "issued", "issue_id": "b", "detail": {
+                "trigger": {"kind": "catchup", "triggered_at": s(m2, 660), "collected_at": s(m2, 680)},
+                "started_at": s(m2, 681)}},                                                     # out at +11.5 min
+            {"mark_at": m3, "status": "issued", "issue_id": "c", "detail": {}}]                 # before triggers
+    issues = [{"issue_id": "a", "mark_at": m1, "issued_at": m1 + timedelta(seconds=25),
+               "arrival": m1 + timedelta(seconds=4)},
+              {"issue_id": "b", "mark_at": m2, "issued_at": m2 + timedelta(seconds=690),
+               "arrival": m2 + timedelta(seconds=650)},
+              {"issue_id": "c", "mark_at": m3, "issued_at": m3 + timedelta(seconds=700), "arrival": None}]
+    out = {t["trigger"]: t for t in fwd.timing(fwd.rules_params(V2), runs, issues)}
+    assert list(out) == ["mark", "catchup", "unrecorded"]                 # TRIGGERS order
+    mk, cu, un = out["mark"], out["catchup"], out["unrecorded"]
+    assert (mk["attempted"], mk["issued"], mk["stale"], mk["within_deadline"]) == (2, 1, 1, 1)
+    assert mk["latency_s"]["median"] == 25 and mk["schedule_s"]["median"] == 1 and mk["collect_s"]["median"] == 8
+    assert mk["compute_s"]["median"] == 15 and mk["arrival_s"]["median"] == 4
+    assert (cu["issued"], cu["within_deadline"], cu["latency_s"]["max"], cu["arrival_s"]["median"]) == (1, 0, 690, 650)
+    assert un["issued"] == 1 and un["schedule_s"] is None and un["arrival_s"] is None
+    v1 = {t["trigger"]: t for t in fwd.timing(fwd.rules_params(V1), runs, issues)}
+    assert v1["mark"]["within_deadline"] is None and v1["mark"]["deadline_s"] is None   # v1 had no live deadline
+    g = fwd.summarise([("rules_v2", V2, _mark(d, 13, 0))], [(r["mark_at"], r["status"]) for r in runs],
+                      [dict(i, record="rules_v2", horizons=["5"]) for i in issues], [], _mark(d, 17, 30), runs)[0]
+    assert [t["trigger"] for t in g["timing"]] == ["mark", "catchup", "unrecorded"]
+    assert g["timing"][0]["within_deadline"] == 1

@@ -97,17 +97,22 @@ def evaluation(page, url, out):
 
 
 def fan(page, url, out):
-    """The session in progress (only then): the fan right of the newest candle, its readout, then playback 30
-    candles back - hidden, then with what followed."""
+    """The session in progress (only then): the fan (fan_rw_v2) right of the newest candle - on NQ with the learned
+    fan's brackets at the horizons it passed, recorded or computed - its readout, then playback 30 candles back (a
+    recomputed historical preview, so the caption says) - hidden, then with what followed."""
     page.goto(url + "/", timeout=180000)
     page.wait_for_selector(".q-badge", timeout=180000)
-    note = page.locator("text=/^Fan fan_rw_v1|^No fan|^Loading the fan/")
+    note = page.locator("text=/^Fan fan_rw_v\\d|^No fan|^Loading the fan|^Recomputed historical preview/")
     if not page.locator("text=Playback").first.is_visible():
         print("no session in progress: no fan and no playback (current_session is None)")
         return
-    page.wait_for_selector("text=/^Fan fan_rw_v1|^No fan/", timeout=60000)
+    page.wait_for_selector("text=/^Fan fan_rw_v\\d|^No fan/", timeout=120000)
+    try:                                              # NQ: the learned fan's brackets arrive a moment later
+        page.wait_for_selector("text=/learned fan \\(|recorded forecast/", timeout=30000)
+    except Exception:
+        pass
     page.wait_for_timeout(2500)
-    print(note.first.inner_text()[:300])
+    print(note.first.inner_text()[:500])
     page.screenshot(path=f"{out}/fan_live.png")
     box = page.locator(".nq-chart-root").first.bounding_box()
     page.mouse.move(box["x"] + box["width"] - 120, box["y"] + 300)     # over a fan column
@@ -117,6 +122,7 @@ def fan(page, url, out):
         page.get_by_role("button", name="Previous candle").click()
     page.wait_for_timeout(2000)
     print("playback:", page.locator(".font-mono").first.inner_text())
+    print(note.first.inner_text()[:500])
     page.screenshot(path=f"{out}/fan_playback.png")
     page.get_by_text("Show what followed").click()
     page.wait_for_timeout(1500)

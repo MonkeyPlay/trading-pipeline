@@ -375,6 +375,8 @@ class SessionExplorer:
         self.fan_on = True
         self.fan_contexts: Dict[tuple, fan.FanContext] = {}     # (symbol, day) -> model and accuracy
         self._fan_loading: set = set()
+        self.fan_marks: Dict[tuple, list] = {}           # (symbol, day, origin, newest slot) -> the learned fan's brackets
+        self._marks_loading: set = set()
         self.fan_day = None                              # the session's minute grid (forecaster/fan_benchmark.Day)
         self.candle_starts: List[pd.Timestamp] = []      # the candles playback steps through, oldest first
         self.previews: Dict[str, tuple] = {}             # day -> (as_of, the analogue preview made as of then)
@@ -484,6 +486,29 @@ class SessionExplorer:
         if self.live and (self.bar.symbol, self.bar.date) == key:
             self.main.push(reset_view=self.main.until is None)    # the newest candle with the fan ahead of it
 
+    def _ensure_marks(self, ctx: "fan.FanContext", origin: int) -> Optional[dict]:
+        """The learned fan's brackets from ``origin`` - recorded or computed (fan.load_marks): cached, or loaded off
+        the event loop (None until then)."""
+        if ctx.learned is None:
+            return None
+        key = (self.bar.symbol, self.bar.date, origin, fan.latest_slot(self.fan_day))
+        if key in self.fan_marks:
+            return self.fan_marks[key]
+        if key not in self._marks_loading:
+            self._marks_loading.add(key)
+            background_tasks.create(self._load_marks(key, ctx, self.fan_day, origin))
+        return None
+
+    async def _load_marks(self, key: tuple, ctx: "fan.FanContext", day, origin: int) -> None:
+        try:
+            marks = await run.io_bound(fan.load_marks, self.conn, ctx, day, origin)
+        except Exception as e:                            # drawn without them; the caption says why
+            marks = {"source": "error", "error": f"{type(e).__name__}: {e}", "marks": []}
+        self.fan_marks[key] = marks
+        self._marks_loading.discard(key)
+        if self.live and (self.bar.symbol, self.bar.date) == key[:2]:
+            self.main.push(reset_view=False)
+
     def _fan_origin(self) -> Optional[int]:
         """The fan's origin slot: the last minute of the last candle shown - the newest bar unless in playback."""
         newest = fan.latest_slot(self.fan_day)
@@ -501,13 +526,17 @@ class SessionExplorer:
             active = self.bar.contract is not None and int(self.bar.contract["contract_id"]) == self.fan_day.contract_id
             if ctx is not None and active and self.fan_on:
                 origin = self._fan_origin()
-                payload = fan.fan_payload(ctx, self.fan_day, origin, self.timeframe) if origin is not None else None
+                marks = self._ensure_marks(ctx, origin) if origin is not None else None
+                payload = (fan.fan_payload(ctx, self.fan_day, origin, self.timeframe, marks)
+                           if origin is not None else None)
             if not active:
                 self.fan_note.text = "The fan follows the active contract: pick it in Contract to see the fan."
             elif not self.fan_on:
                 self.fan_note.text = "Fan hidden."
             else:
-                self.fan_note.text = fan.describe(ctx, payload)
+                playback = self.main.until is not None
+                now = None if playback else datetime.now(timezone.utc)     # newest: say how old
+                self.fan_note.text = fan.describe(ctx, payload, now, playback=playback)
         fan.attach(spec, payload)
 
     def _sync_playback(self) -> None:

@@ -638,21 +638,70 @@ def cmd_holdout(conn, args):
     return 0
 
 
+FORWARD_CLIENT_OFFSET = 2         # the forward record's IB client id: IB_CLIENT_ID + 2 (scripts/fan_forward.sh's too)
+
+
+def _forward_mark(conn, args, exp, model) -> int:
+    """The mark trigger (scripts/fan_forward.sh mark, at each mark): collect the model's instruments until the
+    origin bar of the mark due now is stored or the live deadline nears (fan_forward.ISSUE_RESERVE before it), then
+    issue that mark at once - the live attempt - recording when it was triggered, each collection and the
+    computation. Outside a mark's first minute it does nothing."""
+    import subprocess
+    from datetime import timedelta
+    started = datetime.now(timezone.utc)
+    triggered = datetime.fromisoformat(args.triggered_at) if args.triggered_at else started
+    mark = fwd.mark_due(started)
+    if mark is None:
+        print(f"No mark due at {started.astimezone(cal.NY_TZ):%H:%M:%S} ET: the mark trigger acts within "
+              f"{fwd.MARK_WINDOW.total_seconds():.0f} s of a mark")
+        return 0
+    target = exp["definition"]["targets"]["primary"]
+    symbols = [target] + [s for s in fwd._instruments(model["definition"]) if s != target]
+    cmd = [sys.executable, "-m", "collector.ib_collector", "--days", "0", "--symbol", ",".join(symbols),
+           "--host", str(Config.IB_HOST), "--port", str(Config.IB_PORT),
+           "--client-id", str(Config.IB_CLIENT_ID + FORWARD_CLIENT_OFFSET)]
+    clock = lambda: datetime.now(timezone.utc)
+    deadline = mark.at + timedelta(seconds=fwd.LIVE_SECONDS) - fwd.ISSUE_RESERVE
+    sys.stdout.flush()
+    collections = fwd.collect_until(lambda: subprocess.run(cmd, cwd=_PROJECT_ROOT).returncode,
+                                    lambda: fwd.origin_stored(conn, target, mark), deadline, clock,
+                                    lambda: time.sleep(fwd.COLLECT_PAUSE_S))
+    trigger = {"kind": "mark", "triggered_at": triggered.isoformat(), "collected_at": collections[-1]["end"],
+               "collections": collections}
+    (res,) = fwd.issue(conn, model, exp, clock(), code_revision(), CACHE_DIR, trigger=trigger, marks=[mark])
+    after = lambda t: (t - mark.at).total_seconds()
+    line = (f"{res['status']}: the mark {_et(mark.at)}{' (the 09:29 cutoff)' if mark.cutoff else ''} - triggered "
+            f"{after(triggered):+.1f} s, {len(collections)} collection(s) to {after(datetime.fromisoformat(collections[-1]['end'])):+.1f} s, "
+            f"origin bar {'stored' if collections[-1]['stored'] else 'not stored'}")
+    if res["status"] == "issued":
+        at = conn.execute("SELECT extract(epoch FROM recorded_at) FROM journal.fan_forward_issues WHERE issue_id = %s;",
+                          (res["issue"]["issue_id"],)).fetchone()[0]
+        lat = float(at) - mark.at.timestamp()
+        line += f", recorded {lat:+.1f} s - {'within' if lat <= fwd.LIVE_SECONDS else 'past'} the {fwd.LIVE_SECONDS} s deadline"
+    print(line)
+    return 1 if res["status"] == "failed" else 0
+
+
 def cmd_forward(conn, args):
-    """Chunk 8, the forward record (forecaster/fan_forward.py): issue the frozen model's forecast for the current mark,
-    score the issues of final sessions, or report the record so far."""
+    """Chunk 8, the forward record (forecaster/fan_forward.py): issue the frozen model's forecast for the pending
+    marks, the mark trigger's live attempt at the mark due now, score the issues of final sessions, or report the
+    record so far."""
     exp = fx.load_experiment(conn, args.name)
     model = fx.frozen_model(conn, exp)
     if model is None:
         print(f"{args.name} has no frozen model: nothing to record")
         return 1
+    if args.action == "mark":
+        return _forward_mark(conn, args, exp, model)
     if args.action == "issue":
         if args.at and not args.dry_run:
             print("--at reads the store as of a past moment: only with --dry-run (the record is prospective)")
             return 1
         now = (cal.NY_TZ.localize(datetime.strptime(args.at, "%Y-%m-%d %H:%M:%S")).astimezone(timezone.utc)
                if args.at else datetime.now(timezone.utc))
-        results = fwd.issue(conn, model, exp, now, code_revision(), CACHE_DIR, dry_run=args.dry_run)
+        trigger = {"kind": args.trigger, "triggered_at": args.triggered_at or datetime.now(timezone.utc).isoformat(),
+                   **({"collected_at": args.collected_at} if args.collected_at else {})}
+        results = fwd.issue(conn, model, exp, now, code_revision(), CACHE_DIR, dry_run=args.dry_run, trigger=trigger)
         if not results:
             print("No mark pending: no session in progress")
             return 0
@@ -660,6 +709,9 @@ def cmd_forward(conn, args):
         failed = False
         for res in results:
             mark = res["mark"]
+            if res["status"] == "no rules":
+                print("No forward-record rules registered: run scripts/fan.py forward define first")
+                return 1
             print(f"{res['status']}: the mark {_et(mark.at)} ({mark.session}, origin slot {mark.origin_slot}"
                   + (", the 09:29 cutoff" if mark.cutoff else "") + ")")
             failed |= res["status"] == "failed"
@@ -676,16 +728,31 @@ def cmd_forward(conn, args):
         done = fwd.score(conn, model, code_revision())
         print(f"Scored {done['scored']} issue(s); {done['waiting']} wait for their session to be final")
         return 0
+    if args.action == "define":
+        version, new = fwd.define(conn, model)
+        print(f"{version}: {'registered' if new else 'already registered'} - the rules every issue from now on is made "
+              f"and judged under (live: issued within {fwd.LIVE_SECONDS} s of its mark; delayed origin: at least "
+              f"{fwd.REMAINING_SHARE:.0%} of a horizon left)")
+        return 0
     s = fwd.summary(conn, model)
-    print(f"{s['model']}: attempts " + (", ".join(f"{k} {v}" for k, v in sorted(s["runs"].items())) or "none"))
-    print(f"{'h':>4} {'issues':>7} {'sessions':>8} {'v2 CRPS':>8} {'model':>8} {'share':>8}  interval        "
-          f"{'cover90 v2/model':>17} {'revised':>8}")
-    for h, e in s["horizons"].items():
-        p = e["paired"]
-        iv = p["interval"] if p else None
-        print(f"{h:>4} {e['issues']:>7} {e['sessions']:>8} {p['base_crps_bps']:>8.4f} {p['other_crps_bps']:>8.4f} "
-              f"{100 * (p['diff_share'] or 0):>+7.2f}%  " + (f"[{iv[0]:+.5f}, {iv[1]:+.5f}]" if iv else "(too few)      ")
-              + f" {100 * e['cover90_base']:>7.1f} / {100 * e['cover90_model']:.1f} {100 * e['revised_share']:>7.1f}%")
+    for g in s["versions"]:
+        print(f"{g['version'] or 'issues made under no rules (legacy)'}:")
+        o = g["operations"]
+        if o:
+            print(f"  marks expected {o['expected']} ({o['sessions_expected']} session(s)), attempted {o['attempted']}, "
+                  f"issued {o['issued_expected']}, stale {o['stale']}, failed {o['failed']}, missed {o['missed']}")
+        for r in g["horizons"]:
+            p = r["paired"]
+            print(f"  {r['horizon']:>4} min {r['class']:15} issued {r['issued']:>4} scored {r['scored']:>4} "
+                  + (f"v2 {p['base_crps_bps']:.4f} model {p['other_crps_bps']:.4f} ({100 * (p['diff_share'] or 0):+.2f} %)"
+                     if p else ""))
+        for t in g.get("timing", []):
+            print(f"  timing, {fwd.TRIGGER_TEXT.get(t['trigger'], t['trigger'])}: attempted {t['attempted']}, issued "
+                  f"{t['issued']}, stale {t['stale']}, failed {t['failed']}"
+                  + (f", within {t['deadline_s']:.0f} s of the mark {t['within_deadline']}"
+                     if t["deadline_s"] is not None else "")
+                  + f"; issued after {fwd.spread(t['latency_s'])} s (median / p90 / max), origin bar stored after "
+                    f"{fwd.spread(t['arrival_s'])} s")
     if not args.no_report:
         path = os.path.join(args.report_dir, f"fan_forward_{s['model']}.md")
         meta = {"code_revision": code_revision(), "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
@@ -819,11 +886,15 @@ def main(argv=None):
                    "(after a backfill revised development sessions)")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
-    p = sub.add_parser("forward", help="The forward record (chunk 8): issue, score or report")
-    p.add_argument("action", choices=("issue", "score", "report"))
+    p = sub.add_parser("forward", help="The forward record (chunk 8): issue, mark, score or report")
+    p.add_argument("action", choices=("define", "issue", "mark", "score", "report"))
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--dry-run", action="store_true", help="issue: build and print, write nothing")
     p.add_argument("--at", help="issue --dry-run: as of this ET time 'YYYY-MM-DD HH:MM:SS' instead of now")
+    p.add_argument("--trigger", default="manual", choices=[t for t in fwd.TRIGGERS if t not in ("mark", "unrecorded")],
+                   help="issue: what ran it, recorded on its run rows (mark runs as the action 'mark')")
+    p.add_argument("--triggered-at", help="issue, mark: when the run started, ISO UTC (default: now)")
+    p.add_argument("--collected-at", help="issue: when its collection finished, ISO UTC")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="report: print only")
     p = sub.add_parser("freeze", help="Train the chosen candidate on all of development and freeze it (chunk 7)")

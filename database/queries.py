@@ -362,10 +362,16 @@ _BAR_COLUMNS = (
     "open", "high", "low", "close", "volume", "wap", "bar_count", "source", "is_completed",
 )
 
+# Receipt times (migrations 0022, 0023): first_stored_at - when the bar first reached the store, carried over when a
+# day is rewritten (unknown stays unknown), the database's clock for a bar not held before; version_stored_at - when
+# its current values reached the store, carried over while they stay the same, the clock when they change.
 _BARS_INSERT = f"""
-INSERT INTO bars ({", ".join(_BAR_COLUMNS)})
-VALUES ({", ".join(f"%({c})s" for c in _BAR_COLUMNS)});
+INSERT INTO bars ({", ".join(_BAR_COLUMNS)}, first_stored_at, version_stored_at)
+VALUES ({", ".join(f"%({c})s" for c in _BAR_COLUMNS)},
+        CASE WHEN %(bar_is_new)s THEN clock_timestamp() ELSE %(first_stored_at)s::timestamptz END,
+        CASE WHEN %(values_are_new)s THEN clock_timestamp() ELSE %(version_stored_at)s::timestamptz END);
 """
+_VALUE_COLUMNS = ("open", "high", "low", "close", "volume", "wap", "bar_count")
 
 _SESSION_DAY_KEY = "contract_id = %s AND interval = %s AND price_type = %s AND trading_day = %s"
 
@@ -480,6 +486,26 @@ def _day_window(first_day: str, last_day: Optional[str] = None):
     return start.isoformat(), end.isoformat()
 
 
+def _same_values(stored, row) -> bool:
+    """Whether a held bar's stored values (in _VALUE_COLUMNS order) equal a new row's."""
+    for v, c in zip(stored, _VALUE_COLUMNS):
+        w = row.get(c)
+        if v is None or w is None:
+            if (v is None) != (w is None):
+                return False
+        elif abs(float(v) - float(w)) > 1e-9 * max(1.0, abs(float(w))):
+            return False
+    return True
+
+
+def _epoch(timestamp) -> int:
+    """Seconds since the epoch of a timestamp; naive values are UTC, as everywhere else."""
+    dt = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
 def _utc_date(timestamp) -> str:
     """'YYYY-MM-DD' UTC date of a timestamp; naive values are UTC, as everywhere else."""
     dt = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp))
@@ -581,8 +607,21 @@ def save_trading_day(
                 "    fetched_at = excluded.fetched_at;",
                 key + (expected_bar_count, source),
             )
+            # A bar already held keeps when it first arrived (unknown stays unknown) and, while its values stay the
+            # same, when they arrived; a new bar, or new values, get the database's clock.
+            fmt = "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"+00:00\"'"
+            held = {int(r[0]): r[1:] for r in conn.execute(
+                f"SELECT extract(epoch FROM timestamp_utc)::bigint, to_char(first_stored_at AT TIME ZONE 'UTC', {fmt}), "
+                f"to_char(version_stored_at AT TIME ZONE 'UTC', {fmt}), {', '.join(_VALUE_COLUMNS)} "
+                f"FROM bars WHERE {_BARS_DAY_KEY};", _bars_day_params(*key)).fetchall()}
             conn.execute(f"DELETE FROM bars WHERE {_BARS_DAY_KEY};", _bars_day_params(*key))
             if rows:
+                for r in rows:
+                    h = held.get(_epoch(r["timestamp_utc"]))
+                    r["bar_is_new"] = h is None
+                    r["first_stored_at"] = None if h is None else h[0]
+                    r["values_are_new"] = h is None or not _same_values(h[2:], r)
+                    r["version_stored_at"] = None if h is None else h[1]
                 conn.executemany(_BARS_INSERT, rows)
 
             stats = _day_stats(conn, *key)
