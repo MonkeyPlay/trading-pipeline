@@ -22,6 +22,7 @@ from typing import Callable, Iterable, List, Optional, Tuple
 from database.queries import derive_day_status, expected_bars_for, get_stored_trading_days
 from features import calendar as cal
 from features.calendar import RTH_HOLIDAYS
+from features.session_windows import NY_TZ, get_trading_day_date
 
 # Full holidays of the US equity cash session. One list for the whole project:
 # the versioned calendar in features/calendar.py (which also knows early closes).
@@ -121,7 +122,7 @@ def plan_trading_days(
     price_type: str = "TRADES",
     rth_only: bool = False,
     force: bool = False,
-    trailing_days: int = REFRESH_TRAILING_DAYS,
+    trailing_days: Optional[int] = REFRESH_TRAILING_DAYS,
     expected: Optional[int] = None,
     extra_days: Iterable[date] = (),
     expectation: Optional[Callable[[date], Tuple[Optional[int], Optional[int]]]] = None,
@@ -135,6 +136,11 @@ def plan_trading_days(
       ok       - already stored; skip it
 
     ``force=True`` re-downloads the whole window (the collector's ``--full``).
+    The trading day in progress (from its 18:00 ET open) is fetched again whatever it
+    holds - stored EMPTY or PARTIAL a minute ago, it is still filling.
+    ``trailing_days=None`` refetches no earlier complete session for vendor revisions
+    (the collector's ``--no-trailing-refresh``, for runs every minute): only missing,
+    incomplete and in-progress days are fetched.
     ``expected`` is the instrument's own bar yardstick (default: the futures one).
     ``extra_days`` are planned too although they lie outside [start, end] - the
     collector uses it for the reference day before a contract becomes active.
@@ -153,7 +159,9 @@ def plan_trading_days(
     )
     if expected is None:
         expected = expected_bars_for(interval, rth_only=rth_only)
-    trailing_cutoff = datetime.now(timezone.utc).date() - timedelta(days=trailing_days)
+    now = datetime.now(timezone.utc)
+    in_progress = date.fromisoformat(get_trading_day_date(now.astimezone(NY_TZ)))
+    trailing_cutoff = None if trailing_days is None else now.date() - timedelta(days=trailing_days)
 
     # The holiday list is hand-maintained and can be wrong (CME runs shortened
     # sessions on some of the days in it). A day already in the ledger is evidence
@@ -182,7 +190,9 @@ def plan_trading_days(
         elif status == "PARTIAL":
             reason = f"incomplete ({have}/{exp_day} bars)" if exp_day else f"incomplete ({have} bars)"
             action = "refetch"
-        elif d >= trailing_cutoff:
+        elif d >= in_progress:
+            action, reason = "refetch", "session in progress"
+        elif trailing_cutoff is not None and d >= trailing_cutoff:
             action, reason = "refetch", "trailing session (vendor may revise)"
         elif status == "EMPTY":
             action, reason = "ok", f"no data at source (checked {row['fetched_at']})"

@@ -657,7 +657,8 @@ def _forward_mark(conn, args, exp, model) -> int:
         return 0
     target = exp["definition"]["targets"]["primary"]
     symbols = [target] + [s for s in fwd._instruments(model["definition"]) if s != target]
-    cmd = [sys.executable, "-m", "collector.ib_collector", "--days", "0", "--symbol", ",".join(symbols),
+    cmd = [sys.executable, "-m", "collector.ib_collector", "--days", "0", "--no-trailing-refresh",
+           "--workers", str(len(symbols)), "--symbol", ",".join(symbols),
            "--host", str(Config.IB_HOST), "--port", str(Config.IB_PORT),
            "--client-id", str(Config.IB_CLIENT_ID + FORWARD_CLIENT_OFFSET)]
     clock = lambda: datetime.now(timezone.utc)
@@ -703,7 +704,8 @@ def cmd_forward(conn, args):
                    **({"collected_at": args.collected_at} if args.collected_at else {})}
         results = fwd.issue(conn, model, exp, now, code_revision(), CACHE_DIR, dry_run=args.dry_run, trigger=trigger)
         if not results:
-            print("No mark pending: no session in progress")
+            print(f"No mark pending: none in the last {fwd.GRACE.total_seconds() / 60:.0f} minutes (a session's first "
+                  f"mark is 18:{fwd.MARK_MINUTES:02d} ET; there are none between sessions)")
             return 0
         lo, hi = fwd.CHART_LEVELS.index(0.05), fwd.CHART_LEVELS.index(0.95)
         failed = False

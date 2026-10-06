@@ -238,7 +238,10 @@ def test_auto_mode_runs_once_a_minute_while_a_session_is_in_progress():
     auto.runner.busy = False
     assert auto.due(_ny(tue, 17, 30).replace(second=10)) is None              # no session in progress
     steps = dict(auto_steps(_ny(tue, 8, 0)))
-    assert steps["collector"][-8:-6] == ["--days", "0"] and "preview" in steps   # today only, then the preview
+    cmd = steps["collector"]
+    assert cmd[cmd.index("--days") + 1] == "0" and "preview" in steps           # today only, then the preview
+    assert "--no-trailing-refresh" in cmd                                         # no refetch of complete sessions
+    assert cmd[cmd.index("--workers") + 1] == "4"                                 # four symbols at a time
     assert list(dict(auto_steps(_ny(tue, 11, 3)))) == ["collector", "forward"]   # nothing to preview after 09:31;
     forward = dict(auto_steps(_ny(tue, 11, 0)))["forward"]                       # the pending marks, by Auto mode
     assert forward[-6:-2] == ["forward", "issue", "--trigger", "auto"] and forward[-2] == "--triggered-at"

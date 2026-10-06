@@ -119,14 +119,31 @@ opening a socket**:
    IB's full expiry `20260918`) and calls `collector/coverage.plan_trading_days()`,
    a single indexed read of `session_days`. Each expected trading day becomes:
    - `fetch` — not in the database at all
-   - `refetch` — stored `PARTIAL`, or within the trailing 2 sessions (the vendor
-     still revises those)
+   - `refetch` — stored `PARTIAL`; the trading day in progress, whatever it holds (a
+     run just after the 18:00 ET open may have stored it `EMPTY` - on a delayed feed
+     IB has none of its bars yet); or within the trailing 2 sessions (the vendor still
+     revises those) - except with `--no-trailing-refresh`, which runs every minute use
+     (the dashboard's Auto mode, the fan's forward record), leaving that to the daily run
    - `ok` — already stored, skip it
 2. If nothing needs fetching, the run ends **without connecting to IB**. Only a
    contract that has never been seen before requires a connection to plan.
 3. Each remaining day gets one IB request, newest first (a 48h window that fully
-   contains the NY session including its prior-evening Globex open). Bars outside the
-   day are discarded, and the day is stored atomically via `save_trading_day()`.
+   contains the NY session including its prior-evening Globex open, ending 06:00 UTC
+   the next day - or now, while that is still to come). Bars outside the day are
+   discarded, and the day is stored atomically via `save_trading_day()`. From the
+   18:00 ET open until 06:00 UTC the session in progress and the one before it have
+   the same window: it is requested once and both days are stored from its answer
+   (IB forbids an identical request within 15 s; until 2026-10-06 the second request
+   waited 13 s per symbol for that, which pushed the dashboard's Auto runs past their
+   time limit right after the open).
+   With `--workers N` the symbols are collected in parallel by N threads over the one
+   IB connection, each with its own database connection; each contract's days stay in
+   order. The shared pacer (`collector/pacing.py`) reserves every request's slot under a
+   lock - identical requests 15 s apart, at most 60 in 10 minutes, 2 s between requests
+   for the same contract (IB's burst limit is per contract) and 0.25 s between any two -
+   so requests for different contracts go out together. A pacing violation pushes the
+   next slot back 30 s instead of sleeping in IB's reader thread. The dashboard's Auto
+   mode runs 4 workers; a plain run stays serial.
 4. Bars within 2h of "now" are stored `is_completed = 0`, which keeps their day
    `PARTIAL` so a later run finalises it.
 5. Every attempt — including days IB had no data for — is logged per day in

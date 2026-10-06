@@ -22,14 +22,19 @@ dashboard's database connection or its event loop:
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
-  auto         the collector for the session in progress only (--days 0, with
-               the journal step), then the preview while one is possible - one
-               run a minute while auto mode is on (AUTO, the Session Explorer's
-               Auto button), so the chart, the fan and the analogue preview follow
-               the session; each run also issues any pending mark of the
-               intermarket fan's forward record (python scripts/fan.py forward
-               issue, forecaster/fan_forward.py: every 15 minutes and 09:29 ET,
-               once the delayed feed has stored the mark's origin bar)
+  auto         the collector for the session in progress only (--days 0
+               --no-trailing-refresh: that session and any missing or
+               incomplete day, not the refetch of the last complete sessions,
+               which the daily run does; --workers 4: four symbols at a time;
+               with the journal step), then the preview while one is possible -
+               one run a minute while auto mode is on (AUTO, the Session
+               Explorer's Auto button), so the chart, the fan and the analogue
+               preview follow the session; each run also issues any pending mark
+               of the intermarket fan's forward record (python scripts/fan.py
+               forward issue, forecaster/fan_forward.py: every 15 minutes and
+               09:29 ET, once the delayed feed has stored the mark's origin bar).
+               A step that prints nothing for AUTO_STEP_IDLE_S is killed as hung;
+               one that keeps reporting may run to AUTO_STEP_LIMIT_S
 
 A job is one or more steps, each a process run in turn; Stop ends the running step
 and skips the rest.
@@ -67,12 +72,22 @@ MAX_LINES = 5000          # output kept in memory for the pages; the log file ke
 STOP_GRACE_S = 15         # after Stop, seconds before a job that has not exited is killed
 AUTO_SECOND = 5           # an auto run starts this many seconds into a minute, once the minute's bar has closed
 AUTO_TITLE = "Auto update"
-AUTO_STEP_TIMEOUT_S = 180  # an auto step running longer than this is hung (a normal run takes ~75 s in all): killed, so the next minute can run
+# An auto step that prints nothing for AUTO_STEP_IDLE_S is hung: killed, so the next minute can run. A slow one that
+# keeps reporting - the collector logs every request, and every pacing wait before it waits - may run to
+# AUTO_STEP_LIMIT_S (a normal auto run takes under a minute in all).
+AUTO_STEP_IDLE_S = 120
+AUTO_STEP_LIMIT_S = 900
+AUTO_COLLECT_WORKERS = 4   # symbols an auto run collects at once (collector --workers)
 
 
-def collector_command(days: int) -> List[str]:
-    return [sys.executable, "-m", "collector.ib_collector", "--days", str(int(days)), "--host", Config.IB_HOST,
-            "--port", str(Config.IB_PORT), "--client-id", str(Config.IB_CLIENT_ID)]
+def collector_command(days: int, trailing_refresh: bool = True, workers: int = 1) -> List[str]:
+    """The collector over ``days`` back; without ``trailing_refresh`` (Auto mode, every minute) only the session in
+    progress and missing or incomplete days - the last complete sessions' vendor revisions are left to the daily
+    run; ``workers`` symbols collected at once (threads sharing the IB connection and its pacer)."""
+    return ([sys.executable, "-m", "collector.ib_collector", "--days", str(int(days)), "--host", Config.IB_HOST,
+             "--port", str(Config.IB_PORT), "--client-id", str(Config.IB_CLIENT_ID)]
+            + ([] if trailing_refresh else ["--no-trailing-refresh"])
+            + (["--workers", str(int(workers))] if workers > 1 else []))
 
 
 def forecaster_command() -> List[str]:
@@ -172,18 +187,20 @@ class JobRunner:
         self._task: Optional[asyncio.Task] = None
         self._log: Optional[TextIO] = None
         self.step_timeout: Optional[float] = None
+        self.step_idle: Optional[float] = None
 
     @property
     def busy(self) -> bool:
         return self.job is not None and self.job.running
 
     def start(self, key: str, title: str, steps: List[Tuple[str, List[str]]],
-              step_timeout: Optional[float] = None) -> Job:
+              step_timeout: Optional[float] = None, step_idle: Optional[float] = None) -> Job:
         """Starts the job of ``steps`` - ``(label, command)`` pairs, run in turn - on the running event loop; raises
-        RuntimeError while another runs. A step still running after ``step_timeout`` seconds is killed and fails."""
+        RuntimeError while another runs. A step still running after ``step_timeout`` seconds, or silent - no line of
+        output - for ``step_idle`` seconds, is killed and fails."""
         if self.busy:
             raise RuntimeError(f"{self.job.title} is still running")
-        self.step_timeout = step_timeout
+        self.step_timeout, self.step_idle = step_timeout, step_idle
         self.job = Job(key, title, [Step(label, command) for label, command in steps], datetime.now(timezone.utc))
         self._task = asyncio.get_running_loop().create_task(self._run(self.job))
         return self.job
@@ -200,9 +217,9 @@ class JobRunner:
             asyncio.get_running_loop().call_later(STOP_GRACE_S, self._kill, process)
         return True
 
-    def _timed_out(self, job: Job, process: asyncio.subprocess.Process) -> None:
+    def _timed_out(self, job: Job, process: asyncio.subprocess.Process, why: str) -> None:
         if process.returncode is None:
-            self._add(job, f"Dashboard: step exceeded {self.step_timeout:.0f} s - killed")
+            self._add(job, f"Dashboard: step {why} - killed")
             process.kill()
 
     @staticmethod
@@ -234,15 +251,28 @@ class JobRunner:
                 stderr=asyncio.subprocess.STDOUT,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"}, limit=1 << 20)
             process = self._process
-            watchdog = (asyncio.get_running_loop().call_later(self.step_timeout, self._timed_out, job, process)
-                        if self.step_timeout else None)
+            loop = asyncio.get_running_loop()
+            limit = (loop.call_later(self.step_timeout, self._timed_out, job, process,
+                                     f"ran {self.step_timeout:.0f} s") if self.step_timeout else None)
+            idle = None
+
+            def listen() -> None:                     # (re)armed by every line: silence is what kills
+                nonlocal idle
+                if idle is not None:
+                    idle.cancel()
+                if self.step_idle:
+                    idle = loop.call_later(self.step_idle, self._timed_out, job, process,
+                                           f"printed nothing for {self.step_idle:.0f} s")
+            listen()
             try:
                 async for raw in process.stdout:
+                    listen()
                     self._add(job, raw.decode(errors="replace").rstrip())
                 return await process.wait()
             finally:
-                if watchdog is not None:
-                    watchdog.cancel()
+                for watchdog in (limit, idle):
+                    if watchdog is not None:
+                        watchdog.cancel()
         except Exception as e:                        # not started, or its output could not be read
             self._add(job, f"Dashboard: {type(e).__name__}: {e}")
             if self._process is not None and self._process.returncode is None:
@@ -296,9 +326,10 @@ def forward_due(now: datetime) -> bool:
 
 
 def auto_steps(now: datetime) -> List[Tuple[str, List[str]]]:
-    """An auto run's steps at ``now``: the session in progress collected (and the journal step), then the preview
-    while one is possible (forecaster/preview.py), and on an issue minute the fan's forward record."""
-    steps = [("collector", collector_command(0))]
+    """An auto run's steps at ``now``: the session in progress collected - its missing and incomplete days only, not
+    the trailing refresh, so a run fits in its minute - (and the journal step), then the preview while one is
+    possible (forecaster/preview.py), and the fan's forward record's pending marks."""
+    steps = [("collector", collector_command(0, trailing_refresh=False, workers=AUTO_COLLECT_WORKERS))]
     try:
         preview_target(now)
         steps.append(("preview", preview_command()))
@@ -357,7 +388,8 @@ class AutoMode:
                     break
                 now = datetime.now(timezone.utc)
                 if self.due(now):
-                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now), AUTO_STEP_TIMEOUT_S)
+                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now),
+                                                      step_timeout=AUTO_STEP_LIMIT_S, step_idle=AUTO_STEP_IDLE_S)
                     self._last_minute = now.replace(second=0, microsecond=0)
                 await asyncio.sleep(1)
         except asyncio.CancelledError:

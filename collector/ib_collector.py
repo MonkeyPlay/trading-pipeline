@@ -18,6 +18,21 @@ Collection is organised strictly by NY trading day. Every run:
      NO_DATA_SKIP_AFTER (3) days of a contract in a row come back like that, the
      rest of that contract's days are skipped for the run.
 
+A day's window ends 06:00 UTC the next day, or now while that is still to come -
+so from the 18:00 ET open until 06:00 UTC the session in progress and the one
+before it have the same window: it is requested once and both days are stored
+from its answer (IB forbids an identical request within 15 s). A run every minute
+(the dashboard's Auto mode, the forward record) passes --no-trailing-refresh: it
+fetches only missing and incomplete days and the session in progress, and the
+daily run refetches the last complete sessions IB may still revise.
+
+--workers N collects N symbols at once: threads of this process sharing the IB
+connection and its pacer (collector/pacing.py reserves each request's slot under a
+lock - requests for different contracts go out together, one contract's stay
+spaced), each with its own database connection; each contract's days stay newest
+first. When the journal step follows, the calendar and earnings reload runs beside
+the collection (EventsRefresh).
+
 A future with a RollRule (config.INSTRUMENTS) is collected as a chain: each
 trading day is fetched from the contract that is front on that day, plus the
 ROLL_WARMUP_SESSIONS (7) trading days before each contract becomes active, so its
@@ -40,6 +55,7 @@ import argparse
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta, date
 from statistics import median
@@ -67,13 +83,18 @@ from features.session_windows import NY_TZ, convert_utc_to_ny, classify_session_
 from collector.pacing import IBKRPacer, format_ibkr_datetime
 from collector.coverage import (
     plan_trading_days, days_to_fetch, summarise, expected_trading_days, previous_trading_day,
-    day_expectation,
+    day_expectation, REFRESH_TRAILING_DAYS,
 )
 from collector.rolls import front_contracts, missing_cycle_months, segments, upcoming_roll
 
 # Bars whose timestamp is within this window of "now" may still be revised by IB
 # or belong to a session that has not fully closed -> stored as is_completed=0.
 _PARTIAL_BAR_WINDOW = timedelta(hours=2)
+
+# How many days back a stored complete session is refetched for vendor revisions; None (--no-trailing-refresh)
+# refetches none - for a run every minute, which then fetches only missing and incomplete days and the session in
+# progress.
+TRAILING_DAYS: Optional[int] = REFRESH_TRAILING_DAYS
 
 # IB answers "no data" for every day of a contract whose history it does not hold
 # (e.g. an expired contract of a thin micro future). After this many such days of
@@ -232,11 +253,13 @@ class IBCollectorApp(EWrapper, EClient):
         EClient.__init__(self, wrapper=self)
 
         self.next_req_id = 1
+        self._req_lock = threading.Lock()   # collector threads share this connection (--workers)
         self.connect_event = threading.Event()
         self.contract_events = {}
         self.historical_events = {}
         self.request_failed = set()
         self.request_no_data = set()   # failed requests IB answered with "no data"
+        self.request_labels = {}       # req id -> the contract it asked for, for the log
 
         self.resolved_contracts = {}
         self.collected_bars = {}
@@ -244,14 +267,16 @@ class IBCollectorApp(EWrapper, EClient):
         self.pacer = IBKRPacer()
 
     def get_next_req_id(self):
-        req_id = self.next_req_id
-        self.next_req_id += 1
-        return req_id
+        with self._req_lock:
+            req_id = self.next_req_id
+            self.next_req_id += 1
+            return req_id
 
     # --- Connection callbacks ---
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
-        self.next_req_id = orderId
+        with self._req_lock:
+            self.next_req_id = orderId
         logger.info(f"Connected to IB. Valid initial Request ID: {orderId}")
         self.connect_event.set()
 
@@ -334,7 +359,9 @@ class IBCollectorApp(EWrapper, EClient):
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
         super().historicalDataEnd(reqId, start, end)
-        logger.info(f"Historical data complete for ReqID {reqId}: {len(self.collected_bars.get(reqId, []))} bars.")
+        label = self.request_labels.get(reqId)
+        logger.info(f"Historical data complete for ReqID {reqId}{f' ({label})' if label else ''}: "
+                    f"{len(self.collected_bars.get(reqId, []))} bars.")
         if reqId in self.historical_events:
             self.historical_events[reqId].set()
 
@@ -426,11 +453,14 @@ class IBCollectorApp(EWrapper, EClient):
         req_id = self.get_next_req_id()
         self.historical_events[req_id] = threading.Event()
         self.collected_bars[req_id] = []
+        self.request_labels[req_id] = _label(contract["symbol"], contract.get("expiry"))
 
         ib_contract = self.ib_contract_from_info(contract)
         end_str = format_ibkr_datetime(end_dt)
 
-        self.pacer.wait_if_necessary(contract["con_id"], duration_str, BAR_SIZE, end_str, min_spacing)
+        # The slot is reserved under the pacer's lock and waited for outside it, so the threads of a parallel
+        # collection send requests for different contracts together and keep one contract's spaced.
+        self.pacer.pace(contract["con_id"], duration_str, BAR_SIZE, end_str, min_spacing)
         self.reqHistoricalData(
             reqId=req_id,
             contract=ib_contract,
@@ -443,7 +473,6 @@ class IBCollectorApp(EWrapper, EClient):
             keepUpToDate=False,
             chartOptions=[],
         )
-        self.pacer.register_request(contract["con_id"], duration_str, BAR_SIZE, end_str)
 
         if not self.historical_events[req_id].wait(timeout=timeout):
             logger.error(f"Timeout waiting for historical data (ReqID {req_id})")
@@ -519,11 +548,14 @@ def _implausible(instrument: Instrument, day_bars):
 NO_DATA = "no data"
 
 
-def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc):
+def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc, windows=None):
     """
     Downloads one trading day and stores it atomically. Returns the number of
     bars written, None if the request failed, or NO_DATA if IB has no data at all
-    in the day's window (the day is then left untouched as well).
+    in the day's window (the day is then left untouched as well). ``windows`` (one
+    dict per contract and run) keeps each window's answer by its end: a day whose
+    window is the one already requested - the session in progress and the one before
+    it, both ending now - is stored from that answer, with no second request.
     """
     con_id = contract_info["con_id"]
     day = date.fromisoformat(day_str)
@@ -534,6 +566,7 @@ def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc)
     # are discarded; the overlap only exists to guarantee full coverage.
     chunk_end = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1, hours=6)
     chunk_end = min(chunk_end, now_utc)   # IB rejects an endDateTime in the future
+    window = (chunk_end, "2 D", price_type)
 
     run_id = create_collection_run(
         conn, contract_id=con_id, trading_day=day_str, interval=INTERVAL_LABEL,
@@ -542,7 +575,14 @@ def _fetch_and_store_day(app, conn, instrument, contract_info, day_str, now_utc)
     )
 
     try:
-        bars = app.fetch_historical_bars(contract_info, chunk_end, "2 D", what_to_show=price_type)
+        if windows is not None and window in windows:
+            bars = windows[window]
+            logger.info(f"{day_str}: the same window as the day before it in this run - stored from that "
+                        "answer, no second request.")
+        else:
+            bars = app.fetch_historical_bars(contract_info, chunk_end, "2 D", what_to_show=price_type)
+            if windows is not None and bars is not None:      # a failure is retried, not remembered
+                windows[window] = bars
         if bars is None:
             update_collection_run(conn, run_id, "FAILED", errors="Download timeout or IB error.")
             logger.warning(f"{day_str}: request failed; the day is left untouched.")
@@ -642,7 +682,7 @@ class _Work:
 def _plan(conn, contract_id, instrument, start, end, gap_fill, extra_days=()):
     plan = plan_trading_days(
         conn, contract_id, start, end, interval=INTERVAL_LABEL,
-        price_type=instrument.what_to_show, force=not gap_fill,
+        price_type=instrument.what_to_show, force=not gap_fill, trailing_days=TRAILING_DAYS,
         expected=instrument.expected_bars, extra_days=extra_days,
         expectation=lambda d: day_expectation(instrument, d),
     )
@@ -779,8 +819,9 @@ def _collect_work(app, conn, work):
         days = sorted(targets, reverse=True)
         logger.info(f"{label}: fetching {len(days)} trading day(s), newest first, one at a time.")
         stored_days, failed_days, no_data_run = 0, [], 0
+        windows = {}                                 # this contract's answers by window, for this run
         for i, day_str in enumerate(days):
-            written = _fetch_and_store_day(app, conn, work.instrument, contract_info, day_str, now_utc)
+            written = _fetch_and_store_day(app, conn, work.instrument, contract_info, day_str, now_utc, windows)
             no_data_run = no_data_run + 1 if written == NO_DATA else 0
             if written is None or written == NO_DATA:
                 failed_days.append(day_str)
@@ -792,10 +833,51 @@ def _collect_work(app, conn, work):
                 logger.warning(f"{label}: IB had no data for {no_data_run} day(s) in a row; skipping its "
                                f"other {len(rest)} day(s) ({rest[-1]} .. {rest[0]}) until the next run.")
                 break
-            time.sleep(1.0)
         logger.info(f"{label}: {stored_days}/{len(days)} day(s) stored.")
         if failed_days:
             logger.warning(f"{label}: {len(failed_days)} day(s) failed, retried next run: {failed_days}")
+    return total
+
+
+def _collect_one(app, conn, work, start_day, end_day, gap_fill):
+    """One symbol: its contracts resolved via IB when the database lacks them, then every planned day collected."""
+    if work.jobs is None:
+        _resolve_online(app, conn, work, start_day, end_day, gap_fill)
+        _record_assignment(conn, work)
+    return _collect_work(app, conn, work)
+
+
+def _collect_all(app, connect, conn, work_items, start_day, end_day, gap_fill, workers=1):
+    """
+    Collects every symbol of ``work_items``; returns the bars written. With ``workers`` > 1 the symbols are collected
+    in parallel by worker threads over the one IB connection and its shared pacer, each with a database connection of
+    its own (``connect()``, closed after) - requests for different contracts go out together, each contract's days
+    still newest first. A symbol that fails does not stop the others; the first error is raised once they are done.
+    With one worker the symbols are collected in turn on ``conn``.
+    """
+    if workers <= 1 or len(work_items) <= 1:
+        return sum(_collect_one(app, conn, work, start_day, end_day, gap_fill) for work in work_items)
+
+    def run(work):
+        threading.current_thread().name = f"collect-{work.symbol}"     # the log's thread column names the symbol
+        own = connect()
+        try:
+            return _collect_one(app, own, work, start_day, end_day, gap_fill)
+        finally:
+            own.close()
+
+    logger.info(f"Collecting {len(work_items)} symbol(s) with {min(workers, len(work_items))} worker(s).")
+    total, errors = 0, []
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="collect") as pool:
+        futures = {pool.submit(run, work): work for work in work_items}
+        for future in as_completed(futures):
+            try:
+                total += future.result()
+            except Exception as e:                    # the others carry on; raised below
+                logger.exception(f"{futures[future].label}: collection failed")
+                errors.append(e)
+    if errors:
+        raise errors[0]
     return total
 
 
@@ -827,7 +909,7 @@ def asset_source_records(collected_symbols):
 
 
 def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_download,
-                            gap_fill=True, start=None, end=None, plan_only=False):
+                            gap_fill=True, start=None, end=None, plan_only=False, workers=1):
     """
     Collects one or more symbols. ``instruments`` is a sequence of
     ``(symbol, expiry)`` pairs; ``expiry`` pins a future to one contract, None
@@ -836,7 +918,9 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
     Every contract shares a single IB connection, and therefore a single
     ``IBKRPacer``. That matters: one process per symbol would give each its own
     pacer, so each would undercount the others' requests and the combined volume
-    could trip the HMDS rate limit that the pacer exists to respect.
+    could trip the HMDS rate limit that the pacer exists to respect. ``workers`` > 1
+    collects the symbols in parallel threads of this process (_collect_all), on that
+    same connection and pacer.
     """
     init_database(dsn)
     conn = get_db_connection(dsn)
@@ -903,12 +987,8 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
             sys.exit(1)
 
         # --- Step 3: one IB request per missing day, one atomic write per day. ---
-        grand_total = 0
-        for work in work_items:
-            if work.jobs is None:
-                _resolve_online(app, conn, work, start_day, end_day, gap_fill)
-                _record_assignment(conn, work)
-            grand_total += _collect_work(app, conn, work)
+        grand_total = _collect_all(app, lambda: get_db_connection(dsn), conn, work_items, start_day, end_day,
+                                   gap_fill, workers)
 
         logger.info(f"Collection complete across {len(work_items)} symbol(s): {grand_total} bar(s) written.")
     finally:
@@ -918,30 +998,65 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
         conn.close()
 
 
-def update_journal(dsn) -> bool:
+def refresh_events(dsn) -> None:
     """
-    Brings the NQ prompt-v2 journal up to date after a collection: reloads the
-    economic calendar and the material earnings releases (database/events.py,
-    database/earnings.py), then a snapshot and structure annotation for every
-    session the journal lacks whose pre-open is over and stored - the day's too -
-    and its outcome once final (forecaster/journal.py). A failed
-    earnings fetch is logged and leaves Event Risk unavailable for the sessions it
-    would have covered; a session whose snapshot cannot be built is logged and
-    retried next run. False only when the journal update itself failed; the
-    collected bars are stored either way.
+    Reloads the economic calendar and the material earnings releases (database/events.py,
+    database/earnings.py) on a connection of its own. It reads no bars, so a run starts it
+    beside the collection (EventsRefresh). A failed earnings fetch is logged and leaves
+    Event Risk unavailable for the sessions it would have covered; a failed calendar load
+    raises.
+    """
+    # Imported here so that a problem in the journal code can never stop a collection.
+    from database import earnings, events
+    conn = get_db_connection(dsn)
+    try:
+        events.load(conn)
+        try:
+            earnings.refresh(conn)
+        except Exception as e:
+            logger.warning(f"Earnings releases not refreshed ({e}); Event Risk stays unavailable for the "
+                           f"sessions they would cover. Retry with: python -m database.earnings")
+    finally:
+        conn.close()
+
+
+class EventsRefresh(threading.Thread):
+    """refresh_events in a thread of its own, started before the collection: ``finish()`` waits for it and says
+    whether it succeeded."""
+
+    def __init__(self, dsn):
+        super().__init__(name="events", daemon=True)
+        self.dsn, self.error = dsn, None
+
+    def run(self):
+        try:
+            refresh_events(self.dsn)
+        except Exception as e:                        # update_journal tries again, in line
+            logger.warning(f"Calendar refresh beside the collection failed ({type(e).__name__}: {e}); "
+                           "retried before the journal update.")
+            self.error = e
+
+    def finish(self) -> bool:
+        self.join()
+        return self.error is None
+
+
+def update_journal(dsn, refresh: Optional[EventsRefresh] = None) -> bool:
+    """
+    Brings the NQ prompt-v2 journal up to date after a collection: the economic
+    calendar and the material earnings releases reloaded (refresh_events - already
+    done by ``refresh`` when it ran beside the collection), then a snapshot and
+    structure annotation for every session the journal lacks whose pre-open is over
+    and stored - the day's too - and its outcome once final (forecaster/journal.py).
+    A session whose snapshot cannot be built is logged and retried next run. False
+    only when the journal update itself failed; the collected bars are stored either way.
     """
     try:
-        # Imported here so that a problem in the journal code can never stop a collection.
-        from database import earnings, events
         from forecaster.journal import catch_up
+        if refresh is None or not refresh.finish():
+            refresh_events(dsn)
         conn = get_db_connection(dsn)
         try:
-            events.load(conn)
-            try:
-                earnings.refresh(conn)
-            except Exception as e:
-                logger.warning(f"Earnings releases not refreshed ({e}); Event Risk stays unavailable for the "
-                               f"sessions they would cover. Retry with: python -m database.earnings")
             catch_up(conn)
         finally:
             conn.close()
@@ -969,6 +1084,13 @@ if __name__ == "__main__":
     parser.add_argument("--end", type=str, help="Last calendar day of the window (YYYY-MM-DD); defaults to today")
     parser.add_argument("--full", action="store_true",
                         help="Re-download every trading day in the window (default: only missing/stale days)")
+    parser.add_argument("--no-trailing-refresh", action="store_true",
+                        help="Fetch only missing and incomplete days and the session in progress: no refetch of the "
+                             "last complete sessions for vendor revisions (for a run every minute; the daily run "
+                             "does them)")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Collect this many symbols at once, in threads sharing the IB connection and its pacer "
+                             "(each with its own database connection); 1 collects them in turn")
     parser.add_argument("--plan-only", action="store_true",
                         help="Report which days would be downloaded, without connecting to IB")
     parser.add_argument("--init-only", action="store_true", help="Only initialise the database and exit")
@@ -979,6 +1101,8 @@ if __name__ == "__main__":
                              "date, as after a full collection")
 
     args = parser.parse_args()
+    if args.no_trailing_refresh:
+        TRAILING_DAYS = None
 
     if args.init_only:
         init_database(args.db)
@@ -1004,18 +1128,27 @@ if __name__ == "__main__":
 
     instruments = [(s, _expiry_for_arg(s)) for s in symbols]
 
+    # The journal's snapshots also read the context instruments, so it is updated only
+    # after a run over the whole configured set, each future on its front contract. Its
+    # calendar and earnings reload reads no bars: it runs beside the collection.
+    journal = (not (args.plan_only or args.no_journal) and set(Config.collect_symbols()) <= set(symbols)
+               and not any(expiry for _, expiry in instruments))
+    refresh = None
+    if journal:
+        init_database(args.db)                         # migrated before the second connection uses it
+        refresh = EventsRefresh(args.db)
+        refresh.start()
+
     run_collection_workflow(
         dsn=args.db, host=args.host, port=args.port, client_id=args.client_id,
         instruments=instruments, days_to_download=args.days,
         gap_fill=not args.full, start=args.start, end=args.end, plan_only=args.plan_only,
+        workers=args.workers,
     )
 
-    # The journal's snapshots also read the context instruments, so it is updated only
-    # after a run over the whole configured set, each future on its front contract.
-    if not (args.plan_only or args.no_journal):
-        if set(Config.collect_symbols()) <= set(symbols) and not any(expiry for _, expiry in instruments):
-            if not update_journal(args.db):
-                sys.exit(1)
-        else:
-            logger.info("Journal not updated: this run did not cover every configured instrument on its front "
-                        "contract. Run a full collection, or: python scripts/nq_journal.py catch-up")
+    if journal:
+        if not update_journal(args.db, refresh):
+            sys.exit(1)
+    elif not (args.plan_only or args.no_journal):
+        logger.info("Journal not updated: this run did not cover every configured instrument on its front "
+                    "contract. Run a full collection, or: python scripts/nq_journal.py catch-up")

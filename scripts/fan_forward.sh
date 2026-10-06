@@ -48,7 +48,7 @@ sleep 10                                       # the bar that closed at the mark
 flock -n 9 || { log "catch-up skipped: another forward run holds the lock"; exit 0; }
 read -r HOST PORT CLIENT < <(python3 -c "from config import Config; print(Config.IB_HOST, Config.IB_PORT, Config.IB_CLIENT_ID + 2)")
 log "Collecting NQ, VXN for the forward record..."
-python3 -m collector.ib_collector --days 0 --symbol NQ,VXN --host "$HOST" --port "$PORT" --client-id "$CLIENT" \
-    >> "$LOG_FILE" 2>&1 || log "collection failed"
+python3 -m collector.ib_collector --days 0 --no-trailing-refresh --workers 2 --symbol NQ,VXN --host "$HOST" \
+    --port "$PORT" --client-id "$CLIENT" >> "$LOG_FILE" 2>&1 || log "collection failed"
 python3 scripts/fan.py forward issue --trigger catchup --triggered-at "$STARTED" --collected-at "$(utc_now)" \
     >> "$LOG_FILE" 2>&1 || log "not issued (see above)"

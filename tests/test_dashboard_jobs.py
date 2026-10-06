@@ -135,3 +135,22 @@ def test_stop_skips_the_steps_after_the_running_one(tmp_path):
     job = asyncio.run(run())
     assert job.stopped and job.steps[1].returncode is None and "should not run" not in job.lines
     assert job.outcome.startswith("stopped")
+
+
+def test_a_silent_step_is_killed_and_a_slow_one_that_keeps_reporting_is_not(tmp_path):
+    """Auto mode's watchdog (AUTO_STEP_IDLE_S, AUTO_STEP_LIMIT_S): silence is a hang - killed; a step that keeps
+    printing runs past the idle limit - only the overall limit ends it."""
+    talks = "import time\nfor i in range(5):\n    print(i, flush=True)\n    time.sleep(0.4)"
+
+    async def run(steps, **limits):
+        runner = JobRunner(cwd=str(tmp_path), log_file=None)
+        runner.start("auto", "Auto update", steps, **limits)
+        return await _finished(runner)
+
+    job = asyncio.run(run([("collector", _python(talks)),
+                           ("preview", _python("import time; print('up', flush=True); time.sleep(30)"))],
+                          step_timeout=20, step_idle=1.0))
+    assert job.steps[0].returncode == 0                    # 2 s in all, never 1 s silent
+    assert job.steps[1].returncode != 0 and "Dashboard: step printed nothing for 1 s - killed" in job.lines
+    capped = asyncio.run(run([("collector", _python(talks))], step_timeout=1.0, step_idle=10))
+    assert capped.returncode != 0 and "Dashboard: step ran 1 s - killed" in capped.lines

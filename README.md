@@ -228,13 +228,16 @@ Pages:
     followed**; the levels and opening range are the ones known by then. **Live** returns to the
     newest candle; **Fan** hides it.
     **Auto** (beside Fit) collects the session in progress from IB and forecasts once a minute -
-    the collector for today only with its journal step, then the preview while one is possible
-    ([dashboard/jobs.py](dashboard/jobs.py) `AUTO`) - and moves the explorer to the session in
-    progress. Each run's end redraws the chart, the fan and the analogue preview in place, the
-    view moving on with the newest candle. It belongs to the dashboard process like any job (it
-    waits while another runs, and keeps running with the tab closed); switching it off, or
-    stopping one of its runs in Update data, ends it. A run takes about a minute, so the chart
-    trails the market by one to two minutes.
+    the collector for today's missing and incomplete days only (no refetch of the last complete
+    sessions, which the daily run does), four symbols at a time, with its journal step (the
+    calendar and earnings reloaded beside the collection), then the preview while one is
+    possible ([dashboard/jobs.py](dashboard/jobs.py) `AUTO`) - and moves the explorer to the
+    session in progress. Each run's end redraws the chart, the fan and the analogue preview in
+    place, the view moving on with the newest candle. It belongs to the dashboard process like
+    any job (it waits while another runs, and keeps running with the tab closed); switching it
+    off, or stopping one of its runs in Update data, ends it. A step that prints nothing for two
+    minutes is killed as hung; a slow one that keeps reporting runs on. A run takes under a
+    minute, so the chart trails the market by one to two minutes (plus the feed's own delay).
   - **Analogue beside it:** the charts are split - on the right, one of the selected NQ
     session's structural analogues, the most similar first (pick another in its **Analogue**
     select, or by its date in the comparison below): that session on its own contract and
@@ -309,7 +312,11 @@ python -m collector.ib_collector --days 460      # as far back as IB serves expi
 
 That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
 requests / 10 min), so twelve instruments take a few hours. Later runs only fetch the
-new and trailing days.
+new and trailing days; a run every minute (the dashboard's Auto mode, the fan's forward
+record) passes `--no-trailing-refresh` and fetches only the session in progress and what is
+missing or incomplete, leaving the trailing sessions' revisions to the daily run. `--workers
+N` collects the symbols in parallel over the same connection and pacer (Auto mode uses 4); the
+economic calendar and earnings are reloaded beside the collection when the journal step follows.
 
 A contract IB holds no history for answers `HMDS query returned no data` for every day.
 After three such days in a row the collector skips the rest of that contract for the run,
@@ -320,7 +327,9 @@ still gets its own tries.
 **All symbols go through one IB connection**, which matters: the request pacer that keeps
 you under IB's historical-data rate limit lives on that connection. Running one process
 per symbol would give each its own pacer, so each would undercount the others' requests
-and a wide backfill could trip the limit.
+and a wide backfill could trip the limit. Parallel collection (`--workers N`) is threads in
+that one process, sharing the connection and the pacer, which reserves each request's slot
+under a lock.
 
 Collection is **incremental and day-partitioned**: the collector reads the `session_days`
 ledger first and only opens a socket for days it actually needs. If nothing is missing for
