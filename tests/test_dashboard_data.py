@@ -18,6 +18,7 @@ import pytest
 from database.connection import get_db_connection, reset_database
 from database.queries import get_latest_contract, save_bars_by_day, set_active_contracts, upsert_contract
 from features.session_windows import enrich_candle_timezones
+from dashboard.components.spec import MUTED_CANDLE, to_epoch
 from tests.synthetic import ES_CID, NQ_CID, make_market
 
 DSN = os.getenv("TEST_DATABASE_URL")
@@ -263,6 +264,37 @@ def test_a_session_pane_anchors_its_chart_at_its_own_midnight(market):
     assert pane.chart.spec["keep_view"] is True and pane.chart.spec["follow"] is False
     pane.show(None, None, "1m")                                                   # no analogue: an empty chart
     assert pane.chart.spec["candles"] == [] and not pane.has_bars
+
+
+def test_playback_shows_the_session_up_to_a_candle_and_what_it_knew(market):
+    """The current session's playback (dashboard/views/candles.SessionPane): the whole trading day from its Globex
+    open; up to the chosen candle the later candles are hidden - or drawn grey - and the overnight levels are the
+    ones known by then."""
+    conn, _, sessions = market
+    from dashboard.components.session_bar import day_contracts
+    from dashboard.views.candles import SessionPane, day_window
+    contract = next(c for c in day_contracts(conn, "NQ", LAST_DAY) if c["contract_id"] == NQ_CID)
+    pane = SessionPane(conn)
+    pane.chart = _Chart()
+    pane.full_day = True
+    pane.show(contract, LAST_DAY, "1m")
+    rows = pane.shown_bars()
+    assert rows["timestamp_ny"].min() == day_window(LAST_DAY)["start"] and not rows["muted"].any()
+    whole = pane.chart.spec
+    assert whole["visible_range"]["to"] - whole["visible_range"]["from"] == 150 * 60      # 90 candles and 60 ahead
+    until = pd.Timestamp(f"{LAST_DAY} 04:00", tz="America/New_York")
+    pane.until = until
+    pane.push()
+    shown = pane.chart.spec["candles"]
+    assert shown[-1]["time"] == int(to_epoch([until])[0]) and len(shown) < len(whole["candles"])
+    before = pane.history[(pane.history["trading_day"] == LAST_DAY) & (pane.history["timestamp_ny"] <= until)]
+    assert pane._as_of_until()[0]["overnight_high"] == float(before["high"].max())   # nothing after 04:00
+    assert pane._as_of_until()[1] is None                                             # no opening range yet
+    pane.reveal = True
+    pane.push()
+    later = [c for c in pane.chart.spec["candles"] if c["time"] > shown[-1]["time"]]
+    assert later and all(c.get("color") == MUTED_CANDLE for c in later)
+    assert pane._as_of_until() == (pane.levels, pane.opening_range)
 
 
 def test_default_view_in_the_spec():

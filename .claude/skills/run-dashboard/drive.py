@@ -1,7 +1,7 @@
 """
 Drive the dashboard in headless Chromium and screenshot what a user sees.
 
-    python drive.py explorer|forecast|evaluation [--port 8093] [--out /tmp/dashboard-shots]
+    python drive.py explorer|forecast|evaluation|fan [--port 8093] [--out /tmp/dashboard-shots]
 
 Run with a Python that has Playwright (see SKILL.md); it uses the cached
 headless Chromium under ~/.cache/ms-playwright.
@@ -96,9 +96,36 @@ def evaluation(page, url, out):
     page.screenshot(path=f"{out}/evaluation.png", full_page=True)
 
 
+def fan(page, url, out):
+    """The session in progress (only then): the fan right of the newest candle, its readout, then playback 30
+    candles back - hidden, then with what followed."""
+    page.goto(url + "/", timeout=180000)
+    page.wait_for_selector(".q-badge", timeout=180000)
+    note = page.locator("text=/^Fan fan_rw_v1|^No fan|^Loading the fan/")
+    if not page.locator("text=Playback").first.is_visible():
+        print("no session in progress: no fan and no playback (current_session is None)")
+        return
+    page.wait_for_selector("text=/^Fan fan_rw_v1|^No fan/", timeout=60000)
+    page.wait_for_timeout(2500)
+    print(note.first.inner_text()[:300])
+    page.screenshot(path=f"{out}/fan_live.png")
+    box = page.locator(".nq-chart-root").first.bounding_box()
+    page.mouse.move(box["x"] + box["width"] - 120, box["y"] + 300)     # over a fan column
+    page.wait_for_timeout(400)
+    print("readout:", page.locator(".nq-chart-legend").first.inner_text().split("\n")[0])
+    for _ in range(30):
+        page.get_by_role("button", name="Previous candle").click()
+    page.wait_for_timeout(2000)
+    print("playback:", page.locator(".font-mono").first.inner_text())
+    page.screenshot(path=f"{out}/fan_playback.png")
+    page.get_by_text("Show what followed").click()
+    page.wait_for_timeout(1500)
+    page.screenshot(path=f"{out}/fan_reveal.png")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("step", choices=("explorer", "forecast", "evaluation"))
+    parser.add_argument("step", choices=("explorer", "forecast", "evaluation", "fan"))
     parser.add_argument("--port", type=int, default=8093)
     parser.add_argument("--out", default="/tmp/dashboard-shots")
     args = parser.parse_args()

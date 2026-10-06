@@ -10,13 +10,20 @@ analogues, and only for the days the journal holds a snapshot of.
 
 The explorer charts one analogue beside the session - its regular hours on its own
 contract and prices, never rebased - the most similar first; clicking an
-analogue's date here charts that one. Its realised labels and the frequency table
+analogue's date here charts that one.
+
+A day in progress has no snapshot until its official one is taken (from 09:31 ET,
+once every instrument's bars were fetched after then, forecaster/journal.py). Until
+then the explorer hands ``show`` a preview (forecaster/preview.preview_session): the
+same matching on the evidence as of the day's last stored bar - the whole pre-open
+once its 09:29 bar is stored - computed in memory and never stored, labelled as such. Its realised labels and the frequency table
 stay hidden until "Show outcomes": raw counts over the analogues with a label, the
 denominator, the smoothed baseline and the prior.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
@@ -25,6 +32,7 @@ from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
 from dashboard.components.preopen import LEVEL_LABELS
 from database import journal_store as store
+from features import calendar as cal
 from forecaster.journal import snapshot_pending
 from forecaster.preopen_display import p1_record
 from matching.structural import features
@@ -61,6 +69,7 @@ class AnaloguesPanel:
         self.snaps: Dict[str, Dict[str, Any]] = {}          # the snapshots read so far, by session date
         self.day: Optional[str] = None
         self.aset: Optional[Dict[str, Any]] = None
+        self.preview: Optional[Dict[str, Any]] = None       # the day's preview, when it stands in for the snapshot
         self.reason: Optional[str] = None                   # why the day has no analogue to chart
         self.chosen: Optional[str] = None                   # the snapshot id of the analogue charted
         self.date_buttons: Dict[str, Any] = {}
@@ -73,12 +82,31 @@ class AnaloguesPanel:
                 self.snaps[day] = found[0]
         return self.snaps.get(day)
 
+    def preview_wanted(self, day: str) -> bool:
+        """``day`` is a session in progress whose official snapshot cannot be taken yet: a preview stands in."""
+        if self._snapshot(day) is not None:
+            return False
+        try:
+            return cal.session(day).is_open and snapshot_pending(self.conn, day) is not None
+        except cal.CalendarCoverageError:
+            return False
+
+    def _target_snapshot(self) -> Optional[Dict[str, Any]]:
+        return self.preview["snapshot"] if self.preview is not None else self._snapshot(self.day)
+
+    def _target_annotation(self) -> Optional[Dict[str, Any]]:
+        if self.preview is not None:
+            return self.preview["annotation"]
+        snap = self._snapshot(self.day)
+        return store.latest_annotation(self.conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION) if snap else None
+
     # -- layout ---------------------------------------------------------------
 
     def build(self) -> None:
         """The panel's elements, in the caller's container: a note when the day has no analogues, else the body."""
         self.note = ui.label().classes("text-sm").style(_MUTED)
         with ui.column().classes("w-full gap-3") as self.body:
+            self.preview_note = ui.label().classes("text-sm").style("color:#ffa726")
             ui.label(f"Earlier sessions most like the selected one by P1's rubric ({pre.MATCHER_VERSION}): price "
                      f"location against its own levels, structure, trends and moving averages, the final hour and "
                      f"event risk. The chart beside the session shows one of them; their realised labels and the "
@@ -94,18 +122,23 @@ class AnaloguesPanel:
 
     # -- data -----------------------------------------------------------------
 
-    def show(self, day: Optional[str], symbol: Optional[str]) -> List[Dict[str, Any]]:
+    def show(self, day: Optional[str], symbol: Optional[str], preview: Optional[Dict[str, Any]] = None,
+             computing: bool = False) -> List[Dict[str, Any]]:
         """
         Shows the analogues of ``day`` - when ``symbol`` is the journal symbol and
-        the journal holds the day - and returns them, the most similar first;
-        none, ``reason`` says why.
+        the journal holds the day, or else ``preview`` holds them (a day in
+        progress; ``computing``: a newer one is being made) - and returns them,
+        the most similar first; none, ``reason`` says why.
         """
         if not day:
             return []
-        self.day, self.aset, self.reason = day, None, None
+        self.day, self.aset, self.reason, self.preview = day, None, None, None
         snap = self._snapshot(day) if symbol == defs.SYMBOL else None
+        if snap is None and symbol == defs.SYMBOL and preview is not None and preview.get("status") == "ok":
+            return self._show_preview(day, preview)
         self.note.set_visibility(snap is None)
         self.body.set_visibility(snap is not None)
+        self.preview_note.set_visibility(False)
         if snap is None:
             if symbol != defs.SYMBOL:
                 self.reason = f"Analogues are kept for {defs.SYMBOL}, the journal symbol."
@@ -114,6 +147,10 @@ class AnaloguesPanel:
                 self.reason = (f"No {self.version} snapshot of {day} yet: {pending}." if pending else
                                f"No {self.version} snapshot of {day} yet: the journal takes it at its next run - "
                                f"Update data, Run forecaster (or python scripts/nq_journal.py catch-up).")
+                if computing:
+                    self.reason += " Making a preview from the bars stored so far…"
+                elif preview is not None:
+                    self.reason += f" No preview: {preview.get('reason')}."
             self.note.text = self.reason
             return []
         self.aset = store.latest_analogue_set(self.conn, snap["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
@@ -124,6 +161,27 @@ class AnaloguesPanel:
                            f"scripts/nq_journal.py match)")
         elif not self.aset["members"]:
             self.reason = f"No analogue for {day}: {self.aset['pool_size']} earlier session(s) scored."
+        return list(self.aset["members"]) if self.aset is not None else []
+
+    def _show_preview(self, day: str, preview: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The day's analogues from its preview: the same table and record, labelled as never stored."""
+        self.preview, self.aset = preview, preview["analogue_set"]
+        self.note.set_visibility(False)
+        self.body.set_visibility(True)
+        through = datetime.fromisoformat(preview["data_through"].replace("Z", "+00:00")).astimezone(cal.NY_TZ)
+        scope = ("the whole pre-open" if preview["complete"] else
+                 f"the pre-open so far (to the {preview['cutoff_et']} cutoff)")
+        self.preview_note.text = (f"Preview as of {preview['as_of_et']}: {scope}, from the bars stored through "
+                                  f"{through:%H:%M} ET - computed in memory, never stored. The official snapshot is "
+                                  f"taken from 09:31 ET once every instrument's bars of the day were fetched after "
+                                  f"then; until then this preview stands in.")
+        self.preview_note.set_visibility(True)
+        self.render()
+        if self.aset is None:
+            self.reason = f"No analogues in the preview of {day}: its annotation is contaminated (P1 stop rule)."
+        elif not self.aset["members"]:
+            self.reason = (f"No analogue for {day} as of {preview['as_of_et']}: {self.aset['pool_size']} earlier "
+                           f"session(s) scored, none comparable enough yet.")
         return list(self.aset["members"]) if self.aset is not None else []
 
     def mark(self, snapshot_id: Optional[str]) -> None:
@@ -154,7 +212,8 @@ class AnaloguesPanel:
         if aset is None:
             self.summary.text = ""
             with self.table:
-                ui.label(f"No analogue set for {self.day} yet: python scripts/nq_journal.py match").style(_MUTED)
+                ui.label(f"No analogues in the preview of {self.day}: its annotation is contaminated." if self.preview
+                         else f"No analogue set for {self.day} yet: python scripts/nq_journal.py match").style(_MUTED)
             return
         members = aset["members"]
         excluded = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in aset["excluded"].items()) or "none"
@@ -162,7 +221,7 @@ class AnaloguesPanel:
         self.summary.text = (f"{len(members)} analogue(s) from {aset['pool_size']} earlier session(s); excluded: "
                              f"{excluded}; mean similarity {float(mean):.1f}%" if mean is not None
                              else f"no analogue: {aset['pool_size']} earlier session(s) scored; excluded: {excluded}")
-        target_annotation = store.latest_annotation(self.conn, aset["target_snapshot_id"], pre.RULES_PROTOCOL_VERSION)
+        target_annotation = self._target_annotation()
         target_values = features(target_annotation) if target_annotation else {}
         with self.table:
             with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:#2a2e39"):
@@ -188,7 +247,8 @@ class AnaloguesPanel:
                             text += f" ({float(c['score']):.2f})"
                         ui.label(text).classes(_CELL).style(_cell_style(c))
                 if self.outcomes_shown:
-                    target_labels = self._labels(aset["target_snapshot_id"], None)
+                    target_labels = (None if self.preview is not None     # a day in progress has no outcome
+                                     else self._labels(aset["target_snapshot_id"], None))
                     member_labels = [self._labels(m["snapshot_id"], m["outcome_revision"]) for m in members]
                     for t in pre.OUTCOME_TARGETS:
                         ui.label(defs.TARGETS[t]["realised_property"]).classes(_CELL).style(
@@ -210,9 +270,7 @@ class AnaloguesPanel:
     def _render_record(self) -> None:
         """P1's 47 fields of the selected session (forecaster/preopen_display.py): pre-open only, no outcome."""
         self.record.clear()
-        snap = self._snapshot(self.day)
-        annotation = store.latest_annotation(self.conn, snap["snapshot_id"], pre.RULES_PROTOCOL_VERSION)
-        provenance, rows = p1_record(snap, annotation, self.aset)
+        provenance, rows = p1_record(self._target_snapshot(), self._target_annotation(), self.aset)
         with self.record:
             ui.label(provenance).classes("text-xs mb-1").style(_MUTED)
             with ui.grid(columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,2fr)").classes("w-full gap-x-3 gap-y-0"):

@@ -4,9 +4,7 @@ A forecast arm that is not tied to the 09:29 cutoff: from **any minute** of a tr
 day - overnight, pre-open, mid-session - it issues the distribution of the price at
 **every later minute** of the same day. It is the benchmark every later fan model
 (gradient-boosted quantiles, a sequence network) has to beat, horizon by horizon, and
-the input of the fan chart (next step: a density-fan primitive in the Lightweight
-Charts component, its opacity following the issued density and the measured accuracy
-per horizon).
+what the Session Explorer draws on the session in progress (below: the chart).
 
 No machine learning: a zero-drift random walk in log price whose per-minute variance
 is built from three measured parts. The P1 arms A-D (docs/nq_prompt_v2.md) stay as
@@ -93,6 +91,34 @@ inside the horizon - where E has to earn its place.
 The skill and calibration per horizon are what the chart's accuracy fade will be built
 from, and what a learned fan must improve on.
 
+## The chart
+
+The Session Explorer draws the fan on the session in progress only, to the right of its
+newest candle ([dashboard/components/fan.py](../dashboard/components/fan.py), the
+`DensityFan` primitive in
+[dashboard/components/lightweight_chart.js](../dashboard/components/lightweight_chart.js)):
+
+- **Columns:** one per candle ahead at the chart's timeframe (at most 120, to the day's end),
+  the distribution of the candle's close - the fan at its last minute. Blank candles extend
+  the time axis into the future.
+- **The price fade:** each column is a vertical gradient with a stop at each issued quantile,
+  its opacity proportional to the normal density there (exp(-z^2 / 2)): the median fully
+  opaque, the 1 / 99 % quantiles nearly clear.
+- **The accuracy fade:** each column's opacity is also scaled by its confidence: the fan's CRPS
+  skill against the flat reference at that horizon, measured by `recent_accuracy`
+  ([forecaster/fan_scoring.py](../forecaster/fan_scoring.py)) walk-forward over the last 30
+  complete sessions before the day, divided by its skill one minute ahead, interpolated in
+  log minutes, never below 0.25. Where the fan knows no more than one volatility for the
+  whole day it stays a faint band. Over the 30 NQ sessions to 2026-10-05 the skill was 8.1 %
+  at 1 minute and 2.5 % at 240 minutes.
+- **Widening:** a horizon whose measured 90 % band held less than 90 % is drawn widened by
+  the factor that would have made it hold (never narrowed); the issued fan is unchanged.
+- **Playback** recomputes the fan from any earlier candle of the session - the model is
+  fitted once per instrument and day, a fan from an origin takes well under a millisecond.
+
+The model and accuracy take a few seconds to load (the 250 sessions behind the release
+multipliers); the explorer does that off its event loop, once per instrument and day.
+
 ## Running it
 
 ```bash
@@ -127,5 +153,5 @@ earlier complete sessions is skipped as `insufficient_history`.
   any session outside its coverage, there are no event bumps.
 - **Early-close and holiday sessions** are not scored (a fan is still issued on an
   early close, ending at its close).
-- **Not stored, not live-scored yet.** A prospective record (fans logged at a fixed
-  cadence while they are issued) comes with the chart.
+- **Not stored, not live-scored yet.** The chart draws fans but logs none; a prospective record
+  (fans logged at a fixed cadence while they are issued) is still to come.

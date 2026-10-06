@@ -8,6 +8,9 @@ the realised last price - under the full model and its three references.
   score_day(model, day)       one session's origin-by-origin scores, tallied
   score_sessions(days, ...)   walk-forward over a range: each session fitted on
                               the sessions before it only, then scored
+  recent_accuracy(days, ...)  the last sessions before a day, per horizon: skill
+                              against flat and interval coverage - the chart's
+                              accuracy fade
   summarise(...)              per horizon: CRPS (bps), z RMS, coverage, PIT
                               deciles, paired differences between the variants
                               with block-bootstrap intervals, the origin phases,
@@ -169,6 +172,43 @@ def score_sessions(days: Sequence[Day], start: date, end: date,
         scores.append(score_day(model, day, horizons))
         last = model
     return {"scores": scores, "skipped": skipped, "last_model": last}
+
+
+def recent_accuracy(days: Sequence[Day], before: date, sessions: int,
+                    horizons: Sequence[int] = F.SCORE_HORIZONS) -> Dict[str, Any]:
+    """
+    The fan's measured accuracy just before session ``before`` - what the chart's accuracy fade reads: the last
+    ``sessions`` complete full sessions of ``days`` before it, scored walk-forward as ``score_sessions`` scores them.
+    Per horizon: the full fan's CRPS skill against the flat reference (1 - CRPS full / CRPS flat: 0 is no better
+    than a random walk with one variance for every minute), the coverage of its 50 and 90 % central intervals and
+    its z RMS. ``{'sessions', 'first', 'last', 'horizons': [{'horizon', 'origins', 'skill', 'cover50', 'cover90',
+    'z_rms'}]}``; no horizons without a session to score.
+    """
+    eligible = sorted((d for d in days if d.session_date < before and d.complete and d.schedule == "full"),
+                      key=lambda d: d.session_date)[-sessions:]
+    out: Dict[str, Any] = {"sessions": 0, "first": None, "last": None, "horizons": []}
+    if not eligible:
+        return out
+    scores = score_sessions(days, eligible[0].session_date, eligible[-1].session_date, horizons)["scores"]
+    if not scores:
+        return out
+    out.update(sessions=len(scores), first=scores[0].session_date.isoformat(),
+               last=scores[-1].session_date.isoformat())
+    for h in horizons:
+        full, flat = Tally(), Tally()
+        for s in scores:
+            if ("full", h) in s.all:
+                full.merge(s.all[("full", h)])
+            if ("flat", h) in s.all:
+                flat.merge(s.all[("flat", h)])
+        f, ref = full.summary(), flat.summary()
+        if not f["n"]:
+            continue
+        out["horizons"].append({
+            "horizon": h, "origins": f["n"],
+            "skill": 1 - f["crps_bps"] / ref["crps_bps"] if ref.get("crps_bps") else None,
+            "cover50": f["coverage"]["0.50"], "cover90": f["coverage"]["0.90"], "z_rms": f["z_rms"]})
+    return out
 
 
 def summarise(scores: Sequence[DayScore], horizons: Sequence[int] = F.SCORE_HORIZONS) -> List[Dict[str, Any]]:

@@ -446,6 +446,19 @@ def test_a_preview_forecasts_from_the_data_so_far_and_stores_nothing(market, tmp
 
 
 @needs_db
+def test_the_explorer_previews_a_session_as_of_its_last_stored_bar(market):
+    """The Session Explorer's analogue preview of a day in progress (forecaster/preview.preview_session): any
+    session, as of the end of its last stored NQ bar - never a stale price - by the cutoff."""
+    from forecaster import preview as pv
+    conn = market[0]
+    d = date.fromisoformat(DAY)
+    assert pv.latest_as_of(conn, DAY) == cal.ny_instant(d, time(9, 29))          # the whole pre-open is stored
+    assert pv.latest_as_of(conn, "2026-06-15") is None                            # no bar of a later session
+    now, as_of = cal.ny_instant(d, time(7, 45, 30)), cal.ny_instant(d, time(7, 45))
+    assert pv.preview_session(conn, DAY, as_of, now=now) == pv.preview(conn, now=now)
+
+
+@needs_db
 def test_rules_annotations_are_stored_once(market):
     from contracts import nq_preopen as pre
     from database import journal_store as store

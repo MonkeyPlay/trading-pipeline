@@ -232,6 +232,187 @@ class TimeShade {
 }
 
 /* ------------------------------------------------------------------ */
+/* Density fan primitive                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The price fan (dashboard/components/fan.py) to the right of its origin candle:
+ * per future candle one column whose vertical gradient follows the forecast
+ * distribution of its close - colour stops at the issued quantiles, opacity
+ * alpha x exp(-z^2 / 2) x the column's confidence - so the most likely price is
+ * the most opaque and the whole fan fades where the model's measured skill does.
+ * The median (the origin's price: the fan has no drift), the origin and the
+ * scheduled releases ahead are drawn with it. Under the candles, like the shades.
+ */
+class DensityFanRenderer {
+  constructor(view) {
+    this._v = view;
+  }
+
+  draw(target) {
+    const v = this._v;
+    const fan = v.fan;
+    if (!fan || (!v.cols.length && !v.origin)) return;
+    target.useBitmapCoordinateSpace((scope) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const height = scope.bitmapSize.height;
+      ctx.save();
+      for (const c of v.cols) {
+        const x0 = Math.round((c.x - v.half) * hr);
+        const x1 = Math.round((c.x + v.half) * hr);
+        const top = c.ys[c.ys.length - 1] * vr;        // the highest quantile is the top of the column
+        const bottom = c.ys[0] * vr;
+        if (bottom - top < 1) continue;
+        const gradient = ctx.createLinearGradient(0, top, 0, bottom);
+        for (let k = 0; k < c.ys.length; k++) {
+          const offset = Math.min(1, Math.max(0, (c.ys[k] * vr - top) / (bottom - top)));
+          const alpha = fan.alpha * Math.exp(-0.5 * fan.z[k] * fan.z[k]) * c.conf;
+          gradient.addColorStop(offset, `rgba(${fan.rgb}, ${alpha.toFixed(4)})`);
+        }
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x0, Math.round(top), Math.max(1, x1 - x0), Math.max(1, Math.round(bottom - top)));
+      }
+
+      // The origin: a hairline through its candle.
+      if (v.origin) {
+        ctx.fillStyle = `rgba(${fan.rgb}, 0.35)`;
+        ctx.fillRect(Math.round(v.origin.x * hr), 0, Math.max(1, Math.round(hr)), height);
+      }
+
+      // The median, fading with the columns.
+      ctx.lineWidth = Math.max(1, Math.round(hr));
+      let prev = v.origin;
+      for (const c of v.cols) {
+        if (prev) {
+          ctx.strokeStyle = `rgba(${fan.rgb}, ${(0.8 * c.conf).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.moveTo(prev.x * hr, prev.ym * vr);
+          ctx.lineTo(c.x * hr, c.ym * vr);
+          ctx.stroke();
+        }
+        prev = c;
+      }
+
+      // Scheduled releases ahead: where the fan widens.
+      ctx.font = `${Math.round(11 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textBaseline = "bottom";
+      for (const r of v.releases) {
+        const x = Math.round(r.x * hr);
+        ctx.fillStyle = "rgba(255, 167, 38, 0.55)";
+        for (let y = 0; y < height; y += Math.round(6 * vr)) {
+          ctx.fillRect(x, y, Math.max(1, Math.round(hr)), Math.round(3 * vr));
+        }
+        ctx.fillStyle = "rgba(255, 167, 38, 0.9)";
+        ctx.fillText(r.label, x + Math.round(4 * hr), height - Math.round(6 * vr));
+      }
+      ctx.restore();
+    });
+  }
+}
+
+class DensityFanPaneView {
+  constructor(source) {
+    this._source = source;
+    this.fan = null;
+    this.cols = [];
+    this.origin = null;
+    this.releases = [];
+    this.half = 3;
+  }
+
+  update() {
+    const src = this._source;
+    const fan = src._fan;
+    this.fan = fan;
+    this.cols = [];
+    this.origin = null;
+    this.releases = [];
+    if (!fan || !src._chart || !src._series) return;
+    const timeScale = src._chart.timeScale();
+    const series = src._series;
+    this.half = (timeScale.options().barSpacing || 6) / 2;
+    for (const c of fan.columns) {
+      const x = timeScale.timeToCoordinate(c.time);
+      if (x === null) continue;
+      const ys = c.q.map((p) => series.priceToCoordinate(p));
+      if (ys.some((y) => y === null)) continue;
+      this.cols.push({ x, ys, ym: ys[fan.median], conf: c.conf });
+    }
+    const ox = timeScale.timeToCoordinate(fan.origin.time);
+    const oy = series.priceToCoordinate(fan.origin.price);
+    if (ox !== null && oy !== null) this.origin = { x: ox, ym: oy };
+    for (const r of fan.releases) {
+      const x = timeScale.timeToCoordinate(r.time);
+      if (x !== null) this.releases.push({ x, label: r.label });
+    }
+  }
+
+  renderer() {
+    return new DensityFanRenderer(this);
+  }
+
+  zOrder() {
+    return "bottom";
+  }
+}
+
+class DensityFan {
+  constructor() {
+    this._fan = null;
+    this._paneViews = [new DensityFanPaneView(this)];
+  }
+
+  attached({ chart, series, requestUpdate }) {
+    this._chart = chart;
+    this._series = series;
+    this._requestUpdate = requestUpdate;
+  }
+
+  detached() {
+    this._chart = null;
+    this._series = null;
+    this._requestUpdate = null;
+  }
+
+  setFan(fan) {
+    this._fan = fan || null;
+    if (this._requestUpdate) this._requestUpdate();
+  }
+
+  /** The column at chart time `time`, for the crosshair readout. */
+  columnAt(time) {
+    if (!this._fan) return null;
+    return this._fan.columns.find((c) => c.time === time) || null;
+  }
+
+  updateAllViews() {
+    this._paneViews.forEach((view) => view.update());
+  }
+
+  paneViews() {
+    return this._paneViews;
+  }
+
+  /** The price scale makes room for the fan's 5-95 % band over the visible columns, not its faint tails. */
+  autoscaleInfo(startTimePoint, endTimePoint) {
+    const fan = this._fan;
+    if (!fan || !this._chart) return null;
+    const timeScale = this._chart.timeScale();
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const c of fan.columns) {
+      const i = timeScale.timeToIndex(c.time, false);
+      if (i === null || i < startTimePoint || i > endTimePoint) continue;
+      lo = Math.min(lo, c.q[fan.band[0]]);
+      hi = Math.max(hi, c.q[fan.band[1]]);
+    }
+    return Number.isFinite(lo) ? { priceRange: { minValue: lo, maxValue: hi } } : null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Diffing                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -448,6 +629,8 @@ export default {
       });
       this.shade = new TimeShade();
       this.candles.attachPrimitive(this.shade);
+      this.fan = new DensityFan();
+      this.candles.attachPrimitive(this.fan);
     }
 
     if (this.show_volume) {
@@ -526,8 +709,12 @@ export default {
       const hadData =
         (this.candlePoints && this.candlePoints.length) || Object.keys(this.series).length;
       // The time window being looked at, to restore after the data is swapped
-      // (another timeframe has other bars, so the bar-index viewport would jump).
-      const keptRange = spec.keep_view && hadData ? this.chart.timeScale().getVisibleRange() : null;
+      // (another timeframe has other bars, so the bar-index viewport would jump) -
+      // moved on by `shift_by` seconds when a live session's newest candle moved on.
+      let keptRange = spec.keep_view && hadData ? this.chart.timeScale().getVisibleRange() : null;
+      if (keptRange && spec.shift_by) {
+        keptRange = { from: keptRange.from + spec.shift_by, to: keptRange.to + spec.shift_by };
+      }
 
       if (spec.candles && this.candles) {
         applyData(this.candles, this.candlePoints, spec.candles);
@@ -541,6 +728,7 @@ export default {
       this.reconcileSeries(spec.series || {});
       this.reconcileBands(spec.bands || {});
       if (this.shade) this.shade.setRanges(spec.shades || [], spec.shade_color);
+      if (this.fan) this.fan.setFan(spec.fan);
 
       this.legendSpec = spec.legend || [];
       this.legend = this.legendSpec.map((item) => ({ ...item, value: null }));
@@ -743,10 +931,17 @@ export default {
       }
 
       const bar = this.candles ? param.seriesData.get(this.candles) : null;
-      if (bar) {
-        const fmt = (v) => (v == null ? "—" : v.toFixed(2));
+      const fmt = (v) => (v == null ? "—" : v.toFixed(2));
+      const column = this.fan ? this.fan.columnAt(param.time) : null;
+      if (bar && bar.open !== undefined) {
         this.readout =
           `O ${fmt(bar.open)}  H ${fmt(bar.high)}  L ${fmt(bar.low)}  C ${fmt(bar.close)}`;
+      } else if (column) {
+        const f = this.fan._fan;
+        this.readout = `Fan +${column.minutes} min  5% ${fmt(column.q[f.band[0]])}  ` +
+          `50% ${fmt(column.q[f.median])}  95% ${fmt(column.q[f.band[1]])}`;
+      } else {
+        this.readout = "";
       }
 
       this.legend = this.legendSpec.map((item) => {

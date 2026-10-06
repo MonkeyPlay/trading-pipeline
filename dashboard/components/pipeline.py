@@ -348,8 +348,9 @@ class PipelinePanel:
         job = self.job
         if self.watching and job is not None and not job.running:
             self.watching = False
-            ui.notify(f"{job.title} {job.outcome} - the page shows the stored data now.",
-                      type="positive" if job.returncode == 0 else "negative", multi_line=True)
+            if job.key != "auto" or job.returncode != 0:      # auto mode runs once a minute: its failures only
+                ui.notify(f"{job.title} {job.outcome} - the page shows the stored data now.",
+                          type="positive" if job.returncode == 0 else "negative", multi_line=True)
             for callback in self.on_update:
                 try:
                     callback()

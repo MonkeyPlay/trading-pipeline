@@ -192,6 +192,31 @@ Pages:
     Smoothed"). They run on the chart's timeframe over 1000 earlier bars of the same
     contract, so they start the session settled, as on TradingView
     ([features/calculations.py](features/calculations.py)).
+  - **The session in progress** (from its 18:00 ET Globex open to 17:00 ET): drawn whole, from
+    the Globex open, with the **benchmark price fan** to the right of its newest candle
+    ([dashboard/components/fan.py](dashboard/components/fan.py), model in
+    [docs/fan.md](docs/fan.md)): per candle ahead (up to 120, to the day's end) the
+    distribution of its close, as a neutral fog whose opacity follows the density - the most
+    likely price most opaque - and fades with the fan's measured skill against a flat random
+    walk at that horizon (walk-forward over the last 30 sessions, relative to its skill one
+    minute ahead, never below a faint floor). A horizon whose measured 90 % band held less than
+    90 % is drawn widened to hold it. The median stays at the origin's price: the fan forecasts
+    how far, not which way. Scheduled releases ahead are marked where the fan widens; the
+    crosshair over a column reads its 5 / 50 / 95 % prices; the line above the charts gives the
+    90 % ranges 15, 30 and 60 minutes ahead and how the fades were measured. The fan follows the
+    active contract (another contract shows none).
+    **Playback** steps back through the session's candles (the slider, or the arrows a candle at
+    a time) with the fan as it stood at each - the later candles hidden, or drawn grey with
+    **Show what followed**; the levels and opening range are the ones known by then. **Live**
+    returns to the newest candle; **Fan** hides it.
+    **Auto** (beside Fit) collects the session in progress from IB and forecasts once a minute -
+    the collector for today only with its journal step, then the preview while one is possible
+    ([dashboard/jobs.py](dashboard/jobs.py) `AUTO`) - and moves the explorer to the session in
+    progress. Each run's end redraws the chart, the fan and the analogue preview in place, the
+    view moving on with the newest candle. It belongs to the dashboard process like any job (it
+    waits while another runs, and keeps running with the tab closed); switching it off, or
+    stopping one of its runs in Update data, ends it. A run takes about a minute, so the chart
+    trails the market by one to two minutes.
   - **Analogue beside it:** the charts are split - on the right, one of the selected NQ
     session's structural analogues, the most similar first (pick another in its **Analogue**
     select, or by its date in the comparison below): that session on its own contract and
@@ -200,8 +225,12 @@ Pages:
   - **Analogues** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
     the session and its analogues side by side, feature by feature - their realised labels and
     the outcome frequencies hidden until asked for - with P1's 47-field pre-open record; for the
-    days the journal holds a snapshot of. See
-    [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
+    days the journal holds a snapshot of. A day in progress has no snapshot until its official
+    one is taken (from 09:31 ET, once every instrument's bars were fetched after then): until then
+    a **preview** stands in - the same matching on the evidence as of the day's last stored NQ
+    bar (the whole pre-open once its 09:29 bar is stored), computed in memory, never stored,
+    labelled with its as-of minute ([forecaster/preview.py](forecaster/preview.py)
+    `preview_session`). See [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
   - **Forecast** (at the bottom, [dashboard/views/forecast.py](dashboard/views/forecast.py)): the
     session day's NQ forecast; `/?run=<id>` opens a run on its day, `/?view=preview` Forecast now
     (the old `/forecast` links redirect there). Two tabs. **Stored runs**: the day's runs, one
@@ -325,7 +354,8 @@ python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-10-02   # 
 
 `score` scores every origin minute against the flat, intraday-pattern and event-bump
 references and writes `docs/reports/fan_rw_v1_<symbol>_<start>_<end>.md`. Nothing is stored
-but the registered definition.
+but the registered definition. The Session Explorer draws the fan on the session in progress
+(below).
 
 ## Configuration
 

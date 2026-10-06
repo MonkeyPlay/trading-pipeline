@@ -35,12 +35,17 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 /tmp/pw/bin/python .claude/skills/run-dashboard/drive.py explorer    # both charts and their link, calendar, previous day, 5m
 /tmp/pw/bin/python .claude/skills/run-dashboard/drive.py forecast    # the explorer's forecast: the day's newest run, outcome hidden
 /tmp/pw/bin/python .claude/skills/run-dashboard/drive.py evaluation  # the previous session's day carried to Evaluation
+/tmp/pw/bin/python .claude/skills/run-dashboard/drive.py fan         # the session in progress: fan, readout, playback
 ```
 
 `--port` (default 8093) and `--out` (default `/tmp/dashboard-shots`) are optional. The step prints what the page shows and ends with `PROBLEMS: none` or the browser errors. **Look at the screenshots** it writes; then check the server log for tracebacks.
 
 ## Gotchas
 
+- **Auto** (the explorer's tools, beside Fit) starts a real collector run against IB once a minute
+  (`dashboard/jobs.py` AUTO) - never switch it on against production to test; its schedule is
+  unit-tested (`tests/test_fan_view.py`). The fan and playback show only while a session is in
+  progress (18:00-17:00 ET on session days); the `fan` step says so otherwise.
 - **Update data** (header) runs real jobs against the dashboard's `DATABASE_URL`: **Run collector** and
   **Run forecaster** write to it (incremental, idempotent), **Forecast now** collects (writes bars) and then
   replaces `data/preview/forecast_preview.json` (nothing in the journal), **Live forecast** records an

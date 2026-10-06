@@ -15,6 +15,12 @@ dashboard (PREVIEW_FILE), replaced by the next.
   preview(conn, now)    the preview, JSON-ready: status ok or unavailable with the
                         reason, the evidence, annotation, analogue set and one
                         run-shaped record per arm (lifecycle status "preview")
+  preview_session(conn, day, as_of)
+                        the same for a given session and minute - the Session
+                        Explorer's analogue preview of a day in progress
+  latest_as_of(conn, day)
+                        that minute for a day: the end of its last stored NQ bar,
+                        by the cutoff - so the preview's price is never stale
   save / load           the file the dashboard reads
 
 A preview is not a forecast run: it has no run id, no issue policy and no place in an
@@ -129,16 +135,45 @@ def _run(conn, snapshot: Dict[str, Any], annotation: Dict[str, Any], aset: Optio
             "predictions": {t: {"target": t, **forecast["predictions"][t]} for _, t in fc.FORECAST_TARGETS}}
 
 
+def latest_as_of(conn, day: str, profile: str = defs.DEFAULT_PROFILE) -> Optional[datetime]:
+    """
+    The minute a preview of session ``day`` reads up to: the end of its last stored NQ bar (the active contract's)
+    before the cutoff - the profile's cutoff once that bar is stored - or None without a bar of the day's pre-open.
+    A preview as of the wall clock would find the price stale whenever the collector lags behind it.
+    """
+    session = cal.session(day)
+    cutoff = cal.ny_instant(session.session_date, defs.PROFILES[profile].cutoff)
+    row = conn.execute(
+        "SELECT max(b.timestamp_utc) FROM bars b "
+        "JOIN active_contracts a ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+        "WHERE a.symbol = %s AND b.trading_day = %s AND b.interval = '1m' AND b.price_type = 'TRADES' "
+        "AND b.timestamp_utc >= %s AND b.timestamp_utc < %s;",
+        (defs.SYMBOL, day, session.overnight_start_at, cutoff)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    last = row[0] if isinstance(row[0], datetime) else datetime.fromisoformat(str(row[0]).replace(" ", "T"))
+    last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+    return min(last + MINUTE, cutoff)
+
+
 def preview(conn, now: Optional[datetime] = None, profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:
     """The preview of the session ``preview_target`` names, as of ``now`` (see the module docstring)."""
     now = now or datetime.now(timezone.utc)
-    made_at = _utc_text(now)
-    base: Dict[str, Any] = {"kind": "forecast_preview", "made_at": made_at, "profile": profile}
     try:
         session, as_of = preview_target(now, profile)
     except PreviewUnavailable as e:
-        return _jsonable({**base, "status": "unavailable", "reason": str(e)})
-    day = session.session_date.isoformat()
+        return _jsonable({"kind": "forecast_preview", "made_at": _utc_text(now), "profile": profile,
+                          "status": "unavailable", "reason": str(e)})
+    return preview_session(conn, session.session_date.isoformat(), as_of, profile, now)
+
+
+def preview_session(conn, day: str, as_of: datetime, profile: str = defs.DEFAULT_PROFILE,
+                    now: Optional[datetime] = None) -> Dict[str, Any]:
+    """The preview of session ``day`` as of ``as_of`` (after its Globex open, by its cutoff), made at ``now``."""
+    now = now or datetime.now(timezone.utc)
+    made_at = _utc_text(now)
+    base: Dict[str, Any] = {"kind": "forecast_preview", "made_at": made_at, "profile": profile}
+    session = cal.session(day)
     cutoff = cal.ny_instant(session.session_date, defs.PROFILES[profile].cutoff)
     base.update(session_date=day, as_of=_utc_text(as_of), as_of_et=_et(as_of), complete=as_of == cutoff,
                 cutoff_et=_et(cutoff, "%H:%M"))

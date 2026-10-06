@@ -22,6 +22,11 @@ dashboard's database connection or its event loop:
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
+  auto         the collector for the session in progress only (--days 0, with
+               the journal step), then the preview while one is possible - one
+               run a minute while auto mode is on (AUTO, the Session Explorer's
+               Auto button), so the chart, the fan and the analogue preview follow
+               the session
 
 A job is one or more steps, each a process run in turn; Stop ends the running step
 and skips the rest.
@@ -32,7 +37,9 @@ the confirmation the Claude API requests need (they are manual only) - can run h
 One job runs at a time. It belongs to the dashboard process, not to a browser
 tab: every page shows the same job and its output, a page opened while it runs
 picks it up, and closing the tab does not stop it. Its output is appended to
-logs/pipeline_run.log, beside the scheduled runs'.
+logs/pipeline_run.log, beside the scheduled runs'. Auto mode belongs to the process
+too: it starts its next run when no job is running, a few seconds into each minute,
+and ends when switched off or when one of its runs is stopped.
 """
 
 from __future__ import annotations
@@ -47,12 +54,16 @@ from datetime import datetime, timezone
 from typing import Deque, List, Optional, TextIO, Tuple
 
 from config import Config
+from dashboard.components.fan import current_session
 from features import calendar as cal
+from forecaster.preview import PreviewUnavailable, preview_target
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(_PROJECT_ROOT, "logs", "pipeline_run.log")
 MAX_LINES = 5000          # output kept in memory for the pages; the log file keeps all of it
 STOP_GRACE_S = 15         # after Stop, seconds before a job that has not exited is killed
+AUTO_SECOND = 5           # an auto run starts this many seconds into a minute, once the minute's bar has closed
+AUTO_TITLE = "Auto update"
 
 
 def collector_command(days: int) -> List[str]:
@@ -251,5 +262,73 @@ class JobRunner:
             self._log = None
 
 
-# The dashboard's one runner, shared by every page.
+def auto_steps(now: datetime) -> List[Tuple[str, List[str]]]:
+    """An auto run's steps at ``now``: the session in progress collected (and the journal step), then the preview
+    while one is possible (forecaster/preview.py)."""
+    steps = [("collector", collector_command(0))]
+    try:
+        preview_target(now)
+        steps.append(("preview", preview_command()))
+    except PreviewUnavailable:
+        pass
+    return steps
+
+
+class AutoMode:
+    """
+    Collecting and forecasting once a minute while on (see the module docstring): a run starts when no job is
+    running, AUTO_SECOND seconds or more into a minute it has not run in, while a session is in progress. Stopping
+    one of its runs (Update data, Stop) switches it off.
+    """
+
+    def __init__(self, runner: JobRunner) -> None:
+        self.runner = runner
+        self.on = False
+        self._task: Optional[asyncio.Task] = None
+        self._last_minute: Optional[datetime] = None
+        self._started: Optional[Job] = None              # its latest run
+
+    def switch(self, on: bool) -> None:
+        if on and not self.on:
+            self.on, self._started = True, None
+            self._task = asyncio.get_running_loop().create_task(self._loop())
+        elif not on and self.on:
+            self.on = False
+            if self._task is not None:
+                self._task.cancel()
+                self._task = None
+
+    def due(self, now: datetime) -> Optional[str]:
+        """The session to collect at ``now``, or None: a job is running, this minute had its run, it is too early in
+        the minute, or no session is in progress."""
+        if self.runner.busy or now.second < AUTO_SECOND:
+            return None
+        if self._last_minute == now.replace(second=0, microsecond=0):
+            return None
+        return current_session(now)
+
+    def status(self, now: datetime) -> str:
+        if not self.on:
+            return "Off: collect and forecast by hand (Update data)"
+        if current_session(now) is None:
+            return "On - waiting: no session in progress"
+        return "On - collecting and forecasting once a minute"
+
+    async def _loop(self) -> None:
+        try:
+            while self.on:
+                if self._started is not None and self._started.stopped:
+                    self.on = False
+                    break
+                now = datetime.now(timezone.utc)
+                if self.due(now):
+                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now))
+                    self._last_minute = now.replace(second=0, microsecond=0)
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+
+
+# The dashboard's one runner, shared by every page, and its auto mode.
 RUNNER = JobRunner()
+AUTO = AutoMode(RUNNER)

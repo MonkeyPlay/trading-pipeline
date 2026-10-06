@@ -21,7 +21,7 @@ from features import calendar as cal
 from forecaster.fan_benchmark import (DAY_SLOTS, Day, InsufficientHistory, Release, crps_normal, day_start, end_slot,
                                       event_multipliers, fan_from, fit, horizon_variances, norm_cdf, seasonal,
                                       slot_at, slot_instant, slot_of_time)
-from forecaster.fan_scoring import score_sessions, summarise
+from forecaster.fan_scoring import recent_accuracy, score_sessions, summarise
 
 DSN = os.getenv("TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(
@@ -203,6 +203,21 @@ def test_the_fan_is_calibrated_on_a_known_market():
         assert summary[h]["paired"]["seasonal-flat"]["diff_bps"] < 0   # the intraday pattern beats one variance
     rel = summary[1]["release_ahead"]
     assert rel["seasonal_events"]["z_rms"] < rel["seasonal"]["z_rms"]   # the bump widens the release minute
+
+
+def test_recent_accuracy_scores_the_last_sessions_before_a_day():
+    """The chart's accuracy fade: the last sessions before the day, walk-forward - skill against flat, coverage."""
+    days = market(40, seed=8)
+    target = days[-1].session_date
+    acc = recent_accuracy(days, target, sessions=10)
+    assert acc["sessions"] == 10 and acc["last"] == days[-2].session_date.isoformat()   # never the day itself
+    rows = {r["horizon"]: r for r in acc["horizons"]}
+    assert set(rows) == set(F.SCORE_HORIZONS)
+    for h in (1, 15, 60):
+        assert rows[h]["skill"] > 0                         # the intraday pattern knows more than one variance
+        assert abs(rows[h]["cover90"] - 0.90) < 0.04 and 0.4 < rows[h]["cover50"] < 0.6
+    assert recent_accuracy(days, days[0].session_date, sessions=10) == {"sessions": 0, "first": None, "last": None,
+                                                                         "horizons": []}
 
 
 def test_scoring_skips_sessions_it_cannot_fit():

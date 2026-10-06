@@ -19,6 +19,18 @@ its analogues; a date there picks the analogue shown. At the bottom, the day's
 NQ forecast (dashboard/views/forecast.py): its stored runs, and the preview
 made by Forecast now.
 
+The session in progress (dashboard/components/fan.current_session) is drawn
+whole, from its 18:00 ET Globex open, with the benchmark price fan to the right
+of its newest candle (dashboard/components/fan.py): the distribution of the
+price at each candle ahead, fading with its density and with its measured skill.
+Playback steps back through the session's candles - the later ones hidden, or
+drawn grey - with the fan as it stood at each. Without its official snapshot
+yet, the day's analogues come from a preview as of its last stored bar
+(forecaster/preview.preview_session), made off the event loop and labelled as
+never stored. Auto (dashboard/jobs.AUTO) collects the session and forecasts once
+a minute; each run's end redraws all of it in place, the view moving on with the
+newest candle.
+
 Unlike the page-rerun model this replaced, every control mutates view state and
 pushes a new spec at the existing charts. The charts are created once per page
 load, so a redraw leaves the user's zoom, scroll and crosshair exactly where
@@ -29,16 +41,19 @@ are read again in place.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timezone
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
-from nicegui import ui
+from nicegui import background_tasks, run, ui
 
 from contracts import nq_prompt_v2 as defs
+from dashboard.components import fan
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.session_bar import SessionBar, contract_label
 from dashboard.components.spec import build_chart_spec, resample, to_epoch
 from dashboard.views.analogues import AnaloguesPanel
+from dashboard.jobs import AUTO
 from dashboard.views.forecast import ForecastPanel
 from database import journal_store as store
 from database.queries import get_bars, get_contract, get_day_bars, get_session_day
@@ -50,6 +65,8 @@ from features.calculations import (
     enrich_candle_timezones,
     pre_open_levels,
 )
+from forecaster import preview as pv
+from forecaster.fan_benchmark import end_slot, slot_at, slot_instant
 
 # The two charts - the session and an analogue - show the same time of day.
 _SYNC_GROUP = "session-explorer"
@@ -84,20 +101,40 @@ def session_window(day: str) -> Dict[str, pd.Timestamp]:
     return {"start": open_ - _EXTRA, "open": open_, "close": close, "end": close + _EXTRA}
 
 
-def window_bars(df: Optional[pd.DataFrame], day: str, timeframe: str = "1m") -> Optional[pd.DataFrame]:
+def day_window(day: str) -> Dict[str, pd.Timestamp]:
+    """
+    ``session_window`` for the whole trading day - the current session's: from
+    its Globex open (``start``, 18:00 ET the evening before) to the futures'
+    day end (``end``, 17:00 ET; the early close's on a short day).
+    """
+    w = session_window(day)
+    try:
+        s = cal.session(day)
+        if s.is_open:
+            end = slot_instant(s.session_date, end_slot("FUT", s.schedule))
+            return {**w, "start": pd.Timestamp(s.overnight_start_at).tz_convert(_NY),
+                    "end": pd.Timestamp(end).tz_convert(_NY)}
+    except cal.CalendarCoverageError:
+        pass
+    return {**w, "start": w["start"] - pd.Timedelta(hours=15, minutes=15), "end": w["close"] + pd.Timedelta(hours=1)}
+
+
+def window_bars(df: Optional[pd.DataFrame], day: str, timeframe: str = "1m",
+                full_day: bool = False) -> Optional[pd.DataFrame]:
     """
     The bars of ``df`` (at ``timeframe``, with ``timestamp_ny`` bar starts) that
     overlap ``day``'s shown window, with ``muted`` true for those starting
     outside the regular session - the 15 minutes before the open and after the
-    close. Indicators such as VWAP are computed on the whole day beforehand.
+    close. ``full_day``: the whole trading day (``day_window``), nothing muted.
+    Indicators such as VWAP are computed on the whole day beforehand.
     """
     if df is None or df.empty:
         return df
-    w = session_window(day)
+    w = day_window(day) if full_day else session_window(day)
     width = pd.Timedelta(minutes=_BAR_MINUTES.get(timeframe, 1))
     ts = df["timestamp_ny"]
     out = df[(ts + width > w["start"]) & (ts < w["end"])].copy()
-    out["muted"] = (out["timestamp_ny"] < w["open"]) | (out["timestamp_ny"] >= w["close"])
+    out["muted"] = False if full_day else (out["timestamp_ny"] < w["open"]) | (out["timestamp_ny"] >= w["close"])
     return out
 
 
@@ -136,6 +173,14 @@ class SessionPane:
         self.day_df: Optional[pd.DataFrame] = None
         self.opening_range: Optional[Dict[str, Any]] = None
         self.levels: Optional[Dict[str, Any]] = None    # pre-open reference levels; None without a previous day
+        self.history: Optional[pd.DataFrame] = None     # the 1-minute bars behind the levels and moving averages
+
+        # The current session (set by the explorer): the whole trading day, playback and the fan.
+        self.full_day = False
+        self.until: Optional[pd.Timestamp] = None       # playback: the start (New York) of the last candle shown
+        self.reveal = False                             # ... the later candles drawn muted instead of hidden
+        self.decorate: Optional[Callable[[Dict[str, Any]], None]] = None   # adds to each spec before it is sent
+        self._edge: Optional[tuple] = None              # (date, timeframe, chart time) of the newest candle drawn
 
         self.chart: Optional[LightweightChart] = None
 
@@ -148,7 +193,7 @@ class SessionPane:
         shows the time of day the lead chart shows.
         """
         self.contract, self.date, self.timeframe = contract, date, timeframe
-        self.day_df, self.opening_range, self.levels = None, None, None
+        self.day_df, self.opening_range, self.levels, self.history = None, None, None, None
         if contract is not None and date is not None:
             self.load_day()
         self.push(reset_view=not keep_view, follow=follow)
@@ -172,6 +217,7 @@ class SessionPane:
         # The reference levels need the session before the day, the moving averages
         # MA_WARMUP_BARS bars at the chart's timeframe before it.
         history = self._load_bars(self._history_start(self._warmup_days()))
+        self.history = enrich_candle_timezones(history)
         self.levels = pre_open_levels(history, self.date)
         self.day_df = self._with_moving_averages(history)
 
@@ -224,27 +270,66 @@ class SessionPane:
     # Rendering
     # ------------------------------------------------------------------
 
+    def shown_bars(self) -> Optional[pd.DataFrame]:
+        """The bars drawn: the window's, in playback only those up to ``until`` - or all, the later ones muted."""
+        rows = window_bars(self.day_df, self.date, self.timeframe, full_day=self.full_day)
+        if rows is None or self.until is None:
+            return rows
+        later = rows["timestamp_ny"] > self.until
+        if self.reveal:
+            rows = rows.copy()
+            rows.loc[later, "muted"] = True
+            return rows
+        return rows[~later]
+
+    def _as_of_until(self):
+        """The levels and opening range as the last candle shown knew them (playback hides what came after)."""
+        if self.until is None or self.reveal:
+            return self.levels, self.opening_range
+        end = self.until + pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+        known = self.history[self.history["timestamp_ny"] < end] if self.history is not None else None
+        levels = pre_open_levels(known, self.date) if known is not None and not known.empty else None
+        opening = self.opening_range if self.opening_range and self.opening_range["end"] <= end else None
+        return levels, opening
+
+    def _default_range(self, rows: pd.DataFrame):
+        """A new day's window: 09:15 to 10:45 - or, for the current session, the last 90 candles and 60 ahead."""
+        if self.full_day:
+            tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+            last = self.until if self.until is not None else rows["timestamp_ny"].max()
+            return last - 90 * tf, last + 60 * tf
+        w = session_window(self.date)
+        return w["start"], w["open"] + pd.Timedelta(minutes=75)
+
     def push(self, reset_view: bool = False, follow: bool = False) -> None:
         """
         Sends the current state to the chart. ``reset_view`` (a new day) shows
-        the default window, 09:15 to 10:45; otherwise the window being looked at
-        is kept (a timeframe change). ``follow``: the lead chart's time of day
+        the default window (``_default_range``); otherwise the window being looked
+        at is kept (a timeframe change) - moved on with the newest candle while a
+        current session is followed. ``follow``: the lead chart's time of day
         instead, when the lead shows a session.
         """
         if self.chart is None:
             return
-        if not self.has_bars:
-            self.chart.apply(dict(_EMPTY_SPEC))
+        rows = self.shown_bars() if self.has_bars else None
+        if rows is None or rows.empty:
+            self.chart.apply(dict(_EMPTY_SPEC, fan=None))
             return
-        w = session_window(self.date)
+        levels, opening = self._as_of_until()
         spec = build_chart_spec(
-            window_bars(self.day_df, self.date, self.timeframe), levels=self.levels,
-            opening_range=self.opening_range,
-            visible_range=(w["start"], w["open"] + pd.Timedelta(minutes=75)) if reset_view else None,
+            rows, levels=levels, opening_range=opening,
+            visible_range=self._default_range(rows) if reset_view else None,
             keep_view=not reset_view,
         )
         spec["anchor"] = int(to_epoch([pd.Timestamp(self.date)])[0])    # the day's 00:00 on the chart's clock
         spec["follow"] = follow
+        if self.until is None:
+            edge = (self.date, self.timeframe, int(to_epoch([rows["timestamp_ny"].max()])[0]))
+            if self.full_day and not reset_view and self._edge is not None and self._edge[:2] == edge[:2]:
+                spec["shift_by"] = edge[2] - self._edge[2]
+            self._edge = edge
+        if self.decorate is not None:
+            self.decorate(spec)
         self.chart.apply(spec)
 
 
@@ -274,15 +359,26 @@ class SessionExplorer:
         self.conn = conn
         self.bar = bar
         self.timeframe = "1m"
-        # Set while the analogue selector is updated from code, so its change event does not redraw twice.
+        # Set while selectors are updated from code, so their change events do not redraw twice.
         self._syncing = False
 
         self.main = SessionPane(conn)             # the selected session
         self.mirror = SessionPane(conn)           # one of its analogues, beside it
+        self.main.decorate = self._decorate_main
         self.analogues = AnaloguesPanel(conn, on_pick=self.pick_analogue)
         self.members: Dict[str, Dict[str, Any]] = {}   # the day's analogues by snapshot id, best first
         self.analogue: Optional[str] = None             # the snapshot id of the one beside the session
         self.forecast = ForecastPanel(conn, panel)
+
+        # The current session: the fan, playback and the analogue preview.
+        self.live = False                                # the session shown is the one in progress
+        self.fan_on = True
+        self.fan_contexts: Dict[tuple, fan.FanContext] = {}     # (symbol, day) -> model and accuracy
+        self._fan_loading: set = set()
+        self.fan_day = None                              # the session's minute grid (forecaster/fan_benchmark.Day)
+        self.candle_starts: List[pd.Timestamp] = []      # the candles playback steps through, oldest first
+        self.previews: Dict[str, tuple] = {}             # day -> (as_of, the analogue preview made as of then)
+        self._preview_wanted: Optional[tuple] = None     # (day, as_of) being made
 
     # ------------------------------------------------------------------
     # The two charts
@@ -292,24 +388,42 @@ class SessionExplorer:
         """
         Reloads the selected session and redraws it. A new day opens on the
         default window; ``keep_view`` (a display change only) keeps the window
-        being looked at.
+        being looked at. The session in progress is drawn whole, from its Globex
+        open, with the fan and playback.
         """
         bar = self.bar
+        live = bar.date is not None and bar.date == fan.current_session()
+        if not live or not keep_view or not self.live:
+            self.main.until = None                       # playback starts at the newest candle
+        self.live = live
+        self.main.full_day = self.mirror.full_day = live
+        try:
+            self.fan_day = fan.load_day(self.conn, bar.symbol, bar.date) if live and bar.symbol else None
+        except ValueError:                                # an instrument the fan does not forecast
+            self.fan_day = None
+        if live:
+            self._ensure_fan_context()
         self.main.show(bar.contract, bar.date, self.timeframe, keep_view=keep_view)
         self.main_caption.text = _caption(bar.date, bar.contract) if bar.date else ""
         self.status.clear()
         with self.status:
             _status_badge(self.conn, self.main)
+        self._sync_playback()
 
     def _show_analogues(self, keep: Optional[str] = None) -> None:
         """
         The day's analogues: the comparison below the charts, and beside the
         session the most similar - or ``keep``, the one shown, while it is still
-        among them.
+        among them. A day in progress without its snapshot shows its preview.
         """
         day, symbol = self.bar.date, self.bar.symbol
-        self.analogue_box.text = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
-        self.members = {m["snapshot_id"]: m for m in self.analogues.show(day, symbol)}
+        preview, computing = self._preview(day, symbol)
+        members = self.analogues.show(day, symbol, preview=preview, computing=computing)
+        title = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
+        if self.analogues.preview is not None:
+            title += f" · preview as of {self.analogues.preview['as_of_et']}"
+        self.analogue_box.text = title
+        self.members = {m["snapshot_id"]: m for m in members}
         options = {sid: f"#{m['rank']}  {m['session_date']}  ·  {float(m['similarity']):.1f}%"
                    for sid, m in self.members.items()}
         first = keep if keep in options else next(iter(options), None)
@@ -343,10 +457,176 @@ class SessionExplorer:
         self.mirror_note.set_visibility(member is None)
 
     def fit(self) -> None:
-        """Both charts show their whole window, 09:15 to 16:15."""
+        """Both charts show their whole window (09:15 to 16:15; the current session from its Globex open)."""
         for pane in (self.main, self.mirror):
             if pane.chart is not None:
                 pane.chart.fit()
+
+    # ------------------------------------------------------------------
+    # The fan and playback (the current session only)
+    # ------------------------------------------------------------------
+
+    def _ensure_fan_context(self) -> None:
+        """The model and accuracy of the session's fan, loaded off the event loop once per instrument and day."""
+        key = (self.bar.symbol, self.bar.date)
+        if key in self.fan_contexts or key in self._fan_loading:
+            return
+        self._fan_loading.add(key)
+        background_tasks.create(self._load_fan_context(key))
+
+    async def _load_fan_context(self, key: tuple) -> None:
+        try:
+            ctx = await run.io_bound(fan.load_context, self.conn, *key)
+        except Exception as e:                            # drawn as "No fan: ..."
+            ctx = fan.FanContext(key[0], date.fromisoformat(key[1]), error=f"{type(e).__name__}: {e}")
+        self.fan_contexts[key] = ctx
+        self._fan_loading.discard(key)
+        if self.live and (self.bar.symbol, self.bar.date) == key:
+            self.main.push(reset_view=self.main.until is None)    # the newest candle with the fan ahead of it
+
+    def _fan_origin(self) -> Optional[int]:
+        """The fan's origin slot: the last minute of the last candle shown - the newest bar unless in playback."""
+        newest = fan.latest_slot(self.fan_day)
+        if newest is None or self.main.until is None:
+            return newest
+        tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+        last_minute = (self.main.until + tf - pd.Timedelta(minutes=1)).tz_convert("UTC").to_pydatetime()
+        return min(newest, slot_at(date.fromisoformat(self.bar.date), last_minute))
+
+    def _decorate_main(self, spec: Dict[str, Any]) -> None:
+        """The fan into the session's spec (the current session, its active contract), and the line describing it."""
+        ctx, payload = None, None
+        if self.live and self.fan_day is not None:
+            ctx = self.fan_contexts.get((self.bar.symbol, self.bar.date))
+            active = self.bar.contract is not None and int(self.bar.contract["contract_id"]) == self.fan_day.contract_id
+            if ctx is not None and active and self.fan_on:
+                origin = self._fan_origin()
+                payload = fan.fan_payload(ctx, self.fan_day, origin, self.timeframe) if origin is not None else None
+            if not active:
+                self.fan_note.text = "The fan follows the active contract: pick it in Contract to see the fan."
+            elif not self.fan_on:
+                self.fan_note.text = "Fan hidden."
+            else:
+                self.fan_note.text = fan.describe(ctx, payload)
+        fan.attach(spec, payload)
+
+    def _sync_playback(self) -> None:
+        """The playback row: shown for the current session, its slider over the candles drawn so far."""
+        self.playback.set_visibility(self.live)
+        if not self.live:
+            return
+        rows = window_bars(self.main.day_df, self.bar.date, self.timeframe, full_day=True)
+        self.candle_starts = list(rows["timestamp_ny"]) if rows is not None and not rows.empty else []
+        n = len(self.candle_starts)
+        until = self.main.until
+        index = n - 1 if until is None else max(0, sum(1 for t in self.candle_starts if t <= until) - 1)
+        self._syncing = True
+        try:
+            self.slider._props["max"] = max(1, n - 1)
+            self.slider.update()
+            self.slider.value = index
+        finally:
+            self._syncing = False
+        self.slider.set_enabled(n > 1)
+        self._playback_label(index)
+
+    def _playback_label(self, index: int) -> None:
+        n = len(self.candle_starts)
+        if not n:
+            self.as_of_label.text = "no candle yet"
+            return
+        tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+        end = min(self.candle_starts[index] + tf, self.candle_starts[-1] + tf)
+        latest = index >= n - 1
+        self.as_of_label.text = f"{'live · ' if latest else ''}as of {end:%H:%M} ET"
+        self.live_button.set_enabled(not latest)
+
+    def on_playback(self, event) -> None:
+        if self._syncing or event.value is None or not self.candle_starts:
+            return
+        self._play_to(int(event.value))
+
+    def _play_to(self, index: int) -> None:
+        """Shows the session up to its ``index``-th candle - the newest is live - with the fan from there."""
+        n = len(self.candle_starts)
+        index = max(0, min(n - 1, index))
+        self.main.until = None if index >= n - 1 else self.candle_starts[index]
+        self._playback_label(index)
+        self.main.push()
+
+    def step(self, candles: int) -> None:
+        if self.candle_starts:
+            self.slider.value = max(0, min(len(self.candle_starts) - 1, int(self.slider.value or 0) + candles))
+
+    def go_live(self) -> None:
+        """Back to the newest candle, shown in the default window."""
+        self.main.until = None
+        self._sync_playback()
+        self.main.push(reset_view=True)
+
+    def on_reveal(self, event) -> None:
+        self.main.reveal = bool(event.value)
+        self.main.push()
+
+    def on_fan(self, event) -> None:
+        self.fan_on = bool(event.value)
+        self.main.push()
+
+    # ------------------------------------------------------------------
+    # The analogue preview of a day in progress
+    # ------------------------------------------------------------------
+
+    def _preview(self, day: Optional[str], symbol: Optional[str]) -> tuple:
+        """
+        ``(preview, computing)`` for the analogues: the day's latest preview when
+        it is in progress without its snapshot - a newer one is made, off the
+        event loop, when newer bars are stored - else ``(None, False)``.
+        """
+        if not day or symbol != defs.SYMBOL or not self.analogues.preview_wanted(day):
+            return None, False
+        as_of = pv.latest_as_of(self.conn, day)
+        if as_of is None:
+            return None, False
+        made_as_of, preview = self.previews.get(day, (None, None))
+        if made_as_of != as_of and self._preview_wanted != (day, as_of):
+            self._preview_wanted = (day, as_of)
+            background_tasks.create(self._make_preview(day, as_of))
+        return preview, made_as_of != as_of
+
+    async def _make_preview(self, day: str, as_of) -> None:
+        try:
+            preview = await run.io_bound(pv.preview_session, self.conn, day, as_of)
+        except Exception as e:                            # shown as why there is no preview
+            preview = {"status": "unavailable", "reason": f"{type(e).__name__}: {e}"}
+        self.previews[day] = (as_of, preview)
+        if self._preview_wanted == (day, as_of):
+            self._preview_wanted = None
+        if self.bar.date == day and self.bar.symbol == defs.SYMBOL:
+            self._show_analogues(keep=self.analogue)
+
+    # ------------------------------------------------------------------
+    # Auto mode (dashboard/jobs.py AUTO)
+    # ------------------------------------------------------------------
+
+    def toggle_auto(self) -> None:
+        """Auto mode on - collecting and forecasting once a minute, the session in progress shown - or off."""
+        AUTO.switch(not AUTO.on)
+        current = fan.current_session()
+        if AUTO.on and current is not None and self.bar.date != current:
+            self.bar.set_day(current)
+        self._auto_state()
+
+    def _auto_state(self) -> None:
+        """The Auto button as auto mode is - it belongs to the dashboard process, so another page may switch it."""
+        on = AUTO.on
+        if on != self._auto_shown:
+            self._auto_shown = on
+            self.auto_button.props(remove="outline color=grey" if on else "color=positive",
+                                   add="color=positive" if on else "outline color=grey")
+            self.auto_button.set_text("Auto: on" if on else "Auto")
+        status = AUTO.status(datetime.now(timezone.utc))
+        if status != self.auto_tip.text:
+            self.auto_tip.set_text(status)
 
     # ------------------------------------------------------------------
     # Control handlers
@@ -358,7 +638,8 @@ class SessionExplorer:
         a new day shows its session, analogues and forecast afresh; a new
         instrument its session and analogues; a new contract its session. After
         a job (``"data"``) the same day, analogue, run and window stay, redrawn
-        from the database - a session still in progress grows.
+        from the database - a session still in progress grows, and its fan and
+        analogue preview move on with it.
         """
         if what == "contract":
             self.refresh_session()
@@ -376,6 +657,8 @@ class SessionExplorer:
 
     def on_timeframe(self, event) -> None:
         self.timeframe = event.value
+        if self.main.until is not None:                  # playback stays at the candle holding its last minute
+            self.main.until = self.main.until.floor(f"{_BAR_MINUTES[self.timeframe]}min")
         self.refresh_session(keep_view=True)
         self.show_analogue(self.analogue, keep_view=True)
 
@@ -401,9 +684,17 @@ class SessionExplorer:
                 ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
             ).props("dense")
             ui.button("Fit", icon="fit_screen", on_click=self.fit).props(
-                "flat dense no-caps").tooltip("Show the whole 09:15–16:15 window of both sessions")
+                "flat dense no-caps").tooltip("Show the whole window of both sessions")
+            self.auto_button = ui.button("Auto", icon="autorenew", on_click=self.toggle_auto).props(
+                "dense no-caps outline color=grey")
+            with self.auto_button:
+                self.auto_tip = ui.tooltip("")
+            self._auto_shown: Optional[bool] = None
+            self._auto_state()
+            ui.timer(1.0, self._auto_state)
 
         with ui.column().classes("w-full px-4 pb-4 gap-3"):
+            self._build_playback()
             self._build_charts()
             self.analogue_box = ui.expansion("Analogues", icon="compare", value=True).classes("w-full")
             with self.analogue_box:
@@ -418,6 +709,27 @@ class SessionExplorer:
         self.bar.on_change.append(self.on_selection)
         if run_id or view:
             self.forecast.scroll_into_view()
+
+    def _build_playback(self) -> None:
+        """The current session's playback: back through its candles with the fan as it stood at each."""
+        with ui.column().classes("w-full gap-0") as self.playback:
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                ui.label("Playback").classes("text-sm").style(_MUTED)
+                ui.button(icon="chevron_left", on_click=lambda: self.step(-1)).props(
+                    'flat dense round aria-label="Previous candle"').tooltip("Previous candle")
+                self.slider = ui.slider(min=0, max=1, step=1, value=1, on_change=self.on_playback).classes(
+                    "grow").props("dense")
+                ui.button(icon="chevron_right", on_click=lambda: self.step(1)).props(
+                    'flat dense round aria-label="Next candle"').tooltip("Next candle")
+                self.as_of_label = ui.label().classes("text-sm font-mono whitespace-nowrap shrink-0")
+                self.live_button = ui.button("Live", icon="skip_next", on_click=self.go_live).props(
+                    "flat dense no-caps").classes("shrink-0").tooltip("Back to the newest candle")
+                ui.switch("Show what followed", value=False, on_change=self.on_reveal).props("dense").classes(
+                    "whitespace-nowrap shrink-0").tooltip("In playback, draw the later candles grey instead of "
+                                                          "hiding them")
+                ui.switch("Fan", value=True, on_change=self.on_fan).props("dense").classes("shrink-0")
+            self.fan_note = ui.label().classes("text-xs").style(_MUTED)
+        self.playback.set_visibility(False)
 
     def _build_charts(self) -> None:
         """The selected session on the left, one of its analogues on the right, linked by time of day."""
