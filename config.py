@@ -132,9 +132,6 @@ INSTRUMENTS: Dict[str, Instrument] = {
     "10Y": Instrument("10Y", "Micro 10-Year Yield futures", "CBOT", 0.001, "1000",
                       expected_bars=300, roll=_MONTHLY_YIELD_ROLL, value_kind="yield",
                       value_unit="percent", plausible_range=(-1.0, 20.0)),
-    "2YY": Instrument("2YY", "Micro 2-Year Yield futures", "CBOT", 0.001, "1000",
-                      expected_bars=300, roll=_MONTHLY_YIELD_ROLL, value_kind="yield",
-                      value_unit="percent", plausible_range=(-1.0, 20.0)),
 
     # ICE does not license the cash DXY index to IB, so the dollar is recorded as the
     # US Dollar Index future (IB exchange code NYBOT = ICE US).
@@ -205,7 +202,7 @@ ASSET_SOURCES: Dict[str, AssetSource] = {a.asset: a for a in (
     AssetSource("us2y", None, "2-year Treasury yield",
                 notes="No spot 2-year yield series is available through IB (it serves yield "
                       "history for corporate bonds only). Left unmapped so us2y_change_bps and "
-                      "the 10y-2y curve change stay null; see us2y_yield_fut."),
+                      "the 10y-2y curve change stay null."),
     AssetSource("dxy", None, "US Dollar Index (cash DXY)",
                 notes="ICE does not license the cash DXY index to IB, so nothing is recorded and "
                       "dxy_preopen_return stays null. The DX future is its own asset, dx_fut."),
@@ -214,9 +211,6 @@ ASSET_SOURCES: Dict[str, AssetSource] = {a.asset: a for a in (
     AssetSource("smh", "SMH", "VanEck Semiconductor ETF (regular close -> premarket)", 30),
     AssetSource("us10y_yield_fut", "10Y", "Micro 10-Year Yield futures, front month", 30,
                 is_proxy=True, notes="A futures yield, not the spot 10-year yield."),
-    AssetSource("us2y_yield_fut", "2YY", "Micro 2-Year Yield futures, front month", 30,
-                is_proxy=True, optional=True,
-                notes="A futures yield, not the spot 2-year yield. Not collected by default."),
     AssetSource("gc", "GC", "Gold futures, active contract", 10, optional=True),
     AssetSource("cl", "CL", "WTI crude futures, front month", 10, optional=True),
 )}

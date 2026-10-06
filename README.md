@@ -27,8 +27,9 @@ Twelve instruments are collected out of the box:
 | `SPY` | SPDR S&P 500 ETF Trust | STK | research dataset |
 | `IWM` | iShares Russell 2000 ETF | STK | research dataset |
 
-`2YY` (Micro 2-Year Yield future), `GC` (gold) and `CL` (WTI crude) are defined too but only
-collected once added to `CONTEXT_SYMBOLS`. See [Intermarket sources](#intermarket-sources)
+`GC` (gold) and `CL` (WTI crude) are defined too but only collected once added to
+`CONTEXT_SYMBOLS`. `2YY` (Micro 2-Year Yield future) was dropped entirely on 2026-10-06 and
+its stored data removed (migration 0018; a CSV copy is in `data/backups/`). See [Intermarket sources](#intermarket-sources)
 for how each logical asset maps onto these.
 
 **QQQ, SPY and IWM** are the cash-index ETFs of NQ, ES and RTY. They are collected like the
@@ -349,13 +350,29 @@ around scheduled releases and scaled to the current volatility, as a zero-drift 
 ```bash
 python scripts/fan.py now --symbol NQ                               # the fan from the latest closed bar
 python scripts/fan.py now --symbol NQ --as-of "2026-10-02 10:15"    # ... replayed from a past minute (ET)
-python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-10-02   # every origin, walk-forward
+python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-07-10   # every origin, walk-forward
 ```
 
 `score` scores every origin minute against the flat, intraday-pattern and event-bump
 references and writes `docs/reports/fan_rw_v1_<symbol>_<start>_<end>.md`. Nothing is stored
 but the registered definition. The Session Explorer draws the fan on the session in progress
 (below).
+
+### Intermarket fan experiment
+
+Step 3 of the fan - a learned fan that reads every collected instrument, accepted only
+where it beats the benchmark, and how much each instrument contributes - is fixed in
+advance as a registered manifest: the anytime fan, NQ at 15 minutes primary, the last 60
+sessions to 2026-10-05 as a sealed holdout, a window that follows the stored history
+([docs/fan_experiment.md](docs/fan_experiment.md),
+[forecaster/fan_experiment.py](forecaster/fan_experiment.py)). Until a frozen model opens
+the holdout, `score` refuses a range that reaches into it.
+
+```bash
+python scripts/fan.py experiment-register --dry-run   # the manifest, resolved from the store
+python scripts/fan.py experiment-show                 # what is registered, sealed or open
+python scripts/fan.py panel-audit                     # every instrument on the minute grid, audited
+```
 
 ## Configuration
 
@@ -422,7 +439,6 @@ version stays on record). `python config.py` prints it.
 | `dx_fut` | DX front future | price | 30 min | **proxy** for DXY, under its own asset name |
 | `smh` | SMH | price | 30 min | premarket trades included (`useRTH=0`) |
 | `us10y_yield_fut` | 10Y front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset name |
-| `us2y_yield_fut` | 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**; optional, not collected by default |
 | `gc`, `cl` | GC / CL front future | price | 10 min | optional, not collected by default |
 
 What the store guarantees for these series:
@@ -496,7 +512,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [reports](docs/reports/) |
 
 ## Database
 

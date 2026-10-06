@@ -14,12 +14,12 @@ from collector.coverage import expected_trading_days
 from collector.ib_collector import NO_DATA, NO_DATA_SKIP_AFTER, _Work, is_no_data
 from config import INSTRUMENTS
 
-NO_DATA_MSG = "Historical Market Data Service error message:HMDS query returned no data: 2YYN6@CBOT Trades"
-N6, Q6 = 887699004, 887699005        # 2YY July and August 2026
+NO_DATA_MSG = "Historical Market Data Service error message:HMDS query returned no data: 10YN6@CBOT Trades"
+N6, Q6 = 887699004, 887699005        # two monthly contracts, July and August 2026 (the ids are arbitrary)
 
 
 def _contract(cid, expiry):
-    return {"con_id": cid, "symbol": "2YY", "expiry": expiry, "sec_type": "FUT",
+    return {"con_id": cid, "symbol": "10Y", "expiry": expiry, "sec_type": "FUT",
             "exchange": "CBOT", "currency": "USD"}
 
 
@@ -33,8 +33,8 @@ def _days(start, end):
 
 
 def _work(*jobs):
-    """2YY with one (contract id, expiry, days) job per contract."""
-    work = _Work("2YY", INSTRUMENTS["2YY"], None, rolling=True)
+    """10Y with one (contract id, expiry, days) job per contract."""
+    work = _Work("10Y", INSTRUMENTS["10Y"], None, rolling=True)
     work.jobs = [(_contract(cid, expiry), days) for cid, expiry, days in jobs]
     return work
 
@@ -129,8 +129,8 @@ def test_bars_around_a_day_but_none_on_it_still_store_it_empty(stored):
 
     now = datetime.now(timezone.utc)
     info = _contract(N6, "20260731")
-    assert collector._fetch_and_store_day(Neighbour(), None, INSTRUMENTS["2YY"], info, "2026-07-03", now) == 0
+    assert collector._fetch_and_store_day(Neighbour(), None, INSTRUMENTS["10Y"], info, "2026-07-03", now) == 0
     assert stored == [(N6, "2026-07-03")]
-    assert collector._fetch_and_store_day(FakeIB(lambda c, d: False), None, INSTRUMENTS["2YY"], info,
+    assert collector._fetch_and_store_day(FakeIB(lambda c, d: False), None, INSTRUMENTS["10Y"], info,
                                           "2026-07-06", now) == NO_DATA
     assert stored == [(N6, "2026-07-03")]            # a window without any data stores nothing

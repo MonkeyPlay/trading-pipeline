@@ -38,7 +38,13 @@ def test_etf_day_needs_its_whole_regular_session(symbol):
 
 
 @pytest.mark.skipif("CONTEXT_SYMBOLS" in os.environ, reason="CONTEXT_SYMBOLS overridden in the environment")
-def test_default_context_collects_the_etfs_and_not_2yy():
+def test_default_context_collects_the_etfs():
     assert set(ETFS) <= set(Config.collect_symbols())
-    assert "2YY" not in Config.collect_symbols()
-    assert ASSET_SOURCES["us2y_yield_fut"].optional
+
+
+def test_2yy_is_gone():
+    """Micro 2-Year Yield futures were dropped entirely on 2026-10-06 (too little history to use): no instrument,
+    no intermarket source (migration 0018 removed its stored data)."""
+    assert "2YY" not in INSTRUMENTS
+    assert all(src.symbol != "2YY" for src in ASSET_SOURCES.values())
+    assert "us2y_yield_fut" not in ASSET_SOURCES

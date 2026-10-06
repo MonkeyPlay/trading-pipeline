@@ -7,12 +7,17 @@ distribution of the price at every later minute of the trading day.
     python scripts/fan.py now --symbol NQ                                 # the fan from the latest closed bar
     python scripts/fan.py now --symbol NQ --as-of "2026-10-02 10:15"      # ... as it stood at a past minute (ET)
     python scripts/fan.py now --symbol NQ --json logs/fan_nq.json         # ... and as JSON (the chart's input)
-    python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-10-02    # every origin, walk-forward
+    python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-07-10    # every origin, walk-forward
     python scripts/fan.py score --symbol NQ --symbol ES --start ... --end ... --no-report
+    python scripts/fan.py experiment-register --dry-run                   # the intermarket experiment, resolved
+    python scripts/fan.py experiment-register                             # ... and registered (fixed in advance)
+    python scripts/fan.py experiment-show                                 # what is registered, sealed or open
+    python scripts/fan.py panel-audit                                     # every instrument on the minute grid
 
-Nothing is stored but the definition: a fan is recomputed from the bars on demand, and the score reads the stored
+Nothing is stored but the definitions: a fan is recomputed from the bars on demand, and the score reads the stored
 sessions walk-forward (each fitted on the sessions before it). ``score`` writes
-docs/reports/<version>_<symbol>_<start>_<end>.md and .csv.
+docs/reports/<version>_<symbol>_<start>_<end>.md and .csv - and refuses a range that reaches into a registered
+experiment's sealed holdout (forecaster/fan_experiment.py, docs/fan_experiment.md).
 """
 
 import argparse
@@ -20,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date, datetime, timezone
 
 import numpy as np
@@ -34,6 +40,8 @@ from database import journal_store as store
 from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.session_windows import get_trading_day_date
+from forecaster import fan_experiment as fx
+from forecaster import fan_panel as fp
 from forecaster.fan_benchmark import InsufficientHistory, fan_from, fit, slot_instant
 from forecaster.fan_data import history_start, load_days
 from forecaster.fan_scoring import score_sessions, summarise, write_report
@@ -134,6 +142,11 @@ def cmd_now(conn, args):
 
 def cmd_score(conn, args):
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    try:
+        fx.guard(conn, start, end)
+    except fx.HoldoutSealed as e:
+        print(f"Not scored: {e}")
+        return 1
     rec = F.fan_record()
     status = 0
     for symbol in args.symbol:
@@ -160,6 +173,115 @@ def cmd_score(conn, args):
     return status
 
 
+def _describe_experiment(m, hash_=None):
+    """The lines that summarise a fan experiment manifest."""
+    sp, inst = m["split"], m["instruments"]["availability"]
+    h = m["horizons"]
+    lines = [f"{m['name']}" + (f" (hash {hash_[:16]})" if hash_ else "")
+             + (f" - supersedes {m['supersedes']['version']}" if m.get("supersedes") else ""),
+             f"  primary {h['primary']['target']} at {h['primary']['minutes']} min, every origin - CRPS against "
+             f"{m['baselines']['v1']} (or fan_rw_v2 if it passes its gate first)",
+             f"  secondary {', '.join(str(x) for x in h['secondary']['minutes'])} min; "
+             f"{', '.join(h['secondary']['targets_at_primary_horizon'])} at {h['primary']['minutes']} min; pre-open "
+             f"09:29 -> {', '.join(h['secondary']['pre_open']['endpoints_et'])}",
+             f"  window from {sp['window']['start']} (set by {', '.join(sp['window']['set_by'])}), "
+             f"{sp['window']['warm_up_sessions']} warm-up sessions",
+             f"  development {sp['development']['first']} to {sp['development']['last']} "
+             f"({sp['development']['count']} sessions)"]
+    for b in sp["checks"]["blocks"]:
+        lines.append(f"    check {b['check']}: train {b['train']['first']} to {b['train']['last']} "
+                     f"({b['train']['sessions']}), check {b['sessions']['first']} to {b['sessions']['last']} "
+                     f"({b['sessions']['count']})")
+    lines.append(f"  holdout {sp['holdout']['first']} to {sp['holdout']['last']} ({sp['holdout']['count']} sessions)")
+    for status in ("included", "deferred"):
+        syms = [s for s, a in inst.items() if a["status"] == status]
+        if syms:
+            lines.append(f"  {status}: " + ", ".join(f"{s} (from {inst[s]['first_complete']})" for s in syms))
+    late = [s for s, a in inst.items() if a["status"] == "included" and a.get("missing_before")]
+    if late:
+        lines.append("  missing before their start: " + ", ".join(
+            f"{s} until {inst[s]['missing_before']} ({100 * inst[s]['development_coverage']:.0f}% of development)"
+            for s in late))
+    for s, a in inst.items():
+        if a.get("deferred_because"):
+            lines.append(f"    {s}: {a['deferred_because']}")
+    excluded = {t: d for t, d in m["data"]["excluded"].items() if d}
+    lines.append("  excluded sessions: " + ("; ".join(f"{t} {len(d)} ({', '.join(d[:3])}"
+                                                      + (" ..." if len(d) > 3 else "") + ")"
+                                                      for t, d in excluded.items()) or "none"))
+    return lines
+
+
+def cmd_experiment_register(conn, args):
+    """The intermarket fan experiment's manifest, resolved from the store and registered before any model exists."""
+    try:
+        manifest = fx.build_manifest(conn, args.name, args.holdout_end, args.holdout_sessions, args.warm_up,
+                                     args.min_development, args.min_coverage, args.supersedes or None)
+    except ValueError as e:
+        print(f"Not registered: {e}")
+        return 1
+    print("\n".join(_describe_experiment(manifest)))
+    if args.dry_run:
+        print("Dry run: nothing registered.")
+        return 0
+    try:
+        new = fx.register_experiment(conn, manifest)
+    except (ValueError, store.VersionConflict) as e:
+        print(f"Not registered: {e}")
+        return 1
+    rec = fx.load_experiment(conn, args.name)
+    print(f"{args.name}: {'registered' if new else 'already registered, identical'} - hash "
+          f"{rec['definition_hash'][:16]}. The holdout is sealed until a model frozen against it opens it; no model "
+          f"or score exists.")
+    return 0
+
+
+def cmd_experiment_show(conn, args):
+    """A registered fan experiment: its manifest and whether its holdout is sealed."""
+    try:
+        rec = fx.load_experiment(conn, args.name)
+    except ValueError as e:
+        print(e)
+        return 1
+    print("\n".join(_describe_experiment(rec["definition"], rec["definition_hash"])))
+    model = fx.frozen_model(conn, rec)
+    newer = fx.superseded_by(conn, args.name)
+    print(f"  registered {str(rec['registered_at'])[:19]} UTC; "
+          + (f"superseded by {newer}" if newer else
+             "holdout " + (f"open - frozen model {model['version']}" if model else "sealed: no frozen model")))
+    return 0
+
+
+def cmd_panel_audit(conn, args):
+    """The point-in-time panel of an experiment's development sessions, audited: what each instrument holds, the
+    hours it trades and how old its value is (forecaster/fan_panel.py) - never the holdout."""
+    try:
+        rec = fx.load_experiment(conn, args.name)
+    except ValueError as e:
+        print(f"{e}: register it first (experiment-register)")
+        return 1
+    m = rec["definition"]
+    dev = m["split"]["development"]["sessions"]
+    fx.guard(conn, dev[0], dev[-1])
+    symbols = [s for s, a in m["instruments"]["availability"].items() if a["status"] == "included"]
+    started = time.time()
+    panel = fp.load_panel(conn, dev, symbols)
+    seconds = time.time() - started
+    rows = fp.audit(panel, fx.availability(conn, symbols, dev[-1]))
+    print(f"{args.name}: {len(dev)} development sessions ({dev[0]} to {dev[-1]}) x {len(symbols)} instruments, "
+          f"loaded in {seconds:.1f} s")
+    print(f"{'':5} {'bars':>5}  {'trades (ET)':34} {'no bar':>6} {'incomplete':>10}  age at 18:00 / 09:29 (min)")
+    for r in rows:
+        a = r["median_age"]
+        print(f"{r['symbol']:5} {r['bars_per_session']:>5.0f}  {r['hours']:34} {len(r['no_bar']):>6} "
+              f"{len(r['not_complete'] or []):>10}  {a['18:00']} / {a['09:29']}")
+    if not args.no_report:
+        meta = {"experiment": args.name, "first": dev[0], "last": dev[-1], "sessions": len(dev),
+                "role": "development", "code_revision": code_revision(), "seconds": seconds}
+        print(f"Report: {fp.write_audit(rows, meta, args.report_dir)}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The benchmark price fan")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -176,6 +298,25 @@ def main(argv=None):
     p.add_argument("--end", required=True, help="Last session YYYY-MM-DD")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("experiment-register", help="Register the intermarket fan experiment before any model exists")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--holdout-end", default=fx.HOLDOUT_END, help="The holdout's last session (YYYY-MM-DD)")
+    p.add_argument("--holdout-sessions", type=int, default=fx.HOLDOUT_SESSIONS)
+    p.add_argument("--warm-up", type=int, default=fx.WARM_UP_SESSIONS, help="Sessions into the window before "
+                   "development starts")
+    p.add_argument("--min-development", type=int, default=fx.MIN_DEVELOPMENT_SESSIONS,
+                   help="The fewest development sessions the primary target's history may give")
+    p.add_argument("--min-coverage", type=float, default=fx.MIN_COVERAGE,
+                   help="An instrument complete from less of development than this share is deferred")
+    p.add_argument("--supersedes", default=fx.SUPERSEDES, help="The registered version this one replaces "
+                   "('' for none)")
+    p.add_argument("--dry-run", action="store_true", help="Resolve and print the manifest, register nothing")
+    p = sub.add_parser("experiment-show", help="A registered fan experiment and whether its holdout is sealed")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p = sub.add_parser("panel-audit", help="Audit the point-in-time panel of an experiment's development sessions")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
     args = parser.parse_args(argv)
 
     init_database(args.db)
@@ -183,7 +324,9 @@ def main(argv=None):
     try:
         if args.command != "register":
             store.register_version(conn, F.fan_record())
-        return {"register": cmd_register, "now": cmd_now, "score": cmd_score}[args.command](conn, args)
+        return {"register": cmd_register, "now": cmd_now, "score": cmd_score,
+                "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
+                "panel-audit": cmd_panel_audit}[args.command](conn, args)
     finally:
         conn.close()
 

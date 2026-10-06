@@ -4,7 +4,7 @@
 # Intended to run before the 09:30 AM NY equity open (e.g. 09:15 AM NY / 13:15 UTC).
 #
 # Covers every instrument in SYMBOLS (default ES,NQ,RTY), plus CONTEXT_SYMBOLS
-# (default VIX,VXN,TNX,DX,SMH,10Y,2YY) which is collected as intermarket context.
+# (default VIX,VXN,TNX,DX,SMH,10Y,QQQ,SPY,IWM) which is collected as intermarket context.
 # The collector takes the whole list in one process, so its IB rate-limit pacer
 # accounts for all symbols together. After collecting it brings the NQ prompt-v2
 # journal up to date (snapshots and outcomes of the sessions that are final).

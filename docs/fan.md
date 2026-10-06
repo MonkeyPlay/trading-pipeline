@@ -126,9 +126,13 @@ python scripts/fan.py register                                      # the defini
 python scripts/fan.py now --symbol NQ                               # from the latest closed bar
 python scripts/fan.py now --symbol NQ --as-of "2026-10-02 10:15"    # replayed from a past minute (ET)
 python scripts/fan.py now --symbol ES --minutes 120 --json logs/fan_es.json
-python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-10-02
-python scripts/fan.py score --symbol NQ --symbol ES --symbol RTY --start 2025-09-02 --end 2026-10-02 --no-report
+python scripts/fan.py score --symbol NQ --start 2025-09-02 --end 2026-07-10
+python scripts/fan.py score --symbol NQ --symbol ES --symbol RTY --start 2025-09-02 --end 2026-07-10 --no-report
 ```
+
+`score` refuses a range that reaches into the sealed holdout of a registered fan experiment
+(2026-07-13 to 2026-10-05 for `fan_intermarket_v2`, [docs/fan_experiment.md](fan_experiment.md))
+until a model frozen against it opens the holdout.
 
 `now` prints the origin, the levels, the releases ahead and the 5 / 25 / 50 / 75 / 95 %
 prices at 1, 5, 15, 30, 60, 120, 240 minutes and the day's end; `--json` writes the
