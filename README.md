@@ -10,7 +10,7 @@ and D, which run only when started by hand - in a terminal after typing "send", 
 dashboard after its confirmation; nothing else can start them - with `ANTHROPIC_API_KEY` set.
 Everything else is computed locally.
 
-Ten instruments are collected out of the box:
+Twelve instruments are collected out of the box:
 
 | Symbol | Instrument | IB type | Role |
 |---|---|---|---|
@@ -23,11 +23,19 @@ Ten instruments are collected out of the box:
 | `DX` | US Dollar Index future (ICE) — DXY proxy | FUT, rolls quarterly | intermarket context |
 | `SMH` | VanEck Semiconductor ETF | STK | intermarket context |
 | `10Y` | Micro 10-Year Yield future (quoted in yield) | FUT, rolls monthly | intermarket context |
-| `2YY` | Micro 2-Year Yield future (quoted in yield) | FUT, rolls monthly | intermarket context |
+| `QQQ` | Invesco QQQ Trust (Nasdaq-100 ETF) | STK | research dataset |
+| `SPY` | SPDR S&P 500 ETF Trust | STK | research dataset |
+| `IWM` | iShares Russell 2000 ETF | STK | research dataset |
 
-`GC` (gold) and `CL` (WTI crude) are defined too but only collected once added to
-`CONTEXT_SYMBOLS`. See [Intermarket sources](#intermarket-sources) for how each logical
-asset maps onto these.
+`2YY` (Micro 2-Year Yield future), `GC` (gold) and `CL` (WTI crude) are defined too but only
+collected once added to `CONTEXT_SYMBOLS`. See [Intermarket sources](#intermarket-sources)
+for how each logical asset maps onto these.
+
+**QQQ, SPY and IWM** are the cash-index ETFs of NQ, ES and RTY. They are collected like the
+context instruments (extended hours included, `useRTH=0`; a day counts as complete only
+with its whole regular session) but have no intermarket source, so no evidence snapshot,
+annotation or forecast reads them: they are stored for the research datasets (the
+cross-instrument and longer-history studies) only.
 
 The three target futures share the same RTH window, the same 18:00 ET Globex roll and the
 same holiday calendar, so the session and coverage logic is identical for each. `SYMBOLS`
@@ -253,7 +261,7 @@ python -m collector.ib_collector --days 460      # as far back as IB serves expi
 ```
 
 That is roughly 70 requests per instrument; the pacer keeps it under IB's limit (60
-requests / 10 min), so ten instruments take a couple of hours. Later runs only fetch the
+requests / 10 min), so twelve instruments take a few hours. Later runs only fetch the
 new and trailing days.
 
 A contract IB holds no history for answers `HMDS query returned no data` for every day.
@@ -312,7 +320,7 @@ Settings come from environment variables or a local `.env`, read by
 | `DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline` | Production store — collector and pipeline write here |
 | `DEV_DATABASE_URL` | `postgresql://trading:trading@localhost:5432/trading_pipeline_dev` | Throwaway store for `populate_mock_data.py` |
 | `SYMBOLS` | `ES,NQ,RTY` | Target futures, collected and shown in the Session Explorer, in order |
-| `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,2YY` | Collected as intermarket context only |
+| `CONTEXT_SYMBOLS` | `VIX,VXN,TNX,DX,SMH,10Y,QQQ,SPY,IWM` | Collected as context only, never forecast |
 | `EXPIRY` | `202612` | Fallback contract month where no roll assignment applies (mock data); the collector follows each roll rule regardless |
 | `<SYMBOL>_EXPIRY` | — | Pins one future everywhere, collector included, e.g. `RTY_EXPIRY=202612` |
 | `IB_HOST` | `127.0.0.1` | IB Gateway/TWS host |
@@ -325,7 +333,7 @@ Settings come from environment variables or a local `.env`, read by
 ```bash
 # .env
 SYMBOLS=ES,NQ,RTY
-CONTEXT_SYMBOLS=VIX,VXN,TNX,DX,SMH,10Y,2YY
+CONTEXT_SYMBOLS=VIX,VXN,TNX,DX,SMH,10Y,QQQ,SPY,IWM
 EXPIRY=202612
 ```
 
@@ -366,7 +374,8 @@ version stays on record). `python config.py` prints it.
 | `dxy` | — | | | **unmapped**: ICE does not license the cash DXY index to IB |
 | `dx_fut` | DX front future | price | 30 min | **proxy** for DXY, under its own asset name |
 | `smh` | SMH | price | 30 min | premarket trades included (`useRTH=0`) |
-| `us10y_yield_fut`, `us2y_yield_fut` | 10Y / 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset names |
+| `us10y_yield_fut` | 10Y front future | percent (1 unit = 100 bps) | 30 min | **proxy**, deliberately separate asset name |
+| `us2y_yield_fut` | 2YY front future | percent (1 unit = 100 bps) | 30 min | **proxy**; optional, not collected by default |
 | `gc`, `cl` | GC / CL front future | price | 10 min | optional, not collected by default |
 
 What the store guarantees for these series:

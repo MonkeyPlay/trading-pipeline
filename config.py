@@ -144,6 +144,17 @@ INSTRUMENTS: Dict[str, Instrument] = {
     "SMH": Instrument("SMH", "VanEck Semiconductor ETF", "SMART", 0.01, None, sec_type="STK",
                       primary_exchange="NASDAQ", expected_bars=390),
 
+    # The cash-index ETFs of the three target futures, recorded for the research
+    # datasets only (the cross-instrument and longer-history ML studies): no
+    # ASSET_SOURCES entry, so no evidence snapshot reads them. Every regular-session
+    # minute trades; extended hours (useRTH=0) are stored as they print.
+    "QQQ": Instrument("QQQ", "Invesco QQQ Trust (Nasdaq-100 ETF)", "SMART", 0.01, None,
+                      sec_type="STK", primary_exchange="NASDAQ", expected_bars=390, rth_complete=True),
+    "SPY": Instrument("SPY", "SPDR S&P 500 ETF Trust", "SMART", 0.01, None,
+                      sec_type="STK", primary_exchange="ARCA", expected_bars=390, rth_complete=True),
+    "IWM": Instrument("IWM", "iShares Russell 2000 ETF", "SMART", 0.01, None,
+                      sec_type="STK", primary_exchange="ARCA", expected_bars=390, rth_complete=True),
+
     # Optional commodity context; not collected unless added to CONTEXT_SYMBOLS.
     "GC": Instrument("GC", "Gold futures (COMEX)", "COMEX", 0.10, "100",
                      expected_bars=1100, roll=RollRule("GJMQVZ", 33)),
@@ -204,7 +215,8 @@ ASSET_SOURCES: Dict[str, AssetSource] = {a.asset: a for a in (
     AssetSource("us10y_yield_fut", "10Y", "Micro 10-Year Yield futures, front month", 30,
                 is_proxy=True, notes="A futures yield, not the spot 10-year yield."),
     AssetSource("us2y_yield_fut", "2YY", "Micro 2-Year Yield futures, front month", 30,
-                is_proxy=True, notes="A futures yield, not the spot 2-year yield."),
+                is_proxy=True, optional=True,
+                notes="A futures yield, not the spot 2-year yield. Not collected by default."),
     AssetSource("gc", "GC", "Gold futures, active contract", 10, optional=True),
     AssetSource("cl", "CL", "WTI crude futures, front month", 10, optional=True),
 )}
@@ -239,7 +251,7 @@ class Config:
         s.strip().upper() for s in os.getenv("SYMBOLS", "ES,NQ,RTY").split(",") if s.strip()
     ]
     CONTEXT_SYMBOLS: List[str] = [
-        s.strip().upper() for s in os.getenv("CONTEXT_SYMBOLS", "VIX,VXN,TNX,DX,SMH,10Y,2YY").split(",") if s.strip()
+        s.strip().upper() for s in os.getenv("CONTEXT_SYMBOLS", "VIX,VXN,TNX,DX,SMH,10Y,QQQ,SPY,IWM").split(",") if s.strip()
     ]
     EXPIRY = os.getenv("EXPIRY", "202612")
 
