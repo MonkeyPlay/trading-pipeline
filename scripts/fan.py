@@ -35,6 +35,7 @@ experiment's sealed holdout (forecaster/fan_experiment.py, docs/fan_experiment.m
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -55,7 +56,10 @@ from database import journal_store as store
 from database.connection import get_db_connection, init_database
 from features import calendar as cal
 from features.session_windows import get_trading_day_date
+from forecaster import fan_cond_ema as fce
+from forecaster import fan_direction as fd
 from forecaster import fan_experiment as fx
+from forecaster import fan_im_direction as fim
 from forecaster import fan_features as ff
 from forecaster import fan_forward as fwd
 from forecaster import fan_harness as fh
@@ -844,6 +848,127 @@ def cmd_features(conn, args):
     return 0
 
 
+DIRECTION_DIR = os.path.join(CACHE_DIR, "direction")             # the direction experiment's runs and frames
+
+
+def _holdout_frames(conn, name, exp, target, baseline):
+    """The baseline's frames of the (spent) holdout's sessions, computed once and cached like the development's."""
+    m = exp["definition"]
+    hold = m["split"]["holdout"]["sessions"]
+    key = hashlib.sha256(json.dumps({"experiment": exp["definition_hash"], "target": target, "baseline": baseline,
+                                     "horizons": fh.FRAME_HORIZONS, "format": fh.FRAME_FORMAT,
+                                     "code": fh._sources_hash()}, sort_keys=True).encode()).hexdigest()[:16]
+    path = os.path.join(DIRECTION_DIR, f"holdout_frames_{name}_{target}_{key}.npz")
+    if os.path.exists(path):
+        return fh._read_frames(path)
+    fx.guard(conn, hold[0], hold[-1])
+    d0, d1 = date.fromisoformat(hold[0]), date.fromisoformat(hold[-1])
+    loaded = load_days(conn, target, history_start(d0, F.EVENT_SESSIONS + F.SHAPE_SESSIONS), d1)
+    frames = fh.baseline_frames(loaded, d0, d1, baseline)
+    fh._write_frames(path, frames)
+    return frames
+
+
+def direction_inputs(conn, name, target, build=None):
+    """``(experiment, frames, table, sessions)`` for the direction experiment: the development and holdout frames,
+    and the feature table (with the direction features) of every open session to the holdout's end."""
+    exp, baseline, frames = fh.load_frames(conn, name, target, CACHE_DIR)
+    m = exp["definition"]
+    frames = {**frames, **_holdout_frames(conn, name, exp, target, baseline)}
+    symbols, first_complete = _included(m)
+    last = m["split"]["holdout"]["last"]
+    sessions = [s.session_date.isoformat() for s in cal.sessions_between(
+        date.fromisoformat(m["split"]["window"]["start"]), date.fromisoformat(last))]
+    panel = fp.load_panel(conn, sessions, symbols)
+    table = (build or fd.direction_table)(panel, target, ff.build(panel, target, first_complete))
+    excluded = set(m["data"]["excluded"].get(target, []))
+    scored = [d for d in m["split"]["development"]["sessions"] + m["split"]["holdout"]["sessions"]
+              if d not in excluded]
+    return exp, frames, table, scored
+
+
+def cmd_direction(conn, args):
+    """The direction experiment (forecaster/fan_direction.py, docs/fan_direction.md): zero drift, a damped EMA
+    slope and a learned ridge shift on one shared scale, rolling origin over the checks and the spent holdout -
+    development only; nothing is stored in the journal."""
+    target = args.target
+    started = time.time()
+    exp, frames, table, sessions = direction_inputs(conn, args.name, target)
+    m = exp["definition"]
+    res = fd.run(frames, table, fd.blocks(m), sessions, log=print)
+    res.update(experiment=args.name, experiment_hash=exp["definition_hash"], target=target,
+               settings_hash=fd.settings_hash(), code_revision=code_revision(),
+               feature_format=ff.FEATURE_FORMAT, frame_format=fh.FRAME_FORMAT)
+    print(f"{fd.DIRECTION_VERSION} on {len(res['sessions'])} sessions ({time.time() - started:.0f} s)")
+    for key, per in res["results"].items():
+        for arm in fd.ARMS:
+            r = per[arm]
+            line = (f"{key:4} {arm:11} CRPS {r['crps']:.4f}  Brier {r['brier']:.4f}  RPS {r['rps']:.4f}  "
+                    f"90% {100 * r['coverage']['90']:.1f}%  |shift| {r['mean_abs_shift_sigma']:.3f} sd")
+            if arm != "zero":
+                c = r["vs_zero"]["crps"]
+                line += f"  CRPS vs zero {100 * c['share']:+.2f}% {c['verdict']}"
+            print(line)
+    os.makedirs(DIRECTION_DIR, exist_ok=True)
+    stored = os.path.join(DIRECTION_DIR, f"{fd.DIRECTION_VERSION}_{args.name}_{target}.json")
+    with open(stored, "w") as fh_:
+        json.dump(res, fh_, default=float)
+    print(f"Run stored: {stored}")
+    if not args.no_report:
+        path = os.path.join(args.report_dir, f"fan_direction_{args.name}_{target}.md")
+        print(f"Report: {fd.write_report(res, path)}")
+    return 0
+
+
+def _run_spec(conn, args, spec, build):
+    """A direction experiment on fan_cond_ema's machinery: --definition writes its fixed definition and runs nothing;
+    otherwise the run, refused when the code's definition differs from the one written. Development only: nothing
+    is stored in the journal."""
+    defn = os.path.join(_PROJECT_ROOT, "docs", f"{spec.version}_definition.json")
+    if args.definition:
+        with open(defn, "w") as fh_:
+            json.dump({"definition_hash": spec.definition_hash(), **spec.definition}, fh_, indent=2, default=str)
+        print(f"{spec.version} definition {spec.definition_hash()}: {defn}")
+        return 0
+    with open(defn) as fh_:
+        fixed = json.load(fh_)
+    if fixed["definition_hash"] != spec.definition_hash():
+        print(f"Not run: the code's definition {spec.definition_hash()} differs from the fixed one "
+              f"{fixed['definition_hash']} ({defn}) - a changed choice is a new version")
+        return 1
+    target = args.target
+    started = time.time()
+    exp, frames, table, sessions = direction_inputs(conn, args.name, target, build)
+    res = fce.run(frames, table, fd.blocks(exp["definition"]), sessions, log=print, spec=spec)
+    res.update(experiment=args.name, experiment_hash=exp["definition_hash"], target=target,
+               code_revision=code_revision(), feature_format=ff.FEATURE_FORMAT, frame_format=fh.FRAME_FORMAT)
+    print(f"{spec.version} on {len(res['sessions'])} sessions ({time.time() - started:.0f} s): "
+          f"{res['conclusion']['verdict'].upper()} {res['conclusion']['horizons']}")
+    T, C = spec.treatment, spec.control
+    for key, r in res["results"].items():
+        for a, b in ((T, "zero"), (T, C), (C, "zero")):
+            c = r["comparisons"][f"{a}-{b}|crps"]
+            iv = c["interval"]
+            print(f"  {key} {a} - {b}: {100 * c['share']:+.3f} % [{iv[0]:+.5f}, {iv[1]:+.5f}]")
+    os.makedirs(DIRECTION_DIR, exist_ok=True)
+    stored = os.path.join(DIRECTION_DIR, f"{spec.version}_{args.name}_{target}.json")
+    with open(stored, "w") as fh_:
+        json.dump(res, fh_, default=float)
+    print(f"Run stored: {stored}")
+    path = os.path.join(args.report_dir, f"{spec.version}_{args.name}_{target}.md")
+    print(f"Report: {fce.write_report(res, path, spec)}")
+    return 0
+
+
+def cmd_cond_ema(conn, args):
+    """Conditional EMA Direction (forecaster/fan_cond_ema.py, docs/fan_cond_ema.md)."""
+    return _run_spec(conn, args, fce.SPEC, fce.cond_table)
+
+
+def cmd_im_dir(conn, args):
+    """Intermarket Direction (forecaster/fan_im_direction.py, docs/fan_im_direction.md)."""
+    return _run_spec(conn, args, fim.SPEC, fim.im_table)
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The benchmark price fan")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -934,6 +1059,21 @@ def main(argv=None):
     p.add_argument("--top", type=int, default=25, help="Print this many features, strongest first")
     p.add_argument("--report-dir", default=REPORT_DIR)
     p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("direction", help="The direction experiment: zero drift, damped EMA slope, learned shift")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", default="NQ")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p.add_argument("--no-report", action="store_true", help="Print the summary only")
+    p = sub.add_parser("cond-ema", help="Conditional EMA Direction: zero, context-only and context + EMA shifts")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", default="NQ")
+    p.add_argument("--definition", action="store_true", help="Write the fixed definition; run nothing")
+    p.add_argument("--report-dir", default=REPORT_DIR)
+    p = sub.add_parser("im-dir", help="Intermarket Direction: zero, NQ's own and own + ES/RTY shifts")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--target", default="NQ")
+    p.add_argument("--definition", action="store_true", help="Write the fixed definition; run nothing")
+    p.add_argument("--report-dir", default=REPORT_DIR)
     p = sub.add_parser("panel-audit", help="Audit the point-in-time panel of an experiment's development sessions")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--report-dir", default=REPORT_DIR)
@@ -951,7 +1091,7 @@ def main(argv=None):
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
                 "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
                 "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay,
-                "freeze": cmd_freeze, "holdout": cmd_holdout, "forward": cmd_forward}[args.command](conn, args)
+                "freeze": cmd_freeze, "direction": cmd_direction, "cond-ema": cmd_cond_ema, "im-dir": cmd_im_dir, "holdout": cmd_holdout, "forward": cmd_forward}[args.command](conn, args)
     finally:
         conn.close()
 

@@ -1,0 +1,117 @@
+{
+  "definition_hash": "3ec8838a731fb229",
+  "version": "fan_cond_ema_v1",
+  "question": "Do EMA features add directional information beyond context, at NQ 5 and 15 minutes?",
+  "width": "per block: lin_pois_ivx refitted on the sessions before the block (validation: before the validation sessions), times fan_rw_v2's walk-forward sigma; v2's shape. The frozen width model is not used.",
+  "features": {
+    "grid": "the target's 1440 one-minute slots from 18:00 ET, sessions laid end to end in date order",
+    "price": "log of the panel's last close known at the end of each minute (carried, never filled backwards)",
+    "ema": "Pine ta.ema, alpha = 2 / (period + 1), seeded with the first value, on log price; periods [14, 100]",
+    "m1": "updated only at minutes where a 1-minute bar closed (panel age 0), carried between",
+    "m5": "5-minute bars aligned to 18:00 ET; a bar completes at the end of its last minute and exists when a 1-minute bar closed inside it; its close is the last close known then; updated at completion, carried until the next completed bar - never from a bar still forming",
+    "warm_up": "missing until the EMA has seen 3 x its period of its own bars",
+    "sd60": "sqrt(mean of the last 60 squared one-minute log returns of the grid); missing when zero",
+    "slope": "EMA_t - EMA_(t-15 min), over sd60 x sqrt(15)",
+    "dist": "log price - EMA, over sd60 x sqrt(15)",
+    "gap": "EMA 14 - EMA 100 of the timeframe, over sd60 x sqrt(15)",
+    "tf_agree": "sign of m1_gap where it equals the sign of m5_gap, else 0",
+    "ret_w": "log return over the last w minutes over sd60 x sqrt(w), w = 1, 5, 15",
+    "vwap_dist": "log price - log session VWAP (closes x volume from 18:00 ET), over sd60 x sqrt(15)",
+    "context_base": "rv15, rv60 (realised variance over usual for the time of day), vol60 (relative volume)",
+    "phase": "the origin's session phase, a categorical input",
+    "clip": 10.0,
+    "context": [
+      "ret1",
+      "ret5",
+      "ret15",
+      "vwap_dist",
+      "rv15",
+      "rv60",
+      "vol60",
+      "phase"
+    ],
+    "ema_set": [
+      "m1_slope14",
+      "m1_slope100",
+      "m1_dist14",
+      "m1_dist100",
+      "m1_gap",
+      "m5_slope14",
+      "m5_slope100",
+      "m5_dist14",
+      "m5_dist100",
+      "m5_gap",
+      "tf_agree"
+    ]
+  },
+  "model": {
+    "family": "HistGradientBoostingRegressor, one per horizon and arm",
+    "fixed": {
+      "learning_rate": 0.05,
+      "min_samples_leaf": 2000,
+      "l2_regularization": 1.0,
+      "max_bins": 64,
+      "loss": "squared_error"
+    },
+    "grid": [
+      {
+        "max_depth": 2,
+        "max_iter": 50
+      },
+      {
+        "max_depth": 2,
+        "max_iter": 150
+      },
+      {
+        "max_depth": 3,
+        "max_iter": 50
+      },
+      {
+        "max_depth": 3,
+        "max_iter": 150
+      }
+    ],
+    "shrink": [
+      0.25,
+      0.5,
+      1.0
+    ],
+    "zero_option": true,
+    "target": "y / sigma winsorised at +-4.0",
+    "shift": "lambda x clip(prediction, +-1.0) x sigma",
+    "train_every": 5
+  },
+  "selection": {
+    "validation": "the last 20% of the block's training sessions",
+    "loss": "mean over validation sessions of the session's mean CRPS of the shifted fan",
+    "activation": "the best option is used only if its paired session-level 99.58% moving-block interval against zero shift (95 %, Bonferroni over the options searched) lies wholly below zero; otherwise zero",
+    "refit": "an activated option is refitted on every training session (width likewise)"
+  },
+  "labels": "outcomes end inside their own session (t + h before the day's end); sessions are split whole, so no training label reaches into validation or evaluation",
+  "evaluation": {
+    "blocks": "the intermarket experiment's three checks, then its spent holdout in two blocks of 30",
+    "sessions": "all previously examined: development",
+    "origins": "every minute",
+    "primary": "CRPS at 15 min",
+    "secondary": "CRPS at 5 min",
+    "uncertainty": {
+      "block_sessions": 5,
+      "resamples": 2000,
+      "seed": 7,
+      "interval": 0.95,
+      "decision_interval": 0.975
+    }
+  },
+  "decision": {
+    "pass": "at a horizon, C - A and C - B both have their 97.5% interval wholly below zero (Bonferroni over the two horizons); the experiment passes if either horizon does",
+    "fail": "at both horizons C's mean CRPS is not below both A's and B's: no incremental EMA benefit",
+    "inconclusive": "otherwise",
+    "after_pass": "freeze the full specification and evaluate on fresh, timely forward data before any overlay"
+  },
+  "diagnostics": {
+    "phase": "the origin's phase",
+    "tf_agree": "-1 / 0 / +1 / missing",
+    "extension": "terciles of |m1_dist100| with boundaries from the block's training rows",
+    "use": "explanation only - never a deployment rule"
+  }
+}

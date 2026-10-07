@@ -408,7 +408,23 @@ python scripts/fan.py search                          # SPA and StepM over every
 python scripts/fan.py freeze --candidate lin_pois_ivx --dry-run   # the frozen definition (registers without --dry-run)
 python scripts/fan.py holdout                         # the frozen model on the sealed holdout - once
 python scripts/fan.py forward report                  # the forward record: live issues, scored once final
+python scripts/fan.py direction                       # the direction experiment: zero drift vs EMA slope vs learned shift
+python scripts/fan.py cond-ema                        # Conditional EMA Direction (fixed definition; fail on 2026-10-07)
+python scripts/fan.py im-dir                          # Intermarket Direction (fixed definition; marginal 5-min pass)
 ```
+
+A learned centre (`direction`, [docs/fan_direction.md](docs/fan_direction.md)) was tested on
+2026-10-07 on the same scale at 5 and 15 minutes: carrying the EMA 14's slope forward is 4-12 %
+worse than no drift, and a ridge on EMA slopes, distances, momentum and VWAP position shrinks
+to about 1 % of a sigma without beating it. The fan stays centred. A follow-up,
+Conditional EMA Direction (`cond-ema`, [docs/fan_cond_ema.md](docs/fan_cond_ema.md)), let
+shallow boosted models read EMA slopes, extension and 1-/5-minute trend agreement jointly with
+context, against a matched context-only model, with a zero-shift guard: no arm activated in
+any block - fail, no incremental EMA benefit. Intermarket Direction (`im-dir`,
+[docs/fan_im_direction.md](docs/fan_im_direction.md)) added ES and RTY moves and NQ relative to
+ES on the same machinery: a marginal pass at 5 minutes from one 30-session block (-0.013 %
+pooled), nothing at 15, and the procedure fitted on current data issues zero shift - recorded
+as not actionable (2026-10-07). The centre-shift experiments are archived; the fan stays centred.
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
 fat-tailed shape - passed the gate on 2026-10-06 and is the experiment's baseline
@@ -578,7 +594,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [reports](docs/reports/) |
 
 ## Database
 

@@ -1,0 +1,51 @@
+{
+  "definition_hash": "2171e8f4da7adde0",
+  "version": "fan_im_dir_v1",
+  "question": "Do ES and RTY moves and NQ's move relative to ES add directional information beyond NQ's own recent prices, at NQ 5 and 15 minutes?",
+  "machinery": "forecaster/fan_cond_ema.py as defined by fan_cond_ema_v1 (3ec8838a731fb229): the shared fan, model family, tuning budget, selection on validation CRPS with zero as an option, activation at 99.58% (95 % Bonferroni over the 12 options), evaluation blocks, decision rule at 97.5%",
+  "arms": {
+    "A": "zero",
+    "B": "own: NQ ret1/ret5/ret15, vwap_dist, rv15, rv60, vol60, phase",
+    "C": "intermarket: B plus the intermarket set"
+  },
+  "features": {
+    "grid": "the target's 1440 one-minute slots from 18:00 ET, sessions end to end; each market's last close known at the end of the minute (the panel), carried, never filled backwards",
+    "sd60": "per market, the RMS of its last 60 one-minute log returns on the grid",
+    "peer_ret_w": "ES and RTY log return over the last w minutes over its own sd60 x sqrt(w), w = [1, 5, 15]",
+    "beta": "per session, the OLS slope of NQ's on ES's 1-minute log returns over the 20 sessions before (minutes where both closed a bar); missing with fewer than 10",
+    "rel_es_w": "(NQ's w-minute return - beta x ES's) over NQ's sd60 x sqrt(w), w = [5, 15]",
+    "comove15": "the sign of NQ's 15-minute return where it equals ES's sign, else 0 (diverging)",
+    "corr_es60": "the correlation of NQ's and ES's 1-minute returns over the last 60 minutes",
+    "peer_base": "ES and RTY ['vol60', 'rv15']: relative volume and volatility over usual",
+    "clip": 10.0,
+    "set": [
+      "ES.ret1",
+      "ES.ret5",
+      "ES.ret15",
+      "RTY.ret1",
+      "RTY.ret5",
+      "RTY.ret15",
+      "NQ.rel_es5",
+      "NQ.rel_es15",
+      "NQ.comove15",
+      "NQ.corr_es60",
+      "ES.vol60",
+      "ES.rv15",
+      "RTY.vol60",
+      "RTY.rv15"
+    ],
+    "missing": "RTY before its first complete session (2025-09-18) and every warm-up is missing, read as missing"
+  },
+  "decision": {
+    "pass": "at a horizon, C - A and C - B both have their 97.5 % interval wholly below zero; either horizon",
+    "fail": "at both horizons C's mean CRPS is not below both A's and B's: no incremental intermarket benefit",
+    "inconclusive": "otherwise",
+    "after_pass": "freeze, then fresh timely forward data on synchronised feeds before any overlay"
+  },
+  "diagnostics": {
+    "phase": "the origin's phase",
+    "comove15": "together up / together down / diverging / missing",
+    "divergence": "terciles of |rel_es15| with boundaries from the block's training rows",
+    "use": "explanation only - never a deployment rule"
+  }
+}
