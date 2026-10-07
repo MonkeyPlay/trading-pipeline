@@ -47,8 +47,10 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from nicegui import background_tasks, run, ui
 
+from config import Config
 from contracts import nq_prompt_v2 as defs
 from dashboard.components import fan
+from dashboard.components import projection as proj
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.session_bar import SessionBar, contract_label
 from dashboard.components.spec import build_chart_spec, resample, to_epoch
@@ -373,6 +375,7 @@ class SessionExplorer:
         # The current session: the fan, playback and the analogue preview.
         self.live = False                                # the session shown is the one in progress
         self.fan_on = True
+        self.projection_on = True                       # the projection trend (current session only)
         self.fan_contexts: Dict[tuple, fan.FanContext] = {}     # (symbol, day) -> model and accuracy
         self._fan_loading: set = set()
         self.fan_marks: Dict[tuple, list] = {}           # (symbol, day, origin, newest slot) -> the learned fan's brackets
@@ -412,11 +415,11 @@ class SessionExplorer:
             _status_badge(self.conn, self.main)
         self._sync_playback()
 
-    def _show_analogues(self, keep: Optional[str] = None) -> None:
+    def _show_analogues(self) -> None:
         """
         The day's analogues: the comparison below the charts, and beside the
-        session the most similar - or ``keep``, the one shown, while it is still
-        among them. A day in progress without its snapshot shows its preview.
+        session the most similar (#1) - after every update too, whichever one was
+        picked before. A day in progress without its snapshot shows its preview.
         """
         day, symbol = self.bar.date, self.bar.symbol
         preview, computing = self._preview(day, symbol)
@@ -428,7 +431,7 @@ class SessionExplorer:
         self.members = {m["snapshot_id"]: m for m in members}
         options = {sid: f"#{m['rank']}  {m['session_date']}  ·  {float(m['similarity']):.1f}%"
                    for sid, m in self.members.items()}
-        first = keep if keep in options else next(iter(options), None)
+        first = next(iter(options), None)              # the best match, #1
         self._syncing = True
         try:
             self.analogue_select.set_options(options, value=first)
@@ -538,6 +541,36 @@ class SessionExplorer:
                 now = None if playback else datetime.now(timezone.utc)     # newest: say how old
                 self.fan_note.text = fan.describe(ctx, payload, now, playback=playback)
         fan.attach(spec, payload)
+        spec["projection"] = None
+        if self.live and self.projection_on:
+            spec["projection"] = self._projection()
+            proj.extend_axis(spec)
+        elif self.live:
+            self.projection_note.text = f"{proj.LABEL} hidden."
+
+    def _projection(self) -> Optional[Dict[str, Any]]:
+        """The projection trend from the last candle shown (dashboard/components/projection.py) for the
+        chart, and the line saying what it is - or why it is not drawn."""
+        rows = proj.shown_candles(self.main.shown_bars() if self.main.has_bars else None)
+        p, why = proj.trend_projection(rows, _BAR_MINUTES[self.timeframe], self._session_end())
+        if p is None:
+            self.projection_note.text = f"{proj.LABEL} {why}."
+            return None
+        self.projection_note.text = (f"{proj.NOTE} From the {p['origin']:%H:%M} candle: "
+                                     f"{p['y0']:,.2f} to {p['end_price']:,.2f} in {p['end_minutes']:g} min "
+                                     f"(latest slope {p['s0']:+.2f}, weighted {p['s_avg']:+.2f} points a minute).")
+        return {"time": int(to_epoch([p["origin"]])[0]), "tf": p["timeframe_minutes"], "control": p["control"],
+                "range": p["range"], "rgb": p["rgb"], "label": p["label"]}
+
+    def _session_end(self) -> Optional[pd.Timestamp]:
+        """The end of the shown session's trading day (New York), where the projection stops."""
+        inst = Config.instrument(self.bar.symbol) if self.bar.symbol else None
+        try:
+            s = cal.session(date.fromisoformat(self.bar.date))
+            end = slot_instant(s.session_date, end_slot(inst.sec_type, s.schedule))
+        except Exception:                                # no calendar day or no day end for the instrument
+            return None
+        return pd.Timestamp(end).tz_convert(cal.NY_TZ)
 
     def _sync_playback(self) -> None:
         """The playback row: shown for the current session, its slider over the candles drawn so far."""
@@ -601,6 +634,10 @@ class SessionExplorer:
         self.fan_on = bool(event.value)
         self.main.push()
 
+    def on_projection(self, event) -> None:
+        self.projection_on = bool(event.value)
+        self.main.push()
+
     # ------------------------------------------------------------------
     # The analogue preview of a day in progress
     # ------------------------------------------------------------------
@@ -631,7 +668,7 @@ class SessionExplorer:
         if self._preview_wanted == (day, as_of):
             self._preview_wanted = None
         if self.bar.date == day and self.bar.symbol == defs.SYMBOL:
-            self._show_analogues(keep=self.analogue)
+            self._show_analogues()
 
     # ------------------------------------------------------------------
     # Auto mode (dashboard/jobs.py AUTO)
@@ -639,7 +676,10 @@ class SessionExplorer:
 
     def toggle_auto(self) -> None:
         """Auto mode on - collecting and forecasting once a minute, the session in progress shown - or off."""
-        AUTO.switch(not AUTO.on)
+        try:
+            AUTO.switch(not AUTO.on)
+        except RuntimeError as e:                         # another dashboard process has auto mode on
+            ui.notify(str(e), type="warning", multi_line=True)
         current = fan.current_session()
         if AUTO.on and current is not None and self.bar.date != current:
             self.bar.set_day(current)
@@ -681,7 +721,7 @@ class SessionExplorer:
             self.forecast.show_day(self.bar.date)
         else:
             self.refresh_session(keep_view=True)
-            self._show_analogues(keep=self.analogue)
+            self._show_analogues()
             self.forecast.show_day(self.bar.date, keep=True)
 
     def on_timeframe(self, event) -> None:
@@ -757,7 +797,12 @@ class SessionExplorer:
                     "whitespace-nowrap shrink-0").tooltip("In playback, draw the later candles grey instead of "
                                                           "hiding them")
                 ui.switch("Fan", value=True, on_change=self.on_fan).props("dense").classes("shrink-0")
+                ui.switch(proj.LABEL, value=True, on_change=self.on_projection).props("dense").classes(
+                    "whitespace-nowrap shrink-0").tooltip("TEMA 14 and EMA 14 averaged and extrapolated 15 minutes "
+                                                          "from the last candle shown - a visual extrapolation, not a "
+                                                          "forecast")
             self.fan_note = ui.label().classes("text-xs").style(_MUTED)
+            self.projection_note = ui.label().classes("text-xs").style(f"color:rgb({proj.RGB})")
         self.playback.set_visibility(False)
 
     def _build_charts(self) -> None:

@@ -21,6 +21,7 @@ data/models/
 data/preview/
 data/approvals/
 data/fan_cache/
+data/auto_mode.lock
 
 # Logs
 logs/

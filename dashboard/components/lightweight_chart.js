@@ -470,6 +470,137 @@ class DensityFan {
 }
 
 /* ------------------------------------------------------------------ */
+/* Projection trend primitive                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The projection trend (dashboard/components/projection.py): one dashed cubic
+ * Bezier curve from the last candle shown, 15 minutes ahead - a visual extrapolation of
+ * TEMA 14 and EMA 14, not a forecast. Its four control points come in (minutes after the
+ * candle's start, price); x is placed through the time scale's logical index (minutes /
+ * timeframe past the candle's index), so it reaches past the last candle and keeps its
+ * place whatever the zoom - a Bezier curve maps to a Bezier curve under the chart's linear
+ * scales, so drawing the mapped control points draws the same curve.
+ */
+class TrendProjectionRenderer {
+  constructor(view) {
+    this._v = view;
+  }
+
+  draw(target) {
+    const v = this._v;
+    if (!v.points) return;
+    target.useBitmapCoordinateSpace((scope) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const [p0, p1, p2, p3] = v.points.map((p) => [p.x * hr, p.y * vr]);
+      ctx.save();
+      ctx.strokeStyle = `rgba(${v.rgb}, 0.95)`;
+      ctx.lineWidth = Math.max(1, Math.round(2 * hr));
+      ctx.setLineDash([Math.round(6 * hr), Math.round(4 * hr)]);
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.bezierCurveTo(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = `rgba(${v.rgb}, 0.95)`;
+      ctx.beginPath();
+      ctx.arc(p3[0], p3[1], Math.max(2, Math.round(2.5 * hr)), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.font = `${Math.round(10 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textBaseline = "middle";
+      // To the right of the curve's end; pulled back only as far as the pane's right edge needs.
+      const gap = Math.round(6 * hr);
+      const width = ctx.measureText(v.label).width;
+      const x = Math.min(p3[0] + gap, scope.bitmapSize.width - width - gap);
+      ctx.fillText(v.label, x, p3[1]);
+      ctx.restore();
+    });
+  }
+}
+
+class TrendProjectionPaneView {
+  constructor(source) {
+    this._source = source;
+    this.points = null;
+  }
+
+  update() {
+    const src = this._source;
+    const p = src._projection;
+    this.points = null;
+    if (!p || !src._chart || !src._series) return;
+    const xs = src.logicals();
+    if (!xs) return;
+    const timeScale = src._chart.timeScale();
+    const points = p.control.map((c, i) => ({ x: timeScale.logicalToCoordinate(xs[i]),
+                                              y: src._series.priceToCoordinate(c[1]) }));
+    if (points.some((q) => q.x === null || q.y === null)) return;
+    this.points = points;
+    this.rgb = p.rgb;
+    this.label = p.label;
+  }
+
+  renderer() {
+    return new TrendProjectionRenderer(this);
+  }
+
+  zOrder() {
+    return "top";
+  }
+}
+
+class TrendProjection {
+  constructor() {
+    this._projection = null;
+    this._paneViews = [new TrendProjectionPaneView(this)];
+  }
+
+  attached({ chart, series, requestUpdate }) {
+    this._chart = chart;
+    this._series = series;
+    this._requestUpdate = requestUpdate;
+  }
+
+  detached() {
+    this._chart = null;
+    this._series = null;
+    this._requestUpdate = null;
+  }
+
+  setProjection(projection) {
+    this._projection = projection || null;
+    if (this._requestUpdate) this._requestUpdate();
+  }
+
+  /** Each control point's logical x: the origin candle's index plus minutes / timeframe. */
+  logicals() {
+    const p = this._projection;
+    if (!p || !this._chart) return null;
+    const i = this._chart.timeScale().timeToIndex(p.time, false);
+    if (i === null) return null;
+    return p.control.map((c) => i + c[0] / p.tf);
+  }
+
+  updateAllViews() {
+    this._paneViews.forEach((view) => view.update());
+  }
+
+  paneViews() {
+    return this._paneViews;
+  }
+
+  /** The price scale keeps the curve (its sampled range, not the control points) in view while its start is. */
+  autoscaleInfo(startTimePoint, endTimePoint) {
+    const xs = this.logicals();
+    if (!xs || xs[0] < startTimePoint || xs[0] > endTimePoint) return null;
+    const [lo, hi] = this._projection.range;
+    return { priceRange: { minValue: lo, maxValue: hi } };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Diffing                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -688,6 +819,8 @@ export default {
       this.candles.attachPrimitive(this.shade);
       this.fan = new DensityFan();
       this.candles.attachPrimitive(this.fan);
+      this.projection = new TrendProjection();
+      this.candles.attachPrimitive(this.projection);
     }
 
     if (this.show_volume) {
@@ -786,6 +919,7 @@ export default {
       this.reconcileBands(spec.bands || {});
       if (this.shade) this.shade.setRanges(spec.shades || [], spec.shade_color);
       if (this.fan) this.fan.setFan(spec.fan);
+      if (this.projection) this.projection.setProjection(spec.projection);
 
       this.legendSpec = spec.legend || [];
       this.legend = this.legendSpec.map((item) => ({ ...item, value: null }));

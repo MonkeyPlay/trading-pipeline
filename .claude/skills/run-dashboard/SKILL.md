@@ -44,7 +44,10 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
 
 - **Auto** (the explorer's tools, beside Fit) starts a real collector run against IB once a minute
   (`dashboard/jobs.py` AUTO) - never switch it on against production to test; its schedule is
-  unit-tested (`tests/test_fan_view.py`). The fan and playback show only while a session is in
+  unit-tested (`tests/test_fan_view.py`). Not even on a test dashboard pointed at `tp_test`: its collector
+  still connects to the user's IB Gateway with client id 1, and IB refuses whichever of the two dashboards
+  connects second (2026-10-07: this broke the user's Auto runs). Since then a second process cannot switch
+  Auto on while another holds `data/auto_mode.lock`. The fan and playback show only while a session is in
   progress (18:00-17:00 ET on session days); the `fan` step says so otherwise.
 - **Update data** (header) runs real jobs against the dashboard's `DATABASE_URL`: **Run collector** and
   **Run forecaster** write to it (incremental, idempotent), **Forecast now** collects (writes bars) and then

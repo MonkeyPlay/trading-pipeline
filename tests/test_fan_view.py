@@ -247,3 +247,84 @@ def test_auto_mode_runs_once_a_minute_while_a_session_is_in_progress():
     assert forward[-6:-2] == ["forward", "issue", "--trigger", "auto"] and forward[-2] == "--triggered-at"
     assert datetime.fromisoformat(forward[-1]) == _ny(tue, 11, 0)                    # timed from the run's start
     assert list(dict(auto_steps(_ny(tue, 17, 30)))) == ["collector"]                 # no session: nothing pending
+
+
+class _LogRunner:
+    """A runner that never runs anything, with a log file."""
+
+    def __init__(self, log_file):
+        self.busy, self.log_file, self.started = False, str(log_file), []
+
+    def start(self, *args, **kwargs):
+        self.started.append(args)
+        raise AssertionError("not expected to start here")
+
+
+def test_only_one_dashboard_process_runs_auto_mode(tmp_path):
+    import asyncio
+    from dashboard.jobs import AutoMode
+    lock = str(tmp_path / "auto.lock")
+
+    async def go():
+        first, second = AutoMode(_LogRunner(tmp_path / "a.log"), lock), AutoMode(_LogRunner(tmp_path / "b.log"), lock)
+        first.switch(True)
+        with pytest.raises(RuntimeError, match="already on in another dashboard"):
+            second.switch(True)
+        assert not second.on
+        first.switch(False)
+        second.switch(True)                                  # free once the first is off
+        assert second.on
+        second.switch(False)
+
+    asyncio.run(go())
+    text = (tmp_path / "a.log").read_text()
+    assert "Auto mode switched on" in text and "Auto mode switched off" in text
+
+
+def test_an_error_in_the_auto_loop_is_logged_and_the_loop_goes_on(tmp_path, monkeypatch):
+    import asyncio
+    from dashboard import jobs
+    monkeypatch.setattr(jobs, "AUTO_ERROR_PAUSE_S", 0.05)
+    auto = jobs.AutoMode(_LogRunner(tmp_path / "a.log"), str(tmp_path / "auto.lock"))
+    calls = []
+
+    def tick(now):
+        calls.append(now)
+        if len(calls) == 1:
+            raise ValueError("calendar not covered")
+
+    auto.tick = tick
+
+    async def go():
+        auto.switch(True)
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if len(calls) >= 2:
+                break
+        assert auto.on and len(calls) >= 2                   # still on, and ticking after the error
+        assert auto.error == "ValueError: calendar not covered"
+        assert "last attempt failed: ValueError" in auto.status(datetime.now(timezone.utc))
+        auto.switch(False)
+
+    asyncio.run(go())
+    assert "Auto mode error, trying again" in (tmp_path / "a.log").read_text()
+
+
+def test_a_stopped_auto_run_switches_auto_mode_off_and_frees_the_lock(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    from dashboard.jobs import AutoMode
+    lock = str(tmp_path / "auto.lock")
+
+    async def go():
+        auto = AutoMode(_LogRunner(tmp_path / "a.log"), lock)
+        auto.switch(True)
+        auto._started = SimpleNamespace(stopped=True)
+        auto.tick(datetime.now(timezone.utc))
+        assert not auto.on
+        other = AutoMode(_LogRunner(tmp_path / "b.log"), lock)
+        other.switch(True)                                   # the lock was released
+        other.switch(False)
+
+    asyncio.run(go())
+    assert "switched off: its run was stopped" in (tmp_path / "a.log").read_text()

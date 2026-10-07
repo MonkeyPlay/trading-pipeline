@@ -205,7 +205,13 @@ Pages:
     [docs/fan.md](docs/fan.md)); on **NQ** the frozen **learned fan** adds blue brackets (5-95 %
     whisker, 25-75 % box, median) on the candles 5 and 15 minutes ahead - the horizons it passed on
     the sealed holdout; v2 draws every other horizon ([docs/fan_experiment.md](docs/fan_experiment.md)).
-    The line above the chart says how old the fan's origin is when the feed is delayed. Per candle
+    The line above the chart says how old the fan's origin is when the feed is delayed. A dashed cyan
+    **projection trend** (switch "Projection trend",
+    [dashboard/components/projection.py](dashboard/components/projection.py)) extends the average
+    of TEMA 14 and EMA 14 (both SMA 3) 15 minutes from the last candle shown, as one cubic Bezier
+    curve: it leaves in the latest segment's slope and ends on the last five segments' slopes
+    weighted 1-5. It is a visual extrapolation only - not a forecast, separate from the fan, never
+    on the analogue chart - and is hidden without six contiguous candles with both lines. Per candle
     ahead (up to 120, to the day's end) the
     distribution of its close as v2 issues it (no display adjustment, so the brackets compare
     with it directly), as a neutral fog whose opacity follows the density - the most

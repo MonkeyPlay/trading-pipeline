@@ -47,12 +47,17 @@ tab: every page shows the same job and its output, a page opened while it runs
 picks it up, and closing the tab does not stop it. Its output is appended to
 logs/pipeline_run.log, beside the scheduled runs'. Auto mode belongs to the process
 too: it starts its next run when no job is running, a few seconds into each minute,
-and ends when switched off or when one of its runs is stopped.
+and ends when switched off or when one of its runs is stopped. Switching it on or off
+is written to the log; an unexpected error in its loop is logged and the loop goes on
+(it never stops silently while the button says on). Only one dashboard process on the
+machine runs auto mode at a time (AUTO_LOCK): two would collect with the same IB
+client id, and IB refuses the second connection.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import signal
 import sys
@@ -78,6 +83,8 @@ AUTO_TITLE = "Auto update"
 AUTO_STEP_IDLE_S = 120
 AUTO_STEP_LIMIT_S = 900
 AUTO_COLLECT_WORKERS = 4   # symbols an auto run collects at once (collector --workers)
+AUTO_LOCK = os.path.join(_PROJECT_ROOT, "data", "auto_mode.lock")   # held by the one process whose auto mode is on
+AUTO_ERROR_PAUSE_S = 5     # after an unexpected error in the auto loop, seconds before it tries again
 
 
 def collector_command(days: int, trailing_refresh: bool = True, workers: int = 1) -> List[str]:
@@ -347,22 +354,76 @@ class AutoMode:
     one of its runs (Update data, Stop) switches it off.
     """
 
-    def __init__(self, runner: JobRunner) -> None:
+    def __init__(self, runner: JobRunner, lock_path: Optional[str] = AUTO_LOCK) -> None:
         self.runner = runner
         self.on = False
+        self.error: Optional[str] = None                 # the loop's last unexpected error, while on
         self._task: Optional[asyncio.Task] = None
         self._last_minute: Optional[datetime] = None
         self._started: Optional[Job] = None              # its latest run
+        self.lock_path = lock_path
+        self._lock: Optional[TextIO] = None
+
+    def _log(self, text: str) -> None:
+        """A line about auto mode itself in the runner's log file (never fails the caller)."""
+        if not self.runner_log:
+            return
+        try:
+            with open(self.runner_log, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}] Dashboard: {text} "
+                        f"(pid {os.getpid()}, port {os.getenv('DASHBOARD_PORT', '8080')}).\n")
+        except OSError:
+            pass
+
+    @property
+    def runner_log(self) -> Optional[str]:
+        return getattr(self.runner, "log_file", None)
+
+    def _acquire(self) -> None:
+        """Takes AUTO_LOCK, or raises RuntimeError naming the process that holds it."""
+        if not self.lock_path:
+            return
+        os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
+        f = open(self.lock_path, "a+", encoding="utf-8")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.seek(0)
+            holder = f.read().strip() or "another process"
+            f.close()
+            raise RuntimeError(f"Auto mode is already on in another dashboard ({holder}); switch it off there first "
+                               "- two would collect with the same IB client id") from None
+        f.seek(0)
+        f.truncate()
+        f.write(f"pid {os.getpid()}, port {os.getenv('DASHBOARD_PORT', '8080')}")
+        f.flush()
+        self._lock = f
+
+    def _release(self) -> None:
+        if self._lock is not None:
+            try:
+                fcntl.flock(self._lock, fcntl.LOCK_UN)
+            finally:
+                self._lock.close()
+                self._lock = None
 
     def switch(self, on: bool) -> None:
+        """Auto mode on or off; on raises RuntimeError while another dashboard process has it on."""
         if on and not self.on:
-            self.on, self._started = True, None
+            self._acquire()
+            self.on, self._started, self.error = True, None, None
             self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._log("Auto mode switched on")
         elif not on and self.on:
-            self.on = False
-            if self._task is not None:
-                self._task.cancel()
-                self._task = None
+            self._off("switched off")
+
+    def _off(self, why: str) -> None:
+        self.on = False
+        if self._task is not None and self._task is not asyncio.current_task():
+            self._task.cancel()
+        self._task = None
+        self._release()
+        self._log(f"Auto mode {why}")
 
     def due(self, now: datetime) -> Optional[str]:
         """The session to collect at ``now``, or None: a job is running, this minute had its run, it is too early in
@@ -376,21 +437,33 @@ class AutoMode:
     def status(self, now: datetime) -> str:
         if not self.on:
             return "Off: collect and forecast by hand (Update data)"
+        if self.error:
+            return f"On - but its last attempt failed: {self.error}"
         if current_session(now) is None:
             return "On - waiting: no session in progress"
         return "On - collecting and forecasting once a minute"
 
+    def tick(self, now: datetime) -> None:
+        """One pass of the loop: off when its run was stopped, else a run started when one is due."""
+        if self._started is not None and self._started.stopped:
+            self._off("switched off: its run was stopped")
+            return
+        if self.due(now):
+            self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now),
+                                              step_timeout=AUTO_STEP_LIMIT_S, step_idle=AUTO_STEP_IDLE_S)
+            self._last_minute = now.replace(second=0, microsecond=0)
+            self.error = None
+
     async def _loop(self) -> None:
         try:
             while self.on:
-                if self._started is not None and self._started.stopped:
-                    self.on = False
-                    break
-                now = datetime.now(timezone.utc)
-                if self.due(now):
-                    self._started = self.runner.start("auto", AUTO_TITLE, auto_steps(now),
-                                                      step_timeout=AUTO_STEP_LIMIT_S, step_idle=AUTO_STEP_IDLE_S)
-                    self._last_minute = now.replace(second=0, microsecond=0)
+                try:
+                    self.tick(datetime.now(timezone.utc))
+                except Exception as e:                   # never die silently while the button says on
+                    self.error = f"{type(e).__name__}: {e}"
+                    self._log(f"Auto mode error, trying again in {AUTO_ERROR_PAUSE_S} s - {self.error}")
+                    await asyncio.sleep(AUTO_ERROR_PAUSE_S)
+                    continue
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
