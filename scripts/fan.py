@@ -59,6 +59,7 @@ from features.session_windows import get_trading_day_date
 from forecaster import fan_cond_ema as fce
 from forecaster import fan_direction as fd
 from forecaster import fan_experiment as fx
+from forecaster import fan_first_hit as fhit
 from forecaster import fan_im_direction as fim
 from forecaster import fan_features as ff
 from forecaster import fan_forward as fwd
@@ -969,6 +970,48 @@ def cmd_im_dir(conn, args):
     """Intermarket Direction (forecaster/fan_im_direction.py, docs/fan_im_direction.md)."""
     return _run_spec(conn, args, fim.SPEC, fim.im_table)
 
+def cmd_first_hit(conn, args):
+    """First-hit probabilities (forecaster/fan_first_hit.py, docs/fan_first_hit.md): training frequencies, NQ's own
+    context and own + intermarket, rolling origin - development only; nothing is stored in the journal.
+    --definition writes the fixed definition and runs nothing."""
+    defn = os.path.join(_PROJECT_ROOT, "docs", f"{fhit.VERSION}_definition.json")
+    if args.definition:
+        with open(defn, "w") as fh_:
+            json.dump({"definition_hash": fhit.definition_hash(), **fhit.DEFINITION}, fh_, indent=2, default=str)
+        print(f"{fhit.VERSION} definition {fhit.definition_hash()}: {defn}")
+        return 0
+    with open(defn) as fh_:
+        fixed = json.load(fh_)
+    if fixed["definition_hash"] != fhit.definition_hash():
+        print(f"Not run: the code's definition {fhit.definition_hash()} differs from the fixed one "
+              f"{fixed['definition_hash']} ({defn}) - a changed choice is a new version")
+        return 1
+    started = time.time()
+    exp, frames, table, sessions = direction_inputs(conn, args.name, "NQ", fim.im_table)
+    hl, check = fhit.load_high_low(conn, "NQ", sessions, frames)
+    print(f"high/low: {check['bars']:,} bars, {check['close_mismatch']} closes differing from the frames")
+    if check["close_mismatch"]:
+        print("Not run: the high/low bars do not match the frames' prices")
+        return 1
+    res = fhit.run(frames, table, hl, fd.blocks(exp["definition"]), sessions, log=print)
+    res.update(experiment=args.name, experiment_hash=exp["definition_hash"], target="NQ", high_low_check=check,
+               code_revision=code_revision(), feature_format=ff.FEATURE_FORMAT, frame_format=fh.FRAME_FORMAT)
+    r = res["results"]
+    print(f"{fhit.VERSION} on {len(res['sessions'])} sessions ({time.time() - started:.0f} s): {res['conclusion']}")
+    print("classes " + ", ".join(f"{k} {100 * v:.1f} %" for k, v in r["class_share"].items()))
+    for a in fhit.ASSIGNMENTS:
+        print(f"  {a}: " + ", ".join(f"{k} {v:.5f}" for k, v in r[a]["brier"].items()))
+        for k, c in r[a]["comparisons"].items():
+            print(f"    {k}: {c['diff']:+.6f} ({100 * c['share']:+.3f} %) [{c['interval'][0]:+.6f}, {c['interval'][1]:+.6f}]")
+    os.makedirs(DIRECTION_DIR, exist_ok=True)
+    stored = os.path.join(DIRECTION_DIR, f"{fhit.VERSION}_{args.name}_NQ.json")
+    with open(stored, "w") as fh_:
+        json.dump(res, fh_, default=float)
+    print(f"Run stored: {stored}")
+    print(f"Report: {fhit.write_report(res, os.path.join(args.report_dir, f'{fhit.VERSION}_{args.name}_NQ.md'))}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The benchmark price fan")
     parser.add_argument("--db", default=Config.DATABASE_URL, help="PostgreSQL connection URL")
@@ -1074,6 +1117,10 @@ def main(argv=None):
     p.add_argument("--target", default="NQ")
     p.add_argument("--definition", action="store_true", help="Write the fixed definition; run nothing")
     p.add_argument("--report-dir", default=REPORT_DIR)
+    p = sub.add_parser("first-hit", help="First-hit probabilities: upper / lower barrier first / neither in 15 min")
+    p.add_argument("--name", default=fx.EXPERIMENT_NAME)
+    p.add_argument("--definition", action="store_true", help="Write the fixed definition; run nothing")
+    p.add_argument("--report-dir", default=REPORT_DIR)
     p = sub.add_parser("panel-audit", help="Audit the point-in-time panel of an experiment's development sessions")
     p.add_argument("--name", default=fx.EXPERIMENT_NAME)
     p.add_argument("--report-dir", default=REPORT_DIR)
@@ -1091,7 +1138,7 @@ def main(argv=None):
                 "experiment-register": cmd_experiment_register, "experiment-show": cmd_experiment_show,
                 "panel-audit": cmd_panel_audit, "baseline-gate": cmd_baseline_gate, "checks": cmd_checks,
                 "features": cmd_features, "compare": cmd_compare, "search": cmd_search, "replay": cmd_replay,
-                "freeze": cmd_freeze, "direction": cmd_direction, "cond-ema": cmd_cond_ema, "im-dir": cmd_im_dir, "holdout": cmd_holdout, "forward": cmd_forward}[args.command](conn, args)
+                "freeze": cmd_freeze, "direction": cmd_direction, "cond-ema": cmd_cond_ema, "im-dir": cmd_im_dir, "first-hit": cmd_first_hit, "holdout": cmd_holdout, "forward": cmd_forward}[args.command](conn, args)
     finally:
         conn.close()
 

@@ -411,6 +411,7 @@ python scripts/fan.py forward report                  # the forward record: live
 python scripts/fan.py direction                       # the direction experiment: zero drift vs EMA slope vs learned shift
 python scripts/fan.py cond-ema                        # Conditional EMA Direction (fixed definition; fail on 2026-10-07)
 python scripts/fan.py im-dir                          # Intermarket Direction (fixed definition; marginal 5-min pass)
+python scripts/fan.py first-hit                       # First-hit probabilities (fixed definition; size, not direction)
 ```
 
 A learned centre (`direction`, [docs/fan_direction.md](docs/fan_direction.md)) was tested on
@@ -425,6 +426,10 @@ any block - fail, no incremental EMA benefit. Intermarket Direction (`im-dir`,
 ES on the same machinery: a marginal pass at 5 minutes from one 30-session block (-0.013 %
 pooled), nothing at 15, and the procedure fitted on current data issues zero shift - recorded
 as not actionable (2026-10-07). The centre-shift experiments are archived; the fan stays centred.
+First-hit probabilities (`first-hit`, [docs/fan_first_hit.md](docs/fan_first_hit.md)): within 15
+minutes, upper barrier (+1 v2-sigma) first, lower first or neither. NQ's context beats training
+frequencies by 1.9 % (Brier), but only on whether a barrier is reached; its up/down split is worse
+than an even one. Intermarket adds nothing.
 
 `fan_rw_v2` - v1 with releases estimated by name, earnings placed at the close and a
 fat-tailed shape - passed the gate on 2026-10-06 and is the experiment's baseline
@@ -594,7 +599,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [reports](docs/reports/) |
 
 ## Database
 
