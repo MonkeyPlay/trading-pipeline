@@ -26,6 +26,10 @@ collector's after-the-fact catch-up.
      earlier sessions (outcomes known as of its cutoff), and issues both arms in mode
      live: the database stamps the issue time and marks a run after 09:29:50 ET late;
      an issued run is acknowledged after its commit
+  6. with arm D (``synthesis``, forecaster/live_synthesis.py; approved by hand): its
+     request from the same live evidence, awaited until the deadline; then the forecast
+     in force is recorded (delivered: D when timely, else B, else A, else none), and a
+     late answer is still stored as late
 
 The IB connection (``app``) is passed in, so a test can stand a fake in its place;
 ``clock`` and ``sleep`` likewise. Nothing here has run against IB on a trading day
@@ -129,8 +133,10 @@ def _store_bars(conn, capture_id: str, row, day: str, bars: List[Dict[str, Any]]
 
 
 def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION,
-            clock: Callable[[], datetime] = _utc_now, sleep: Callable[[float], None] = _time.sleep) -> Dict[str, Any]:
-    """Captures, freezes and issues one session live (see the module docstring); returns a summary."""
+            clock: Callable[[], datetime] = _utc_now, sleep: Callable[[float], None] = _time.sleep,
+            synthesis=None) -> Dict[str, Any]:
+    """Captures, freezes and issues one session live (see the module docstring); returns a summary. ``synthesis``
+    (a live_synthesis.LiveSynthesis) adds arm D; without it nothing is sent to Claude."""
     from collector.ib_collector import _contract_info, _instrument_for
     from forecaster.forecast_service import run_forecast, timely
     from forecaster.journal import annotate, match
@@ -192,7 +198,42 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
         summary["runs"].append({"run_id": run["run_id"], "algorithm": algorithm, "status": run["lifecycle_status"],
                                 "timely": timely(run)})
     summary["status"] = "issued" if all(r["timely"] for r in summary["runs"]) else "not timely"
+    runs = [store.get_forecast_run(conn, r["run_id"]) for r in summary["runs"]]
+    if synthesis is not None:
+        from forecaster import live_synthesis as ls
+        attempt = synthesis.request(conn, snapshot, store.get_annotation(conn, annotation_id), aset, profile, clock,
+                                    event)
+        if attempt.status == "sent":
+            attempt.wait(conn, (ls.deadline(day) - clock()).total_seconds())
+        summary["synthesis"] = attempt.status if attempt.run is None else attempt.run["lifecycle_status"]
+        if attempt.run is not None:
+            runs.append(_synthesis_run(attempt.run, attempt.status == "sent", event, summary))
+    _deliver(runs, event, summary)
+    if synthesis is not None and attempt.status == "sent" and attempt.run is None:   # late: stored, never delivered
+        run = attempt.wait(conn, synthesis.late_wait_s) or attempt.abandon(conn, synthesis.late_wait_s)
+        summary["synthesis"] = run["lifecycle_status"]
+        _synthesis_run(run, True, event, summary)
     return summary
+
+
+def _synthesis_run(run, new: bool, event, summary) -> Dict[str, Any]:
+    from forecaster.forecast_service import timely
+    event("forecast", run_id=run["run_id"], algorithm=run["algorithm_version"], status=run["lifecycle_status"],
+          issued_at=None if run["issued_at"] is None else str(run["issued_at"]), timely=timely(run), new=new,
+          request_id=run["request_id"], reason=run["failure_reason"])
+    summary["runs"].append({"run_id": run["run_id"], "algorithm": run["algorithm_version"],
+                            "status": run["lifecycle_status"], "timely": timely(run)})
+    return run
+
+
+def _deliver(runs, event, summary) -> None:
+    """Records the forecast in force at the deadline (live_synthesis.delivered)."""
+    from forecaster.live_synthesis import ARM, delivered
+    run, why = delivered(runs)
+    event("delivered", run_id=None if run is None else run["run_id"],
+          arm=None if run is None else ARM[run["algorithm_version"]], reason=why)
+    summary["delivered"] = {"run_id": None if run is None else run["run_id"],
+                            "arm": None if run is None else ARM[run["algorithm_version"]], "reason": why}
 
 
 def connect_ib(host: str, port: int, client_id: int, timeout: float = 10.0):
@@ -215,7 +256,8 @@ def timing(conn, capture: Dict[str, Any]) -> List[str]:
     for e in capture["events"]:
         at = datetime.fromisoformat(str(e["at"]).replace(" ", "T")).replace(tzinfo=timezone.utc)
         detail = e["detail"] or {}
-        note = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("status", "timely", "pit", "verified",
-                                                                           "receipts", "attempt", "reason"))
+        note = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("algorithm", "status", "timely", "pit",
+                                                                           "verified", "receipts", "attempt", "arm",
+                                                                           "reason"))
         out.append(f"{(at - cutoff).total_seconds():+7.1f}s {e['event']}" + (f" ({note})" if note else ""))
     return out

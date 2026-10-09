@@ -366,25 +366,26 @@ def _predictions(answer: Dict[str, Any], summary: Dict[str, Any]) -> List[Dict[s
     return out
 
 
-def synthesis_key(snapshot, annotation, aset, profile: str) -> str:
-    return idempotency_key(snapshot, annotation["annotation_id"], aset["set_id"], profile, MODE, fc.SYNTHESIS_VERSION)
+def synthesis_key(snapshot, annotation, aset, profile: str, mode: str = MODE) -> str:
+    return idempotency_key(snapshot, annotation["annotation_id"], aset["set_id"], profile, mode, fc.SYNTHESIS_VERSION)
 
 
-def synthesis_evidence(conn, snapshot, annotation, aset, profile: str, history) -> Dict[str, Any]:
+def synthesis_evidence(conn, snapshot, annotation, aset, profile: str, history, mode: str = MODE) -> Dict[str, Any]:
     """Arm B's evidence frozen for a synthesis run: its versions name the synthesis and its schema (v2)."""
-    evidence = freeze_forecast_evidence(conn, snapshot, annotation, aset, profile, MODE, history,
+    evidence = freeze_forecast_evidence(conn, snapshot, annotation, aset, profile, mode, history,
                                         fc.SYNTHESIS_VERSION)
     evidence["versions"]["schema"] = fc.SYNTHESIS_SCHEMA_VERSION
     return evidence
 
 
-def _prepare(conn, snapshot, annotation, aset, profile: str, history) -> Dict[str, Any]:
-    """Everything a synthesis request of this evidence is built from, and the request itself."""
-    evidence = synthesis_evidence(conn, snapshot, annotation, aset, profile, history)
+def _prepare(conn, snapshot, annotation, aset, profile: str, history, mode: str = MODE) -> Dict[str, Any]:
+    """Everything a synthesis request of this evidence is built from, and the request itself; ``mode`` live for a
+    live capture's snapshot (forecaster/live_synthesis.py)."""
+    evidence = synthesis_evidence(conn, snapshot, annotation, aset, profile, history, mode)
     syn = synthesis_bundle(snapshot, annotation, aset, evidence)
     params, request_hash = build_synthesis_request(syn["bundle"])
-    return {"snapshot": snapshot, "annotation": annotation, "aset": aset, "profile": profile,
-            "key": synthesis_key(snapshot, annotation, aset, profile), "evidence": evidence, "syn": syn,
+    return {"snapshot": snapshot, "annotation": annotation, "aset": aset, "profile": profile, "mode": mode,
+            "key": synthesis_key(snapshot, annotation, aset, profile, mode), "evidence": evidence, "syn": syn,
             "params": params, "request_hash": request_hash}
 
 
@@ -416,10 +417,12 @@ def _record(conn, prep: Dict[str, Any], mode: str) -> str:
 def _finish(conn, prep: Dict[str, Any], request_id: str, started: datetime, message=None,
             error: Optional[str] = None) -> Dict[str, Any]:
     """Stores the run answering ``request_id``: issued, invalid (failed validation, the raw text kept) or failed
-    (no answer, refused, cut off, an error) - nothing is filled in from another run."""
+    (no answer, refused, cut off, an error) - nothing is filled in from another run. A live run is the database's
+    to issue: inserted after its deadline it is late (migration 0014); issued, it is acknowledged after its
+    commit, as arms A and B are."""
     snapshot, annotation, aset, evidence, syn = (prep[k] for k in ("snapshot", "annotation", "aset", "evidence",
                                                                    "syn"))
-    key, profile, day = prep["key"], prep["profile"], str(snapshot["session_date"])
+    key, profile, day, mode = prep["key"], prep["profile"], str(snapshot["session_date"]), prep.get("mode", MODE)
     attempt: Dict[str, Any] = {"request_id": request_id, "request_hash": prep["request_hash"]}
     status, reason, answer = "failed", error, None
     if message is not None:
@@ -455,21 +458,27 @@ def _finish(conn, prep: Dict[str, Any], request_id: str, started: datetime, mess
                    "reference_targets": reference_targets(evidence),
                    "forecast_confidence_reason": "the synthesis' own rating (A2): evidence and conviction, not "
                                                  "calibration"}
-    previous = store.current_forecast_run(conn, day, profile, MODE, fc.SYNTHESIS_VERSION, key) \
+    previous = store.current_forecast_run(conn, day, profile, mode, fc.SYNTHESIS_VERSION, key) \
         if status == "issued" else None
     run = {
         "idempotency_key": key, "symbol": snapshot["symbol"], "session_date": day,
         "contract_id": snapshot["contract_id"], "profile": profile, "snapshot_id": snapshot["snapshot_id"],
         "annotation_id": annotation["annotation_id"], "analogue_set_id": aset["set_id"],
         "label_version": defs.LABEL_VERSION, "algorithm_version": fc.SYNTHESIS_VERSION,
-        "schema_version": fc.SYNTHESIS_SCHEMA_VERSION, "issue_policy": fc.ISSUE_POLICIES[MODE],
-        "code_revision": code_revision(), "mode": MODE, "input_cutoff_at": snapshot["cutoff_at"],
-        "deadline_at": None, "generation_started_at": started, "generation_completed_at": datetime.now(timezone.utc),
+        "schema_version": fc.SYNTHESIS_SCHEMA_VERSION, "issue_policy": fc.ISSUE_POLICIES[mode],
+        "code_revision": code_revision(), "mode": mode, "input_cutoff_at": snapshot["cutoff_at"],
+        "deadline_at": cal.ny_instant(datetime.fromisoformat(day).date(), fc.LIVE_DEADLINE_ET) if mode == "live"
+        else None,
+        "generation_started_at": started, "generation_completed_at": datetime.now(timezone.utc),
         "lifecycle_status": status, "supersedes_run_id": previous["run_id"] if previous else None,
         "failure_reason": reason, "evidence_digest": _digest(evidence), "outputs": outputs,
         "request_id": request_id}
-    run_id, _ = store.save_forecast_run(conn, run, {**evidence, "attempt": attempt}, predictions)
-    return store.get_forecast_run(conn, run_id)
+    run_id, created = store.save_forecast_run(conn, run, {**evidence, "attempt": attempt}, predictions)
+    result = store.get_forecast_run(conn, run_id)
+    if created and mode == "live" and result["lifecycle_status"] == "issued":
+        store.add_forecast_event(conn, run_id, "acknowledged", "committed and read back by the issuing process")
+        result = store.get_forecast_run(conn, run_id)
+    return result
 
 
 def synthesize(conn, client, day: str, profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:

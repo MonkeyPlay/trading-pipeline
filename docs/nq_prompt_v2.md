@@ -755,7 +755,18 @@ before the open on trading days, does for today's session:
 6. it annotates the snapshot, matches it (prior and analogue outcomes known as of the
    cutoff) and issues both arms in mode `live`: the database stamps the issue time and
    makes a run after 09:29:50 ET `late`; an issued run is acknowledged after commit,
-   and only an issued and acknowledged run counts as timely.
+   and only an issued and acknowledged run counts as timely;
+7. with `--with-d` ([forecaster/live_synthesis.py](../forecaster/live_synthesis.py),
+   migration 0028), arm D too: one Claude request from the live B run's frozen
+   evidence, confirmed by hand ("send") or by a one-time dashboard approval, recorded
+   before it is sent and never sent twice for a snapshot. It is awaited until the
+   deadline; then the forecast in force is recorded (`delivered`: the first timely run
+   of D, B, A, or none). An answer after the deadline is still stored for up to 120 s
+   and the database makes it late; it never replaces the forecast in force. Every
+   capture without `--with-d` records `delivered` too (B, else A).
+
+The timer below runs the capture without D: Claude requests are manual only, so a
+scheduled job never sends one.
 
 It uses its own IB client id (`IB_CLIENT_ID + 1`), so the collector can run beside
 it; IB Gateway must be up and the session's NQ contract stored (the regular
@@ -777,8 +788,11 @@ ExecStart=/home/monkeyplay/trading_pipeline/.venv/bin/python scripts/nq_journal.
 
 Tested with a fake IB and clock - waiting for the cutoff, retries, the freshness
 budget, receipts, verification, the refused snapshot after the open, restart on a
-frozen snapshot, late issuance - not yet against IB on a trading day: unit coverage
-is not live operation (guideline 4E: a shadow period comes first).
+frozen snapshot, late issuance - and arm D with simulated provider answers (timely,
+invalid, an error, none, late, unapproved) - not yet against IB on a trading day:
+unit coverage is not live operation (guideline 4E: a shadow period comes first). On
+the current feed the bar ending at the cutoff arrives about 11 minutes late, beyond
+the 20-second budget, so a capture goes stale (docs/forecasting_audit.md, section 5).
 
 ## Stage 4: registered experiments (guideline revision 2)
 

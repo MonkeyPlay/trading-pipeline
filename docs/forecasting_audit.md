@@ -147,56 +147,117 @@ identical targets, horizons and cutoffs; no single combined score.
 
 ## 5. Isolating the LLM's contribution
 
-### Start with D only: `p1_d_research_v1` (defined, not registered)
+### `p1_d_research_v1`: defined, deferred
 
 Second review, same day. D answers the cleanest question: does Claude's synthesis improve the
 numerical forecast it is handed? C adds annotation coverage and pool composition, which makes
 attribution harder, so C and its pool backfill are deferred.
 
+**Deferred by the third review: not registered, nothing spent.** It would show whether D adds
+statistical information to *delayed* snapshots. The agreed priority is whether D improves
+forecasts *delivered before trading begins*, which is the live comparison below. The design
+stays available as a separate experiment.
+
 - **Arms:** A, B and D v5, all on the session's official 09:29 snapshot. That gives identical
   evidence cutoffs and target windows; D's only extra numbers are the thresholds B's rules
   already use.
-- **Pairs:** D − B (the question), D − A and B − A, using the manifest's own `pairs` (new;
-  manifests without one, such as `hist_dev_v1`, score as before).
-- **Practical improvement:** 0.01 Brier per target. Every scheduled session is a case, so a
-  session D wasn't run for is counted.
+- **Pairs:** D − B (the question), D − A and B − A, using the manifest's own `pairs`.
+- **Primary target and score, explicitly:** `direction_15m`, scored by the multiclass Brier
+  score in the experiments' convention: the *unhalved* sum over the classes,
+  Σ_c (p_c − [c realised])², from 0 to 2 per session. Log loss is a companion score. The
+  manifest used to inherit log loss as "primary" while its decision used Brier; that is fixed.
+- **0.01 means an absolute reduction** of the mean per-session Brier score on that 0–2 scale
+  (0.005 on the halved 0–1 scale). It is not a relative reduction.
+- **Decision:** D is better only if *both* D − B and D − A are at most −0.01 and each whole
+  95 % interval lies below zero. Secondary targets are reported, never decisive.
 - **Research only:** the 09:29 snapshot exists only after the open on this feed, and D runs when
   approved. It measures skill from cutoff-frozen evidence, never timeliness.
-- **Planning cost:** at about $0.12 a request, 60 sessions are about $7, before retries.
-- **Three controls, kept separate:**
-  - **Definition:** `nq_journal.py experiment-register --name p1_d_research_v1 --design
-    d-research --start <day> --end <day>` writes one definition row. It sends nothing,
-    schedules nothing and holds no budget; a test proves no Claude client is even built.
-  - **Activation:** none exists. D runs only from a run a person starts and confirms.
-  - **Budget:** each approval's own `max_requests`.
+- **Three controls, kept separate:** the definition (`experiment-register --design d-research`
+  writes one row and sends nothing; a test proves no Claude client is built), activation (none:
+  D runs only from a run a person starts and confirms) and budget (each approval's own
+  `max_requests`; about $7 for 60 sessions).
 
-Registering it is your call; nothing collects D until you approve runs.
+### Estimated issuance times (reconstructed, not demonstrated delivery)
 
-### A live pre-open experiment waits for timeliness
+`nq_journal.py timeliness` writes `docs/reports/preopen_timeliness.md`. **These are
+estimates.** D is not connected to the scheduled issuance, so its times are the Auto run's
+end plus D's measured generation time. Delivery is demonstrated only by a live capture's
+`delivered` step (below).
 
-`nq_journal.py timeliness` measures, from the bars' receipt times and the Auto runs' recorded
-ends, when a forecast at each candidate cutoff could actually have been issued. It includes D's
-measured generation time and uses the open as the deadline; every scheduled opportunity is
-listed, and a morning nothing collected counts as a miss. So far one session is measurable
-(2026-10-07):
+- **D's generation time** now comes from the current version only (v5). No v5 run has been
+  measured yet, so the D columns are empty. v4's 25–30 s (3 runs) is shown for reference and
+  not used. Measuring v5 needs D runs, which are paid requests and your call.
+- **Variability:** every column now shows fastest / median / slowest, and each session is
+  listed.
 
-| Cutoff | A/B vs the open | With D |
+| Cutoff | Measured sessions | A/B vs the open (each session) |
 |---|---|---|
-| 09:15 | 3.5 min early | still early |
-| 09:20 | 1.6 min late | late |
-| 09:29 | 10.5 min late | late |
+| 09:15 | 2 (Oct 7, Oct 9) | +3.5, +3.5 min |
+| 09:20 | 2 | −1.6, −1.6 min |
+| 09:25 | 2 | −6.6, −6.6 min |
+| 09:29 | 2 | −10.5, −10.7 min |
 
-One session is not a rate. Before any live pre-open test, freeze in its own definition:
+Data were ready 11.2 min after the cutoff both times. Oct 8 counts as a miss (nothing
+collected that morning), and earlier sessions have no receipt times.
 
-- the cutoff, from ≥ 10 measured sessions;
-- the deadline;
-- the model and prompt version;
-- the late-result policy. A D result after the deadline is recorded late; the delivered
-  system falls back to B for that session; late cases stay in the availability report;
-- D issued inside the live path, which does not exist yet.
+**Collecting ten sessions** needs nothing new: receipt times and Auto run ends are recorded on
+every morning Auto runs (the run log is append-only). Run `timeliness` over the range once ten
+sessions are measured, which is 2026-10-21 at the earliest if every morning collects. Ten
+sessions can inform the operational design (cutoff, deadline, late policy). They cannot
+establish reliable predictive performance.
 
-Then compare A, B and D at that same cutoff.
+### The live D path (built and tested; not deployed)
 
+`nq_journal.py live --with-d` (branch `live-d`, `forecaster/live_synthesis.py`, migration
+0028). Verified only against simulated provider answers; no paid request was made.
+
+- **Approval:** one Claude request per session, confirmed by hand (typed `send`) or by a
+  one-time dashboard approval scoped to `live-d`, that day and that profile. Without one, the
+  capture records `synthesis_skipped` and sends nothing. A bad approval stops the command
+  before it connects to IB.
+- **Immutable evidence:** D's request is built from the live B run's own evidence (the same
+  snapshot, annotation and analogue set ids; the frozen evidence is identical apart from the
+  versions it names). It is recorded in the inference ledger before it is sent, and a snapshot
+  that already has a request is never sent again. Runs, evidence and predictions are
+  append-only.
+- **Deadline:** the database's (09:29:50 ET, `nq_issue_live_v2`). It stamps the issue time and
+  turns a run inserted later into `late`. The capture acknowledges an issued D after the
+  commit, as it does A and B.
+- **The forecast in force:** awaited until the deadline, then recorded as a `delivered` step
+  with the database's clock: the first timely run of D, B, A, else none, with the reason
+  (e.g. "B timely (D invalid)").
+- **Late results:** an answer after the deadline is still stored, for up to 120 s, and the
+  database makes it late. It never replaces the forecast in force. With no answer by then, a
+  failed run records that.
+- **Tested fallbacks to B:** an invalid answer, a provider error, no approval, a deadline
+  already passed, and no answer at all.
+
+### The live A/B/D comparison: frozen once the timing supports a cutoff
+
+When ten or more measured sessions support a cutoff, freeze one definition with that cutoff
+and begin the prospective test. Proposed content:
+
+- **Fixed in advance:** the cutoff, the deadline, the model and prompt (`nq_synthesis_p1_v5`
+  at effort medium), the late policy above, and the delivery order D → B → A.
+- **The capture's freshness budget must fit the feed.** `nq_issue_live_v2` waits at most 20 s
+  after the cutoff for the bar ending at it. On this feed that bar arrives about 11 minutes
+  later, so every live capture goes stale, as on 2026-10-06, with or without D. Two ways out:
+  - an earlier-cutoff profile with a budget that fits the measured delay (e.g. a 09:15 cutoff
+    with about 13 minutes), as a new snapshot profile and issue policy;
+  - a real-time feed (your call; it is a paid subscription).
+- **Arms:** A, B and D, all from the same live snapshot at that cutoff. C stays out (pool
+  composition).
+- **Cases:** every scheduled session is a case. A session without a timely D is counted, never
+  dropped.
+- **Primary target and score:** `direction_15m`, unhalved multiclass Brier.
+- **Skill criterion:** D must improve on **both** A and B by an absolute 0.01 or more, with each
+  95 % block-bootstrap interval below zero, paired on the sessions where D was timely.
+- **Availability criterion, alongside:** D's on-time share over all scheduled sessions. The
+  threshold is yours to set when freezing; 90 % is my suggestion.
+- **Also reported:** the delivered system (D else B) against B on every session, i.e. what you
+  would actually have seen at the open.
+- **Operational point:** under the manual-only rule, each session's D request needs your
+  approval before the capture starts. The dashboard has no live-with-D button yet.
 
 | Arm | What it is | State |
 |---|---|---|
@@ -206,7 +267,8 @@ Then compare A, B and D at that same cutoff.
 | D | Claude synthesises from B's frozen evidence | 5 runs (v3/v4); v5 ready |
 | E | Claude *explains* B's unchanged predictions | not built |
 
-**What a fair forward comparison needs.** Proposed as `p1_llm_forward_v1`, to be registered
+**What a fair forward comparison needs, with C too (later).** Proposed as `p1_llm_forward_v1`,
+superseded for D by the live A/B/D comparison above, and to be registered
 with `experiments.experiment_manifest` (it accepts any arms) before its first session:
 
 - **Arms and sample:** A, B, D v5, and C *with B restricted to C's own annotated pool* as its
@@ -216,8 +278,9 @@ with `experiments.experiment_manifest` (it accepts any arms) before its first se
   late, failed, invalid, unavailable and abstained runs are counted.
 - **The delivered system is an arm of its own:** "D if valid, else B", because that is what
   you would actually see.
-- **Primary measure:** paired Brier on each P1 target with a minimum practical improvement of
-  0.01 (Brier) agreed in advance, plus log loss with infinite cases counted.
+- **Primary measure:** paired unhalved Brier on `direction_15m`, with an absolute minimum
+  improvement of 0.01 agreed in advance; the other P1 targets and log loss (infinite cases
+  counted) are secondary.
 - **D's departures from B:** for D, its departures from B (including probability shifts that
   keep B's class) scored separately: did moving away from B help?
 - **Operational measures:** on-time share, latency, failures and cost per usable forecast.
@@ -365,7 +428,8 @@ your rule keeps manual. The offline request sizes above are the starting point.
 | Confirmed cutoff bar; missed-session catch-up | `d588004` | **yes, the running revision** |
 | p1_pool_tuning_v1 (definition, then scorer and report) | `35b629f`, `0afae63` | no (research) |
 | Synthesis v5, separate LLM runner, parallel C/D, honest labels, issue timing | `f300143` | **no.** Deploy after today's session: v5 registers on the first Auto journal step after deployment |
-| C's own database connection when parallel; D-only research design; experiment pairs; timeliness measurement | this commit | **no**, with the above |
+| C's own database connection when parallel; D-only research design; experiment pairs; timeliness measurement | `b8b5786` | **no**, with the above |
+| Live D path (migration 0028), timeliness as estimates with spreads, explicit D research decision rule, pair labels in experiment reports | this commit (branch `live-d`) | **no**: needs its own deployment (schema v28) after `b8b5786` |
 
 **The combined revision, rechecked before deployment:**
 

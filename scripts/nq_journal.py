@@ -27,6 +27,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py experiment-score --name hist_dev_v1        # freeze cases, score, report
     python scripts/nq_journal.py experiment-list
     python scripts/nq_journal.py live                                       # the pre-open live capture (3D)
+    python scripts/nq_journal.py live --with-d                              # ... and arm D, after typing "send"
     python scripts/nq_journal.py preview                                    # forecast now: a preview, never stored
     python scripts/nq_journal.py llm-forecast --sessions 1 --estimate      # arms C and D: the plan and its cost
     python scripts/nq_journal.py llm-forecast --sessions 1                 # ... sent after typing "send"
@@ -40,7 +41,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15     # reconstructed view at 09:45
     python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
     python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the tolerances' calibration
-    python scripts/nq_journal.py timeliness --start 2026-10-05 --end 2026-10-16   # pre-open cutoffs vs the open
+    python scripts/nq_journal.py timeliness --start 2026-10-05 --end 2026-10-16   # estimated issuance times per cutoff
     python scripts/nq_journal.py rth-eval-status                            # both evaluations' health - never a score
     python scripts/nq_journal.py rth-eval-score --version rth_operational_v1   # one scoring, at the endpoint only
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
@@ -582,7 +583,10 @@ def cmd_experiment_list(conn, args):
 
 
 def cmd_live(conn, args):
-    """The live capture of one session (forecaster/live_capture.py): bars at the cutoff, live snapshot, both arms."""
+    """The live capture of one session (forecaster/live_capture.py): bars at the cutoff, live snapshot, arms A and B -
+    and with --with-d arm D (forecaster/live_synthesis.py), one Claude request confirmed by hand in a terminal or by
+    a dashboard approval (--approval)."""
+    from contextlib import nullcontext
     from forecaster import live_capture as live
     day = args.date or datetime.now(cal.NY_TZ).date().isoformat()
     try:
@@ -593,13 +597,21 @@ def cmd_live(conn, args):
     if not session.is_open:
         print(f"{day} is not a scheduled session; nothing to capture.")
         return 0
+    synthesis, manual = None, nullcontext()
+    if args.with_d:
+        synthesis = _live_synthesis(day, args)
+        if synthesis is None:
+            return 1
+        from forecaster import structure_llm as llm
+        manual = llm.manual_requests()
     try:
         app = live.connect_ib(Config.IB_HOST, Config.IB_PORT, Config.IB_CLIENT_ID + 1)
     except live.LiveCaptureError as e:
         print(e)
         return 1
     try:
-        result = live.capture(conn, app, day, args.profile)
+        with manual:
+            result = live.capture(conn, app, day, args.profile, synthesis=synthesis)
     except live.LiveCaptureError as e:
         print(e)
         return 1
@@ -610,7 +622,34 @@ def cmd_live(conn, args):
             print(f"{day} {args.profile}: capture {c['capture_id']} - {result['status']}")
             for line in live.timing(conn, c):
                 print(f"  {line}")
+    if result.get("delivered"):
+        d = result["delivered"]
+        print(f"  in force at the deadline: {'arm ' + d['arm'] if d['arm'] else 'nothing'} - {d['reason']}")
     return 0 if result["status"] == "issued" else 1
+
+
+def _live_synthesis(day, args):
+    """Arm D for a live capture once approved - one request at most - else None (nothing will be sent)."""
+    from forecaster import approvals
+    from forecaster.live_synthesis import LiveSynthesis
+    scope = {"command": "live-d", "sessions": [day], "profile": args.profile}
+    if args.approval:
+        approved, why = approvals.redeem(args.approval, scope)
+        print(why + ("" if approved else ". Nothing was sent."))
+        if approved is None or int(approved.get("max_requests") or 0) < 1:
+            return None
+    elif not confirmed_by_hand(f"Claude API ({preopen.LLM_MODEL}, effort {preopen.ARMS_EFFORT}): one arm D "
+                               f"synthesis of {day}'s live evidence ({args.profile}), sent after arms A and B if "
+                               f"before the deadline - roughly $0.12?"):
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        client.models.retrieve(preopen.LLM_MODEL)
+    except Exception as e:
+        print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
+        return None
+    return LiveSynthesis(client)
 
 
 def cmd_preview(conn, args):
@@ -852,12 +891,14 @@ def cmd_rth_eval_score(conn, args):
 
 
 def cmd_timeliness(conn, args):
-    """When a pre-open forecast at each candidate cutoff could actually have been issued on this feed, measured from
-    the bars' receipt times and the Auto runs' recorded ends (forecaster/timeliness.py) - nothing forecast, scored
-    or sent. Writes docs/reports/preopen_timeliness.md."""
+    """Estimated issuance times: when a pre-open forecast at each candidate cutoff could have been issued on this
+    feed, reconstructed from the bars' receipt times and the Auto runs' recorded ends (forecaster/timeliness.py) -
+    nothing forecast, scored or sent. Writes docs/reports/preopen_timeliness.md."""
     from forecaster import timeliness as tl
     days = [s.session_date.isoformat() for s in _sessions(args)]
-    text = tl.report(tl.measure(conn, days))
+    earlier = list(fc.ARM_HISTORY["D"][-1:])
+    reference = tl.spread(tl.d_generation_seconds(conn, earlier)) if earlier else None
+    text = tl.report(tl.measure(conn, days), dict(reference, version=earlier[0]) if reference else None)
     path = os.path.join(_PROJECT_ROOT, "docs", "reports", "preopen_timeliness.md")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -1012,6 +1053,9 @@ def main(argv=None):
     p = sub.add_parser("live", help="Capture, freeze and issue today's session live (run before the open)")
     p.add_argument("--date", help="Session date (default: today in New York)")
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p.add_argument("--with-d", action="store_true",
+                   help="Also arm D: one Claude synthesis request, confirmed by hand (or --approval)")
+    p.add_argument("--approval", default=None, help="A dashboard approval token (forecaster/approvals.py)")
     p = sub.add_parser("preview", help="Forecast now: the next session's forecast from the data stored so far "
                                        "(a preview, never stored in the journal)")
     p.add_argument("--out", default=None, help="Preview file (default: the one the dashboard reads)")

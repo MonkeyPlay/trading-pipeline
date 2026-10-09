@@ -822,7 +822,16 @@ def test_timeliness_is_measured_from_receipts_and_run_ends(journal):
     assert row["ready"] == stored(9, 25, 12)                   # the 09:15 bar (confirms 09:14) stored 10:12 after it began
     assert row["ab"] == stored(9, 26, 32) and row["ab_slack_s"] == 208
     assert row["d_slack_median_s"] == 208 - 27 and row["d_slack_worst_s"] == 208 - 30
+    assert row["d_slack_fastest_s"] == 208 - 25
     assert c15["ab_hits"] == (1, 2) and c15["missed"] == 1    # the other morning: stored a day later - a miss
+    assert c15["ab_slack_s"] == {"n": 1, "min": 208, "median": 208, "max": 208}
     assert res["candidates"]["09:29"]["ab_hits"] == (0, 2)
-    assert "a morning nothing was collected counts as a miss" in tl.report(res)
+    text = tl.report(res)
+    assert "a morning nothing was collected counts as a miss" in text
+    assert "Estimates, not demonstrated delivery" in text and "cannot establish reliable predictive performance" in text
+    assert "fastest 25 s, median 27 s, slowest 30 s (each: 25, 27, 30 s)" in text
+    # without a measured run of the current synthesis version there is no D estimate - an earlier one is shown aside
+    bare = tl.report(tl.measure(conn, [day], ends=ends, d_seconds=[]),
+                     {"version": "nq_synthesis_p1_v4", "n": 3, "min": 25.0, "median": 27.0, "max": 30.0})
+    assert "run measured yet, so no D estimate" in bare and "For reference only, not used above" in bare
 

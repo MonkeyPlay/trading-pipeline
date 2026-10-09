@@ -493,14 +493,15 @@ def write_report(manifest: Dict[str, Any], results: Dict[str, Any], directory: s
     lines += ["", f"## Primary: {primary['target']}", ""]
     for key, p in primary["paired"].items():
         ll, br, acc = p["log_loss"], p["brier"], p["accuracy"]
-        lines += [f"Paired {key} on {p['common']} common sessions (negative favours {key.split('-')[0]}):", ""]
-        lines += _table(["metric", arms[0], key.split("-")[0], "difference", f"{int(manifest['uncertainty']['interval'] * 100)}% interval", "n"], [
+        other, base = key.split("-")
+        lines += [f"Paired {key} on {p['common']} common sessions (negative favours {other}):", ""]
+        lines += _table(["metric", base, other, "difference", f"{int(manifest['uncertainty']['interval'] * 100)}% interval", "n"], [
             ["log loss (both finite)", _f(ll["base"]), _f(ll["other"]), _f(ll["diff"]), _ci(ll["interval"]),
              ll["both_finite"]],
             ["Brier sum", _f(br["base"]), _f(br["other"]), _f(br["diff"]), _ci(br["interval"]), p["common"]],
             ["accuracy (both classed)", _f(acc["base"]), _f(acc["other"]), "-", "-", acc["both_classed"]]])
         lines += ["", f"Infinite log loss (a realised class issued with probability 0): {ll['infinite_base_only']} "
-                      f"only in {arms[0]}, {ll['infinite_other_only']} only in {key.split('-')[0]}, "
+                      f"only in {base}, {ll['infinite_other_only']} only in {other}, "
                       f"{ll['infinite_both']} in both.", ""]
     lines += ["## Every target", ""]
     rows = []

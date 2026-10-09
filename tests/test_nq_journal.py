@@ -732,7 +732,12 @@ def test_the_d_only_design_registers_without_a_request_and_pairs_d_with_b(market
         "A": fc.PRIOR_VERSION, "B": fc.BASELINE_VERSION, "D": fc.SYNTHESIS_VERSION}
     assert manifest["pairs"] == [["D", "B"], ["D", "A"], ["B", "A"]] and "never a timeliness" in manifest["research_only"]
     assert "sends nothing" in manifest["controls"]
+    assert manifest["primary"] == {"target": "direction_15m", "metric": p1_d_research.BRIER}       # explicit
+    assert "absolute reduction of 0.01" in manifest["minimum_practical_improvement"] and "unhalved 0-2" in \
+        manifest["minimum_practical_improvement"]
+    assert "both paired mean differences, D - B and D - A" in manifest["decision"]
     results = ex.score_experiment(conn, p1_d_research.NAME)
+    assert results["primary"]["metric"].startswith("multiclass Brier score, the unhalved sum")
     assert set(results["primary"]["paired"]) == {"D-B", "D-A", "B-A"}
     assert results["primary"]["paired"]["B-A"]["common"] > 0 and results["primary"]["paired"]["D-B"]["common"] == 0
     cases = store.experiment_cases(conn, p1_d_research.NAME)
@@ -1335,3 +1340,217 @@ def test_a_live_capture_keeps_receipts_and_verifies_what_was_known(market):
                 conn.execute(sql)
     finally:
         save_trading_day(conn, NQ_CID, PREV, original)
+
+
+# --------------------------------------------------------------------------
+# Arm D live (forecaster/live_synthesis.py): simulated provider answers only
+# --------------------------------------------------------------------------
+
+def _live_run(algorithm, status="issued", ack_s=-5.0, issued_s=-10.0):
+    """A live run as stored, its issue and acknowledgement ``*_s`` seconds from the deadline (None: none)."""
+    due = datetime(2027, 6, 14, 13, 29, 50, tzinfo=UTC)
+    return {"run_id": algorithm, "algorithm_version": algorithm, "mode": "live", "lifecycle_status": status,
+            "deadline_at": due, "issued_at": None if issued_s is None or status != "issued" else
+            due + timedelta(seconds=issued_s),
+            "events": [] if ack_s is None else [{"event": "acknowledged", "at": due + timedelta(seconds=ack_s)}]}
+
+
+def test_the_forecast_in_force_is_the_first_timely_of_d_b_a():
+    from contracts import nq_forecast as fc
+    from forecaster.live_synthesis import delivered
+    d, b, a = fc.SYNTHESIS_VERSION, fc.BASELINE_VERSION, fc.PRIOR_VERSION
+    assert delivered([_live_run(b), _live_run(a), _live_run(d)]) == (_live_run(d), "D timely")
+    run, why = delivered([_live_run(b), _live_run(a), _live_run(d, "late", ack_s=None)])
+    assert run["algorithm_version"] == b and why == "B timely (D late)"
+    run, why = delivered([_live_run(b), _live_run(d, ack_s=+1.0)])        # issued in time, acknowledged after
+    assert run["algorithm_version"] == b and why == "B timely (D issued, not acknowledged by the deadline)"
+    run, why = delivered([_live_run(b, "unavailable", ack_s=None), _live_run(a)])
+    assert run["algorithm_version"] == a and why == "A timely (D not run; B unavailable)"
+    run, why = delivered([_live_run(b, "late", ack_s=None), _live_run(a, "late", ack_s=None),
+                          _live_run(d, "failed", ack_s=None)])
+    assert run is None and why == ("no live run issued and acknowledged by the deadline (D failed; B late; A late)")
+
+
+def _future_live(conn, day):
+    """A live snapshot of ``day``, a session after today (the database issues its runs in time): DAY's official
+    snapshot moved to it, and the session's contract."""
+    from database.queries import set_active_contracts
+    from tests.synthetic import NQ_CID
+    with conn:
+        row = conn.execute(
+            "INSERT INTO journal.snapshots (snapshot_id, symbol, contract_id, session_date, snapshot_version, "
+            "convention_version, cutoff_at, rth_open_at, data_mode, pit_availability_status, source_payload_hash, "
+            "payload, built_at) SELECT gen_random_uuid(), symbol, contract_id, %s::date, snapshot_version, "
+            "convention_version, cutoff_at + (%s::date - session_date) * interval '1 day', "
+            "rth_open_at + (%s::date - session_date) * interval '1 day', 'live_capture', 'unverified_historical', "
+            "%s, payload, clock_timestamp() FROM journal.snapshots WHERE session_date = %s AND snapshot_version = %s "
+            "AND data_mode <> 'live_capture' RETURNING snapshot_id;",
+            (day, day, day, f"live:{day}", DAY, defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version)).fetchone()
+    set_active_contracts(conn, "NQ", {day: NQ_CID}, "test")
+    return str(row[0])
+
+
+def _capture_d(conn, day, synthesis, at, manual=True):
+    from forecaster import live_capture as live
+    from forecaster import structure_llm as llm
+    from contextlib import nullcontext
+    clock = _Clock(cal.ny_instant(date.fromisoformat(day), at))
+    with llm.manual_requests() if manual else nullcontext():
+        return live.capture(conn, None, day, clock=clock, sleep=clock.sleep, synthesis=synthesis)
+
+
+def _steps(conn, result):
+    from database import journal_store as store
+    return [e["event"] for e in store.capture_events(conn, result["capture_id"])]
+
+
+def _d_run(conn, result):
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    return store.get_forecast_run(conn, next(r["run_id"] for r in result["runs"]
+                                             if r["algorithm"] == fc.SYNTHESIS_VERSION))
+
+
+@needs_db
+def test_live_arm_d_is_issued_by_the_deadline_from_arm_bs_live_evidence_and_never_sent_twice(market):
+    """The whole live path with a simulated answer: D's request is built from the live B run's evidence ids and
+    recorded before it is sent; the database issues D, the capture acknowledges it, and D is in force. A restart
+    sends nothing again; the stored run and its evidence cannot be changed."""
+    import re
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    from forecaster import live_synthesis as ls
+    from forecaster.forecast_service import timely, utc
+    conn = market[0]
+    day = "2027-06-14"
+    snapshot_id = _future_live(conn, day)
+    client = _ArmsClient()
+    result = _capture_d(conn, day, ls.LiveSynthesis(client), time(9, 29, 5))
+    assert len(client.calls) == 1 and result["synthesis"] == "issued" and result["snapshot_id"] == snapshot_id
+    assert _steps(conn, result)[-4:] == ["forecast", "synthesis_requested", "forecast", "delivered"]
+    assert [(r["algorithm"], r["timely"]) for r in result["runs"]] == [
+        (fc.BASELINE_VERSION, True), (fc.PRIOR_VERSION, True), (fc.SYNTHESIS_VERSION, True)]
+    d = _d_run(conn, result)
+    assert result["delivered"] == {"run_id": d["run_id"], "arm": "D", "reason": "D timely"}
+    assert ls.session_delivered(conn, day)[0]["run_id"] == d["run_id"]
+    assert d["mode"] == "live" and d["issue_policy"] == fc.ISSUE_POLICIES["live"] and timely(d)
+    assert utc(d["deadline_at"]) == ls.deadline(day) and utc(d["issued_at"]) <= ls.deadline(day)
+
+    # arm B's frozen live evidence, exactly: the same ids and the same evidence apart from the versions it names
+    b = store.get_forecast_run(conn, result["runs"][0]["run_id"])
+    assert all(d[k] == b[k] for k in ("snapshot_id", "annotation_id", "analogue_set_id"))
+    strip = lambda e: {k: v for k, v in e.items() if k not in ("versions", "attempt")}
+    assert strip(d["evidence"]) == strip(b["evidence"]) and d["evidence"]["mode"] == "live"
+    assert d["evidence"]["versions"]["algorithm"] == fc.SYNTHESIS_VERSION
+    request = conn.execute("SELECT * FROM journal.inference_requests WHERE request_id = %s;",
+                           (d["request_id"],)).fetchone()
+    assert request["request_hash"] == d["evidence"]["attempt"]["request_hash"]
+    assert str(request["snapshot_id"]) == snapshot_id and utc(request["created_at"]) <= utc(d["issued_at"])
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", client.calls[0]["messages"][0]["content"])     # date-blinded
+
+    # a restart: nothing is sent again, and D is still the forecast in force
+    again = _capture_d(conn, day, ls.LiveSynthesis(client), time(9, 29, 20))
+    assert len(client.calls) == 1 and again["synthesis"] == "issued"
+    assert "synthesis_skipped" in _steps(conn, again) and again["delivered"]["run_id"] == d["run_id"]
+    for sql in ("UPDATE journal.forecast_runs SET lifecycle_status = 'late'",
+                "UPDATE journal.forecast_evidence SET evidence = '{}'",
+                "DELETE FROM journal.forecast_predictions"):
+        with pytest.raises(psycopg.Error, match="append-only"):
+            conn.execute(sql)
+
+
+@needs_db
+def test_live_arm_d_falls_back_to_the_numerical_forecast(market):
+    """Simulated provider answers that do not make it: an invalid answer, an error, no approval, a passed
+    deadline, no answer at all. Each is recorded; arm B, issued in time, is the forecast in force."""
+    import threading
+    from contracts import nq_forecast as fc
+    from forecaster import live_synthesis as ls
+    from tests.test_llm_arms import synthesis_answer
+    conn = market[0]
+    requests = lambda snap: ls.requests_of(conn, snap)
+
+    def in_force(result):
+        return result["delivered"]["arm"], result["delivered"]["reason"]
+
+    _future_live(conn, "2027-06-15")                                    # an invalid answer: kept, never in force
+    bad = _capture_d(conn, "2027-06-15", ls.LiveSynthesis(_ArmsClient(lambda b: synthesis_answer(b, top_share="0.85"))),
+                     time(9, 29, 5))
+    assert bad["synthesis"] == "invalid" and in_force(bad) == ("B", "B timely (D invalid)")
+    assert "sum to" in _d_run(conn, bad)["failure_reason"] and _d_run(conn, bad)["evidence"]["attempt"]["raw_text"]
+
+    def error(client, params):
+        raise RuntimeError("overloaded")
+    _future_live(conn, "2027-06-16")                                    # the provider's error: a failed run
+    failed = _capture_d(conn, "2027-06-16", ls.LiveSynthesis(None, send=error), time(9, 29, 5))
+    assert failed["synthesis"] == "failed" and in_force(failed) == ("B", "B timely (D failed)")
+    assert _d_run(conn, failed)["failure_reason"] == "RuntimeError: overloaded"
+
+    client = _ArmsClient()
+    unapproved_snap = _future_live(conn, "2027-06-17")                  # not started by hand: nothing sent
+    unapproved = _capture_d(conn, "2027-06-17", ls.LiveSynthesis(client), time(9, 29, 5), manual=False)
+    assert client.calls == [] and requests(unapproved_snap) == [] and unapproved["synthesis"] == "skipped"
+    assert in_force(unapproved) == ("B", "B timely (D not run)") and "synthesis_skipped" in _steps(conn, unapproved)
+
+    passed_snap = _future_live(conn, "2027-06-21")                      # the deadline passed before the request
+    passed = _capture_d(conn, "2027-06-21", ls.LiveSynthesis(client), time(9, 29, 55))
+    assert client.calls == [] and requests(passed_snap) == [] and in_force(passed)[0] == "B"
+
+    release = threading.Event()
+
+    def silent(client, params):
+        release.wait(10)
+        raise RuntimeError("answered after the capture gave up")
+    _future_live(conn, "2027-06-22")                                    # no answer by the deadline, nor after
+    try:
+        silent_result = _capture_d(conn, "2027-06-22", ls.LiveSynthesis(None, send=silent, late_wait_s=0.3),
+                                   time(9, 29, 49, 800000))
+    finally:
+        release.set()
+    assert in_force(silent_result) == ("B", "B timely (D not run)")    # decided at the deadline, before D's run
+    assert _steps(conn, silent_result)[-3:] == ["synthesis_requested", "delivered", "forecast"]
+    assert silent_result["synthesis"] == "failed"
+    assert _d_run(conn, silent_result)["failure_reason"] == "no answer 0 s after the deadline"
+    assert ls.session_delivered(conn, "2027-06-22")[0]["algorithm_version"] == fc.BASELINE_VERSION
+
+
+@needs_db
+def test_a_late_live_synthesis_is_stored_late_and_never_in_force(market):
+    """DAY's live snapshot (its arms A and B already late): D's valid answer comes after the deadline was reached
+    on the capture's clock - the forecast in force is decided first (none: nothing was timely), then D is stored,
+    and the database makes it late: no issued_at, its answer kept, never timely."""
+    import time as _time
+    from forecaster import live_synthesis as ls
+    from forecaster import structure_llm as llm
+    conn = market[0]
+
+    def slow(client, params):
+        _time.sleep(0.5)
+        return llm.send(_ArmsClient(), params)
+    result = _capture_d(conn, DAY, ls.LiveSynthesis(None, send=slow, late_wait_s=10), time(9, 29, 49, 800000))
+    assert _steps(conn, result)[-3:] == ["synthesis_requested", "delivered", "forecast"]
+    assert result["delivered"] == {"run_id": None, "arm": None, "reason": "no live run issued and acknowledged by "
+                                   "the deadline (D not run; B late; A late)"}
+    d = _d_run(conn, result)
+    assert d["lifecycle_status"] == "late" and d["issued_at"] is None and "after the deadline" in d["failure_reason"]
+    assert d["evidence"]["attempt"]["answer"] and d["predictions"]
+    assert ls.session_delivered(conn, DAY)[0] is None
+
+
+@needs_db
+def test_live_arm_d_needs_an_approval_before_anything_starts(market, capsys):
+    """Without a valid approval (and no terminal here) the live command stops before connecting to IB."""
+    from scripts.nq_journal import main
+    conn = market[0]
+    before = conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d", "--approval", "0123abcd"]) == 1
+    assert "Nothing was sent" in capsys.readouterr().out
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d"]) == 1
+    assert "started by hand only" in capsys.readouterr().out
+    assert conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0] == before
+    assert store_captures(conn, "2027-06-23") == []
+
+
+def store_captures(conn, day):
+    from database import journal_store as store
+    return store.live_captures(conn, day, day)

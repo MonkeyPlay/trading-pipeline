@@ -26,6 +26,17 @@ Three controls stay separate:
   budget       each approval's own max_requests (the sessions it names); at the measured
                ~$0.12 a request, 60 sessions cost about $7 - a planning figure, not a
                reason to run it
+
+Deferred (2026-10-09): not registered and nothing spent. It would answer whether D adds
+statistical information to delayed snapshots; the agreed priority is whether D improves
+forecasts delivered before trading begins (the live A/B/D comparison, frozen once the
+measured timeliness supports a cutoff). Kept as a separate experiment.
+
+Decision rule, explicitly: the primary target is direction_15m and the primary score the
+multiclass Brier score in the experiments' convention - the unhalved sum over the
+classes, sum_c (p_c - [c realised])^2, from 0 to 2 per session. 0.01 is an absolute
+reduction of the mean on that scale (0.005 on the halved 0-1 scale), not a relative one.
+D is better only when it clears it against both B and A.
 """
 
 from __future__ import annotations
@@ -37,7 +48,12 @@ from contracts import nq_forecast as fc
 NAME = "p1_d_research_v1"
 ARMS = {"A": fc.PRIOR_VERSION, "B": fc.BASELINE_VERSION, "D": fc.SYNTHESIS_VERSION}
 PAIRS = [["D", "B"], ["D", "A"], ["B", "A"]]
-MINIMUM_IMPROVEMENT = "0.01"             # Brier sum, per target: a smaller mean gain is not practical
+PRIMARY_TARGET = "direction_15m"
+BRIER = ("multiclass Brier score, the unhalved sum over the classes sum_c (p_c - [c realised])^2, 0 to 2 per "
+         "session, lower is better")
+# An absolute reduction of the mean per-session Brier score on that unhalved scale - not relative, and twice the
+# 0.005 it would be on the halved 0-1 scale. A smaller mean gain is not practical.
+MINIMUM_IMPROVEMENT = "0.01"
 
 
 def manifest(start: str, end: str) -> Dict[str, Any]:
@@ -59,10 +75,17 @@ def manifest(start: str, end: str) -> Dict[str, Any]:
                             "already use, so no numerical input is D's alone",
         "availability": "every scheduled session in [from, to] is a case: no run, failed, invalid and unavailable "
                         "are counted per arm, never dropped",
-        "minimum_practical_improvement": f"Brier sum {MINIMUM_IMPROVEMENT} per target",
-        "decision": "D improves on B for a target only when the D - B mean Brier is at most -" + MINIMUM_IMPROVEMENT
-                    + " and its whole interval lies below zero; otherwise: no sufficiently reliable improvement "
-                      "was established",
+        "primary": {"target": PRIMARY_TARGET, "metric": BRIER},
+        "companions": ["multiclass log loss (natural log), lower is better",
+                       "accuracy of the issued class (ambiguous predictions counted apart)",
+                       "class-wise counts, mean probability of the realised class and accuracy"],
+        "minimum_practical_improvement": f"an absolute reduction of {MINIMUM_IMPROVEMENT} in the mean per-session "
+                                         "Brier score on the unhalved 0-2 scale (0.005 on the halved 0-1 scale); "
+                                         "not a relative reduction",
+        "decision": f"on the primary target {PRIMARY_TARGET}, D is better only when both paired mean differences, "
+                    f"D - B and D - A, are at most -{MINIMUM_IMPROVEMENT} on that scale and each whole interval "
+                    "lies below zero; otherwise: no sufficiently reliable improvement was established. Secondary "
+                    "targets are reported, never decisive",
         "endpoint": "scored once, at 60 sessions with an issued D run or on the manifest's end date",
         "controls": "registering sends nothing, schedules nothing and holds no budget; D runs only on a person's "
                     "approval, each with its own max_requests",
