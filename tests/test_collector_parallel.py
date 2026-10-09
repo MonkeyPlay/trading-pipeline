@@ -179,7 +179,10 @@ def test_the_journal_uses_the_reload_made_beside_the_collection_and_redoes_a_fai
     calls = []
     monkeypatch.setattr(collector, "refresh_events", lambda dsn: calls.append("reload"))
     monkeypatch.setattr(collector, "get_db_connection", lambda dsn: Conn())
-    monkeypatch.setattr(journal, "catch_up", lambda conn: calls.append("catch_up"))
+    monkeypatch.setattr(journal, "catch_up", lambda conn, profile=None: calls.append(
+        "catch_up" if profile is None else f"catch_up {profile}"))
+    started = set()                                      # candidate profiles whose pool exists
+    monkeypatch.setattr(journal, "pool_started", lambda conn, profile: profile in started)
 
     class Reload:
         def __init__(self, ok):
@@ -193,6 +196,9 @@ def test_the_journal_uses_the_reload_made_beside_the_collection_and_redoes_a_fai
     assert collector.update_journal("dsn", Reload(False)) and calls == ["reload", "catch_up"]   # redone in line
     calls.clear()
     assert collector.update_journal("dsn") and calls == ["reload", "catch_up"]                   # as before
+    calls.clear()
+    started.add("candidate_0915")                        # once its pool is started, Auto keeps it current too
+    assert collector.update_journal("dsn", Reload(True)) and calls == ["catch_up", "catch_up candidate_0915"]
 
 
 def test_the_reload_thread_reports_a_failure_instead_of_raising(monkeypatch):

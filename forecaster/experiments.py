@@ -136,7 +136,8 @@ def register_experiment(conn, manifest: Dict[str, Any]) -> bool:
     registered; a different manifest under the same name raises journal_store.VersionConflict."""
     for version in [manifest["label_version"], manifest["snapshot_version"], manifest["convention_version"],
                     manifest["annotation_protocol"], manifest["matcher_version"], manifest["issue_policy"],
-                    manifest["forecast_schema"]] + [a["algorithm"] for a in manifest["arms"].values()]:
+                    manifest["forecast_schema"]] + [v for a in manifest["arms"].values()
+                                                    for v in a.get("delivered") or [a["algorithm"]]]:
         if store.get_version(conn, version) is None:
             raise ValueError(f"{version} is not registered: run the journal (catch-up) first")
     return store.register_version(conn, defs._record(manifest["name"], "experiment", manifest))
@@ -163,24 +164,42 @@ def official_run(runs: Sequence[Dict[str, Any]], rule: str) -> Optional[Dict[str
     return runs[-1] if rule == "latest" else runs[0]
 
 
+def delivered_run(runs: Sequence[Dict[str, Any]], order: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """The forecast in force at the deadline: the first timely run in ``order`` (algorithm versions), else None."""
+    from forecaster.forecast_service import timely
+    for algorithm in order:
+        on_time = [r for r in runs if r["algorithm_version"] == algorithm and timely(r)]
+        if on_time:
+            return on_time[0]
+    return None
+
+
 def build_cases(conn, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Per scheduled session and arm: the official run and the outcome revision it is scored against."""
+    """Per scheduled session and arm: the official run and the outcome revision it is scored against. An arm with a
+    ``delivered`` order (live only) is the policy in force: the first timely run of those algorithms."""
     s, rule = manifest["sessions"], manifest["official_run"]["rule"]
     history = store.outcome_history(conn, manifest["label_version"])
     by_arm: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     for arm, spec in manifest["arms"].items():
         days: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        for run in store.issued_runs(conn, s["from"], s["to"], manifest["profile"], manifest["mode"],
-                                     spec["algorithm"], manifest["label_version"]):
-            days[run["session_date"]].append(run)
+        for algorithm in spec.get("delivered") or [spec["algorithm"]]:
+            for run in store.issued_runs(conn, s["from"], s["to"], manifest["profile"], manifest["mode"],
+                                         algorithm, manifest["label_version"]):
+                days[run["session_date"]].append(run)
         by_arm[arm] = days
+    excluded = set((manifest.get("excluded_sessions") or {}).get("sessions") or [])
     cases = []
     for session in cal.sessions_between(s["from"], s["to"]):
         day = session.session_date.isoformat()
+        if day in excluded:
+            continue
         for arm, spec in manifest["arms"].items():
-            run = official_run(by_arm[arm].get(day, []), rule)
+            order = spec.get("delivered")
+            run = delivered_run(by_arm[arm].get(day, []), order) if order else official_run(by_arm[arm].get(day, []),
+                                                                                              rule)
             case = {"session_date": day, "arm": arm, "run_id": None, "snapshot_id": None, "outcome_revision": None,
-                    "status": "no_run", "detail": f"no issued {spec['algorithm']} run ({rule})"}
+                    "status": "no_run", "detail": (f"no timely run of {', '.join(order)}" if order else
+                                                   f"no issued {spec['algorithm']} run ({rule})")}
             if run is not None:
                 revisions = history.get(run["snapshot_id"]) or []
                 case.update(run_id=run["run_id"], snapshot_id=run["snapshot_id"])
@@ -392,9 +411,13 @@ def score_experiment(conn, name: str) -> Dict[str, Any]:
             by_arm[arm] = scores
             entry["arms"][arm] = arm_summary(list(scores.values()), [runs[arm][d] for d in scores],
                                              manifest["arms"][arm]["algorithm"] == fc.BASELINE_VERSION)
-        # the manifest's own pairs (arm minus base), else each arm against the first - as every earlier manifest
+        # the manifest's own pairs (arm minus base), else each arm against the first - as every earlier manifest;
+        # a pair of two ``common_arms`` only on the sessions all of them scored
+        common_arms = manifest.get("common_arms") or []
+        all_scored = [d for d in days if all(by_arm[a].get(d, {}).get("status") == "scored" for a in common_arms)]
         for arm, base in manifest.get("pairs") or [(a, arms[0]) for a in arms[1:]]:
-            entry["paired"][f"{arm}-{base}"] = paired(by_arm[base], by_arm[arm], days, manifest["uncertainty"])
+            use = all_scored if arm in common_arms and base in common_arms else days
+            entry["paired"][f"{arm}-{base}"] = paired(by_arm[base], by_arm[arm], use, manifest["uncertainty"])
         vocab = list(defs.TARGETS[target]["labels"])
         common = [d for d in days if all(by_arm[a].get(d, {}).get("status") == "scored" for a in arms)]
         entry["classes"] = []
@@ -425,6 +448,11 @@ def score_experiment(conn, name: str) -> Dict[str, Any]:
     results["volatility"] = breakdown(scored, _groups(days, tercile))
     results["reliability"] = {arm: reliability(scored[arm], days, list(defs.TARGETS[primary]["labels"]))
                               for arm in arms}
+    if isinstance(manifest.get("availability"), dict):                  # a live comparison's requirement
+        from forecaster.live_availability import availability
+        results["availability"] = availability(conn, manifest["sessions"]["from"], manifest["sessions"]["to"],
+                                               manifest["profile"], manifest["availability"]["requirement"],
+                                               (manifest.get("excluded_sessions") or {}).get("sessions") or ())
     results["_case_scores"] = {t: {a: s for a, s in v.items()} for t, v in per_target_scores.items()}
     return results
 
@@ -489,6 +517,9 @@ def write_report(manifest: Dict[str, Any], results: Dict[str, Any], directory: s
              f"- **Profitability:** {manifest['profitability']}.", "", "## Coverage", ""]
     lines += _table(["arm"] + ["case", "no_run", "no_outcome"],
                     [[a] + [results["cases"][a].get(k, 0) for k in ("case", "no_run", "no_outcome")] for a in arms])
+    if results.get("availability"):
+        from forecaster.live_availability import report as availability_report
+        lines += ["", availability_report(results["availability"]).rstrip()]
     primary = results["primary"]
     lines += ["", f"## Primary: {primary['target']}", ""]
     for key, p in primary["paired"].items():

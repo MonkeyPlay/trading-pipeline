@@ -727,11 +727,15 @@ def experiment_results(conn: Database, experiment: str) -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 def start_live_capture(conn: Database, session_date: str, profile: str, contract_id: Optional[int],
-                       code_revision: str) -> str:
+                       code_revision: str, issue_policy: Optional[str] = None, wait_limit_s: Optional[int] = None,
+                       reserve_s: Optional[int] = None, with_d: Optional[bool] = None) -> str:
+    """Records a capture as it starts, with its settings (migration 0028); returns its id."""
     capture_id = str(uuid.uuid4())
     with conn:
-        conn.execute("INSERT INTO journal.live_captures (capture_id, session_date, profile, contract_id, code_revision) "
-                     "VALUES (%s, %s, %s, %s, %s);", (capture_id, session_date, profile, contract_id, code_revision))
+        conn.execute("INSERT INTO journal.live_captures (capture_id, session_date, profile, contract_id, code_revision, "
+                     "issue_policy, wait_limit_s, reserve_s, with_d) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
+                     (capture_id, session_date, profile, contract_id, code_revision, issue_policy, wait_limit_s,
+                      reserve_s, with_d))
     return capture_id
 
 

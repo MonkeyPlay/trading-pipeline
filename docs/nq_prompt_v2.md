@@ -728,8 +728,9 @@ no run id, no issue policy, no place in an experiment.
 ### Live capture (3D)
 
 [forecaster/live_capture.py](../forecaster/live_capture.py), issue policy
-`nq_issue_live_v2`, migration 0016. `python scripts/nq_journal.py live`, scheduled
-before the open on trading days, does for today's session:
+`nq_issue_live_v3` (v2 until 2026-10-09: a fixed 20 s wait), migrations 0016 and 0028.
+`python scripts/nq_journal.py live`, started before the cutoff on trading days, does for
+today's session:
 
 1. a capture row (`journal.live_captures`); every step after it is an event stamped
    by the database clock (`journal.live_capture_events`), so `live-report` shows the
@@ -739,9 +740,15 @@ before the open on trading days, does for today's session:
    from later bars) and carries on; after the open the database refuses any new
    live snapshot (`built_at < rth_open_at`);
 3. one second after the cutoff it asks IB for the session's 1m bars from the
-   overnight start, every 2 seconds until the bar ending at the cutoff is among them,
-   at most 20 seconds after it - age-0 freshness, not the 5-minute allowance of a
-   historical snapshot; without it the capture is `stale` and nothing is frozen;
+   overnight start - every 2 seconds for the first 30, then every 15 - until the bar
+   ending at the cutoff is among them, at most the capture's data-wait limit after
+   it (`--wait-minutes`; 20 seconds by default). The wait plus a reserve for issuing
+   (10 s for A and B, 90 s with D) must end by the 09:29:50 ET deadline, or the
+   capture is refused before it starts. Without the bar the capture is `stale` - a
+   missed opportunity, recorded with the newest bar seen - and nothing is frozen.
+   However long the wait, the evidence ends at the cutoff: later bars are stored with
+   receipts, never used. On this feed (bars about 11 minutes late) that means the
+   `candidate_0915` profile with a wait of about 13 minutes;
 4. it stores the day's bars through the collector's write path (the last minutes not
    completed, so the regular collector settles the day later) and a receipt per bar
    complete when received (`journal.bar_receipts`, database time);

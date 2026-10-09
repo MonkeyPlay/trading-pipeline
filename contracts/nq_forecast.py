@@ -60,11 +60,16 @@ SYNTHESIS_MAX_TOKENS = 64000                     # thinking included; the reques
 SYNTHESIS_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
                                 "forecast_synthesis_v5.md")
 # nq_issue_live_v1 (registered 2026-10-04) never issued a run; v2 adds the capture rules of 3D.
-ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v2"}
+ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v3"}
 LIVE_DEADLINE_ET = time(9, 29, 50)
 LIVE_FIRST_REQUEST_S = 1          # the first bar request this many seconds after the cutoff
-LIVE_RETRY_S = 2                  # then every this many seconds
-LIVE_FRESHNESS_BUDGET_S = 20      # until the bar ending at the cutoff arrives, at most this long after it
+LIVE_RETRY_S = 2                  # then every this many seconds for the first LIVE_FAST_S seconds,
+LIVE_FAST_S = 30
+LIVE_SLOW_RETRY_S = 15            # then every this many (a wait of minutes stays well inside IB's request pacing)
+LIVE_DEFAULT_WAIT_S = 20          # the data-wait limit after the cutoff when a capture is given none
+# Kept before the deadline for issuing once the data are in: arms A and B; with arm D (25-30 s at effort medium
+# for v4; v5 unmeasured). The data wait plus the reserve must end by the deadline, or the capture is refused.
+LIVE_RESERVE_S = {"AB": 10, "D": 90}
 
 LIFECYCLE_STATUSES = ("issued", "unavailable", "late", "failed", "invalid")
 PREDICTION_STATUSES = ("predicted", "ambiguous_prediction", "unavailable")
@@ -352,13 +357,22 @@ ISSUE_POLICY_DEFINITIONS = {
         "mode": "live",
         "snapshot": "a live_capture snapshot only",
         "deadline_et": LIVE_DEADLINE_ET.strftime("%H:%M:%S"),
-        "capture": f"a scheduled job (forecaster/live_capture.py) requests the session's 1m bars from the overnight "
-                   f"start to the cutoff from IB {LIVE_FIRST_REQUEST_S} s after the cutoff and every {LIVE_RETRY_S} s "
-                   f"until the bar ending at the cutoff is among them, at most {LIVE_FRESHNESS_BUDGET_S} s after the "
-                   f"cutoff; every bar is stored as received with the database time (journal.bar_receipts)",
-        "freshness": "the bar ending at the cutoff must have been received (age 0 - not the 5-minute allowance of "
-                     "a historical snapshot); otherwise no live snapshot is frozen, never from older or "
-                     "later-arriving bars",
+        "capture": f"a job started before the cutoff (forecaster/live_capture.py) requests the session's 1m bars from "
+                   f"the overnight start from IB {LIVE_FIRST_REQUEST_S} s after the cutoff, every {LIVE_RETRY_S} s "
+                   f"for the first {LIVE_FAST_S} s and every {LIVE_SLOW_RETRY_S} s after, until the bar ending at "
+                   f"the cutoff is among them or the capture's data-wait limit has passed; every bar is stored as "
+                   f"received with the database time (journal.bar_receipts)",
+        "data_wait": f"set per capture and recorded with it (journal.live_captures.wait_limit_s; {LIVE_DEFAULT_WAIT_S}"
+                     f" s when none is given); the wait plus the reserve for issuing - {LIVE_RESERVE_S['AB']} s for "
+                     f"arms A and B, {LIVE_RESERVE_S['D']} s with arm D - must end by the deadline, or the capture "
+                     f"is refused before it starts",
+        "evidence_cutoff": "the profile's cutoff, however long the wait: bars that arrive during it are stored with "
+                           "their receipts but never enter the snapshot, whose bars, indicators and windows all end "
+                           "at the cutoff",
+        "freshness": "the bar ending at the cutoff must have been received; otherwise no live snapshot is frozen, "
+                     "never from older bars",
+        "missed": "a capture whose cutoff bar has not arrived within its data-wait limit is recorded stale - a "
+                  "missed opportunity, with the newest bar received and the wait it used",
         "verification": "the live snapshot is point-in-time verified when every overnight bar it uses equals a "
                         "receipt of the capture received before it was frozen, every earlier session it reads was "
                         "stored before the cutoff (session_days.fetched_at) and every event and coverage row it "
@@ -367,7 +381,12 @@ ISSUE_POLICY_DEFINITIONS = {
         "restart": "a capture of a session that already has a live snapshot reuses it and carries on "
                    "(annotation, analogues, forecasts are idempotent); after the open no live snapshot can be "
                    "frozen (the database refuses)",
-        "arms": "both registered algorithms are issued from the same evidence, the baseline first",
+        "arms": "arms A and B are issued from the same evidence, the baseline first; arm D only when approved by "
+                "hand (forecaster/live_synthesis.py): one request per live snapshot from B's frozen evidence, "
+                "recorded before it is sent, awaited until the deadline",
+        "delivered": "at the deadline the forecast in force is recorded: the first timely run of D, B, A - or none",
+        "late_result": "a D answer after the deadline is stored late for at most "
+                       "live_synthesis.LATE_WAIT_S and never replaces the forecast in force",
         "timing": "every capture step is an event stamped by the database clock (journal.live_capture_events)",
         "issued": "only when the database server clock at insertion is at or before the deadline; a later "
                   "insertion is recorded as late, with no issued_at - a client timestamp cannot change either",
@@ -375,6 +394,8 @@ ISSUE_POLICY_DEFINITIONS = {
                            "forecast is issued and acknowledged by the deadline",
         "fallback": "a late, failed or invalid attempt stays in the ledger; a fallback issues under its own "
                     "algorithm version, never as another arm",
+        "supersedes": "nq_issue_live_v2: a fixed 20 s wait for the cutoff bar and no arm D - on a feed that "
+                      "delivers bars about 11 minutes late every capture was stale; no live run was issued under it",
         "revision": "as for historical_replay",
     },
 }

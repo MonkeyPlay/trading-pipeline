@@ -1071,16 +1071,22 @@ def update_journal(dsn, refresh: Optional[EventsRefresh] = None) -> bool:
     done by ``refresh`` when it ran beside the collection), then a snapshot and
     structure annotation for every session the journal lacks whose pre-open is over
     and stored - the day's too - and its outcome once final (forecaster/journal.py).
+    A candidate profile (contracts/nq_prompt_v2.CANDIDATE_PROFILES) is kept current the
+    same way once its pool has been started by hand; until then it is left alone.
     A session whose snapshot cannot be built is logged and retried next run. False
     only when the journal update itself failed; the collected bars are stored either way.
     """
     try:
-        from forecaster.journal import catch_up
+        from contracts import nq_prompt_v2 as defs
+        from forecaster.journal import catch_up, pool_started
         if refresh is None or not refresh.finish():
             refresh_events(dsn)
         conn = get_db_connection(dsn)
         try:
             catch_up(conn)
+            for profile in defs.CANDIDATE_PROFILES:
+                if pool_started(conn, profile):
+                    catch_up(conn, profile)
         finally:
             conn.close()
         return True

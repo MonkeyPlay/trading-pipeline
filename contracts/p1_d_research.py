@@ -36,7 +36,9 @@ Decision rule, explicitly: the primary target is direction_15m and the primary s
 multiclass Brier score in the experiments' convention - the unhalved sum over the
 classes, sum_c (p_c - [c realised])^2, from 0 to 2 per session. 0.01 is an absolute
 reduction of the mean on that scale (0.005 on the halved 0-1 scale), not a relative one.
-D is better only when it clears it against both B and A.
+D is better only when it clears it against both B and A, each interval wholly below zero:
+evidence of some improvement with a point estimate at the threshold - not that the true
+improvement is at least 0.01.
 """
 
 from __future__ import annotations
@@ -84,8 +86,9 @@ def manifest(start: str, end: str) -> Dict[str, Any]:
                                          "not a relative reduction",
         "decision": f"on the primary target {PRIMARY_TARGET}, D is better only when both paired mean differences, "
                     f"D - B and D - A, are at most -{MINIMUM_IMPROVEMENT} on that scale and each whole interval "
-                    "lies below zero; otherwise: no sufficiently reliable improvement was established. Secondary "
-                    "targets are reported, never decisive",
+                    "lies below zero - evidence of some improvement with a point estimate at the chosen threshold, "
+                    f"not that the true improvement is at least {MINIMUM_IMPROVEMENT}; otherwise: no sufficiently "
+                    "reliable improvement was established. Secondary targets are reported, never decisive",
         "endpoint": "scored once, at 60 sessions with an issued D run or on the manifest's end date",
         "controls": "registering sends nothing, schedules nothing and holds no budget; D runs only on a person's "
                     "approval, each with its own max_requests",

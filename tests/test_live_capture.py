@@ -1,5 +1,5 @@
 # tests/test_live_capture.py
-"""The live capture's freshness rule (forecaster/live_capture.fresh_bars, issue policy nq_issue_live_v2) with a fake
+"""The live capture's freshness rule (forecaster/live_capture.fresh_bars, issue policy nq_issue_live_v3) with a fake
 IB connection and a fake clock - no database, no network. The stored capture is tested in tests/test_nq_journal.py."""
 
 from datetime import date, time, timedelta
@@ -59,11 +59,36 @@ def test_it_waits_for_the_cutoff_and_retries_until_the_last_bar_arrives():
     assert ib.calls[0][1] == f"{seconds} S"                                  # from the overnight start
 
 
-def test_without_the_last_bar_within_the_budget_the_capture_is_stale():
+def test_without_the_last_bar_within_the_wait_the_capture_is_stale():
     bars, ib, clock, _ = run(arrives=None)
     assert bars is None
-    assert all(end - CUTOFF <= timedelta(seconds=fc.LIVE_FRESHNESS_BUDGET_S) for end, _ in ib.calls)   # within it
-    assert len(ib.calls) == 1 + (fc.LIVE_FRESHNESS_BUDGET_S - fc.LIVE_FIRST_REQUEST_S) // fc.LIVE_RETRY_S
+    limit = timedelta(seconds=fc.LIVE_DEFAULT_WAIT_S)
+    assert all(end - CUTOFF <= limit for end, _ in ib.calls) and ib.calls[-1][0] - CUTOFF == limit  # last at it
+    assert len(ib.calls) == 2 + (fc.LIVE_DEFAULT_WAIT_S - fc.LIVE_FIRST_REQUEST_S) // fc.LIVE_RETRY_S
+
+
+def test_a_long_wait_retries_slowly_and_reports_the_newest_bar():
+    """A 13-minute wait on a feed about 11 minutes late: every 2 s for the first 30 s, then every 15 s, until the
+    bar ending at the cutoff arrives; each attempt records the newest bar it returned."""
+    clock = Clock(CUTOFF - timedelta(minutes=5))
+    events = []
+
+    class LateIB(FakeIB):
+        def fetch_historical_bars(self, contract, end, duration, what_to_show=None):
+            self.calls.append((end, duration))
+            newest = end - timedelta(minutes=11, seconds=30)           # bars appear 11.5 minutes after they start
+            return [bar(m) for m in range(30, -5, -1) if CUTOFF - timedelta(minutes=m) <= newest]
+
+    ib = LateIB(None)
+    out = fresh_bars(ib, {}, SESSION, CUTOFF, "TRADES", clock, clock.sleep, lambda e, **d: events.append((e, d)),
+                     wait_s=13 * 60)
+    assert out is not None and out[-1]["timestamp_utc"] == "2026-06-12 13:28:00"
+    gaps = [(b[0] - a[0]).total_seconds() for a, b in zip(ib.calls, ib.calls[1:])]
+    fast = 1 + (fc.LIVE_FAST_S - fc.LIVE_FIRST_REQUEST_S) // fc.LIVE_RETRY_S
+    assert set(gaps[:fast - 1]) == {fc.LIVE_RETRY_S} and set(gaps[fast:]) == {fc.LIVE_SLOW_RETRY_S}
+    assert ib.calls[-1][0] - CUTOFF < timedelta(minutes=11, seconds=45)    # found within one slow retry
+    assert events[0][1]["newest"] < "2026-06-12 13:28:00" and events[-1][1]["newest"] == "2026-06-12 13:28:00"
+    assert len(ib.calls) < 60                                            # well inside IB's request pacing
 
 
 def test_a_late_start_requests_at_once():

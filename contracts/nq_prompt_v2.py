@@ -87,8 +87,17 @@ PROFILES: Dict[str, Profile] = {
         "Operational profile for live runs that need the extra time: bars complete by 09:27:00 ET (last 1m "
         "bar 09:26, last 2m bar 09:24-09:26). Its ATRs, thresholds and labels are not comparable with "
         "research_0929."),
+    "candidate_0915": Profile(
+        "candidate_0915", time(9, 15), "nq_evidence_v5_c0915",
+        "Timeliness candidate: bars complete by 09:15:00 ET (last 1m bar 09:14, last 2m bar 09:12-09:14), so a "
+        "live forecast can be issued before the open on a feed that delivers bars about 11 minutes late. The "
+        "evidence ends at 09:15 however late its bars arrive. Its ATRs, thresholds and labels are not "
+        "comparable with research_0929."),
 }
 DEFAULT_PROFILE = "research_0929"
+# Profiles whose pools Auto keeps current beside the default once they have one (start a pool with
+# nq_journal.py backfill --profile ..., then catch-up --profile ...).
+CANDIDATE_PROFILES = ("candidate_0915",)
 
 DATA_MODES = ("live_capture", "historical_reconstruction", "historical_as_observed")
 PIT_STATUSES = ("verified", "unverified_historical")

@@ -1371,9 +1371,21 @@ def test_the_forecast_in_force_is_the_first_timely_of_d_b_a():
     assert run is None and why == ("no live run issued and acknowledged by the deadline (D failed; B late; A late)")
 
 
-def _future_live(conn, day):
-    """A live snapshot of ``day``, a session after today (the database issues its runs in time): DAY's official
-    snapshot moved to it, and the session's contract."""
+CANDIDATE = "candidate_0915"
+
+
+@pytest.fixture(scope="module")
+def candidate(market):
+    """The 09:15 candidate's pool, built as Auto keeps it once started (journal.catch_up for the profile)."""
+    from forecaster.journal import catch_up
+    conn = market[0]
+    catch_up(conn, CANDIDATE, now=cal.ny_instant(date.fromisoformat(DAY), time(20, 0)))
+    return conn
+
+
+def _live_copy(conn, day, built_at=None, profile=CANDIDATE):
+    """A live snapshot of ``day``: DAY's historical ``profile`` snapshot moved to it, built ``built_at`` (default now:
+    a session after today, whose runs the database then issues in time) - and the session's contract."""
     from database.queries import set_active_contracts
     from tests.synthetic import NQ_CID
     with conn:
@@ -1383,20 +1395,21 @@ def _future_live(conn, day):
             "payload, built_at) SELECT gen_random_uuid(), symbol, contract_id, %s::date, snapshot_version, "
             "convention_version, cutoff_at + (%s::date - session_date) * interval '1 day', "
             "rth_open_at + (%s::date - session_date) * interval '1 day', 'live_capture', 'unverified_historical', "
-            "%s, payload, clock_timestamp() FROM journal.snapshots WHERE session_date = %s AND snapshot_version = %s "
-            "AND data_mode <> 'live_capture' RETURNING snapshot_id;",
-            (day, day, day, f"live:{day}", DAY, defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version)).fetchone()
+            "%s, payload, COALESCE(%s::timestamptz, clock_timestamp()) FROM journal.snapshots WHERE session_date = %s "
+            "AND snapshot_version = %s AND data_mode <> 'live_capture' RETURNING snapshot_id;",
+            (day, day, day, f"live:{profile}:{day}", built_at, DAY,
+             defs.PROFILES[profile].snapshot_version)).fetchone()
     set_active_contracts(conn, "NQ", {day: NQ_CID}, "test")
     return str(row[0])
 
 
-def _capture_d(conn, day, synthesis, at, manual=True):
+def _capture_d(conn, day, synthesis, at, manual=True, **kw):
     from forecaster import live_capture as live
     from forecaster import structure_llm as llm
     from contextlib import nullcontext
     clock = _Clock(cal.ny_instant(date.fromisoformat(day), at))
     with llm.manual_requests() if manual else nullcontext():
-        return live.capture(conn, None, day, clock=clock, sleep=clock.sleep, synthesis=synthesis)
+        return live.capture(conn, None, day, CANDIDATE, clock=clock, sleep=clock.sleep, synthesis=synthesis, **kw)
 
 
 def _steps(conn, result):
@@ -1411,28 +1424,35 @@ def _d_run(conn, result):
                                              if r["algorithm"] == fc.SYNTHESIS_VERSION))
 
 
+def _capture_row(conn, capture_id):
+    return conn.execute("SELECT * FROM journal.live_captures WHERE capture_id = %s;", (capture_id,)).fetchone()
+
+
 @needs_db
-def test_live_arm_d_is_issued_by_the_deadline_from_arm_bs_live_evidence_and_never_sent_twice(market):
-    """The whole live path with a simulated answer: D's request is built from the live B run's evidence ids and
-    recorded before it is sent; the database issues D, the capture acknowledges it, and D is in force. A restart
-    sends nothing again; the stored run and its evidence cannot be changed."""
+def test_live_arm_d_is_issued_by_the_deadline_from_arm_bs_live_evidence_and_never_sent_twice(candidate):
+    """The whole live path on the 09:15 candidate with a simulated answer: D's request is built from the live B
+    run's evidence ids and recorded before it is sent; the database issues D, the capture acknowledges it, and D is
+    in force. A restart sends nothing again; the stored run and its evidence cannot be changed."""
     import re
     from contracts import nq_forecast as fc
     from database import journal_store as store
     from forecaster import live_synthesis as ls
     from forecaster.forecast_service import timely, utc
-    conn = market[0]
+    conn = candidate
     day = "2027-06-14"
-    snapshot_id = _future_live(conn, day)
+    snapshot_id = _live_copy(conn, day)
     client = _ArmsClient()
     result = _capture_d(conn, day, ls.LiveSynthesis(client), time(9, 29, 5))
     assert len(client.calls) == 1 and result["synthesis"] == "issued" and result["snapshot_id"] == snapshot_id
+    row = _capture_row(conn, result["capture_id"])
+    assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"], row["with_d"]) == (
+        fc.ISSUE_POLICIES["live"], fc.LIVE_DEFAULT_WAIT_S, fc.LIVE_RESERVE_S["D"], True)
     assert _steps(conn, result)[-4:] == ["forecast", "synthesis_requested", "forecast", "delivered"]
     assert [(r["algorithm"], r["timely"]) for r in result["runs"]] == [
         (fc.BASELINE_VERSION, True), (fc.PRIOR_VERSION, True), (fc.SYNTHESIS_VERSION, True)]
     d = _d_run(conn, result)
     assert result["delivered"] == {"run_id": d["run_id"], "arm": "D", "reason": "D timely"}
-    assert ls.session_delivered(conn, day)[0]["run_id"] == d["run_id"]
+    assert ls.session_delivered(conn, day, CANDIDATE)[0]["run_id"] == d["run_id"]
     assert d["mode"] == "live" and d["issue_policy"] == fc.ISSUE_POLICIES["live"] and timely(d)
     assert utc(d["deadline_at"]) == ls.deadline(day) and utc(d["issued_at"]) <= ls.deadline(day)
 
@@ -1460,20 +1480,20 @@ def test_live_arm_d_is_issued_by_the_deadline_from_arm_bs_live_evidence_and_neve
 
 
 @needs_db
-def test_live_arm_d_falls_back_to_the_numerical_forecast(market):
+def test_live_arm_d_falls_back_to_the_numerical_forecast(candidate):
     """Simulated provider answers that do not make it: an invalid answer, an error, no approval, a passed
     deadline, no answer at all. Each is recorded; arm B, issued in time, is the forecast in force."""
     import threading
     from contracts import nq_forecast as fc
     from forecaster import live_synthesis as ls
     from tests.test_llm_arms import synthesis_answer
-    conn = market[0]
+    conn = candidate
     requests = lambda snap: ls.requests_of(conn, snap)
 
     def in_force(result):
         return result["delivered"]["arm"], result["delivered"]["reason"]
 
-    _future_live(conn, "2027-06-15")                                    # an invalid answer: kept, never in force
+    _live_copy(conn, "2027-06-15")                                      # an invalid answer: kept, never in force
     bad = _capture_d(conn, "2027-06-15", ls.LiveSynthesis(_ArmsClient(lambda b: synthesis_answer(b, top_share="0.85"))),
                      time(9, 29, 5))
     assert bad["synthesis"] == "invalid" and in_force(bad) == ("B", "B timely (D invalid)")
@@ -1481,18 +1501,18 @@ def test_live_arm_d_falls_back_to_the_numerical_forecast(market):
 
     def error(client, params):
         raise RuntimeError("overloaded")
-    _future_live(conn, "2027-06-16")                                    # the provider's error: a failed run
+    _live_copy(conn, "2027-06-16")                                      # the provider's error: a failed run
     failed = _capture_d(conn, "2027-06-16", ls.LiveSynthesis(None, send=error), time(9, 29, 5))
     assert failed["synthesis"] == "failed" and in_force(failed) == ("B", "B timely (D failed)")
     assert _d_run(conn, failed)["failure_reason"] == "RuntimeError: overloaded"
 
     client = _ArmsClient()
-    unapproved_snap = _future_live(conn, "2027-06-17")                  # not started by hand: nothing sent
+    unapproved_snap = _live_copy(conn, "2027-06-17")                    # not started by hand: nothing sent
     unapproved = _capture_d(conn, "2027-06-17", ls.LiveSynthesis(client), time(9, 29, 5), manual=False)
     assert client.calls == [] and requests(unapproved_snap) == [] and unapproved["synthesis"] == "skipped"
     assert in_force(unapproved) == ("B", "B timely (D not run)") and "synthesis_skipped" in _steps(conn, unapproved)
 
-    passed_snap = _future_live(conn, "2027-06-21")                      # the deadline passed before the request
+    passed_snap = _live_copy(conn, "2027-06-21")                        # the deadline passed before the request
     passed = _capture_d(conn, "2027-06-21", ls.LiveSynthesis(client), time(9, 29, 55))
     assert client.calls == [] and requests(passed_snap) == [] and in_force(passed)[0] == "B"
 
@@ -1501,7 +1521,7 @@ def test_live_arm_d_falls_back_to_the_numerical_forecast(market):
     def silent(client, params):
         release.wait(10)
         raise RuntimeError("answered after the capture gave up")
-    _future_live(conn, "2027-06-22")                                    # no answer by the deadline, nor after
+    _live_copy(conn, "2027-06-22")                                      # no answer by the deadline, nor after
     try:
         silent_result = _capture_d(conn, "2027-06-22", ls.LiveSynthesis(None, send=silent, late_wait_s=0.3),
                                    time(9, 29, 49, 800000))
@@ -1511,18 +1531,20 @@ def test_live_arm_d_falls_back_to_the_numerical_forecast(market):
     assert _steps(conn, silent_result)[-3:] == ["synthesis_requested", "delivered", "forecast"]
     assert silent_result["synthesis"] == "failed"
     assert _d_run(conn, silent_result)["failure_reason"] == "no answer 0 s after the deadline"
-    assert ls.session_delivered(conn, "2027-06-22")[0]["algorithm_version"] == fc.BASELINE_VERSION
+    assert ls.session_delivered(conn, "2027-06-22", CANDIDATE)[0]["algorithm_version"] == fc.BASELINE_VERSION
 
 
 @needs_db
-def test_a_late_live_synthesis_is_stored_late_and_never_in_force(market):
-    """DAY's live snapshot (its arms A and B already late): D's valid answer comes after the deadline was reached
-    on the capture's clock - the forecast in force is decided first (none: nothing was timely), then D is stored,
-    and the database makes it late: no issued_at, its answer kept, never timely."""
+def test_a_late_live_synthesis_is_stored_late_and_never_in_force(candidate):
+    """DAY's live candidate snapshot (built before its open; its arms A and B are late by the database clock): D's
+    valid answer comes after the deadline was reached on the capture's clock - the forecast in force is decided
+    first (none: nothing was timely), then D is stored, and the database makes it late: no issued_at, its answer
+    kept, never timely."""
     import time as _time
     from forecaster import live_synthesis as ls
     from forecaster import structure_llm as llm
-    conn = market[0]
+    conn = candidate
+    _live_copy(conn, DAY, built_at=cal.ny_instant(date.fromisoformat(DAY), time(9, 20)))
 
     def slow(client, params):
         _time.sleep(0.5)
@@ -1534,18 +1556,110 @@ def test_a_late_live_synthesis_is_stored_late_and_never_in_force(market):
     d = _d_run(conn, result)
     assert d["lifecycle_status"] == "late" and d["issued_at"] is None and "after the deadline" in d["failure_reason"]
     assert d["evidence"]["attempt"]["answer"] and d["predictions"]
-    assert ls.session_delivered(conn, DAY)[0] is None
+    assert ls.session_delivered(conn, DAY, CANDIDATE)[0] is None
 
 
 @needs_db
-def test_live_arm_d_needs_an_approval_before_anything_starts(market, capsys):
-    """Without a valid approval (and no terminal here) the live command stops before connecting to IB."""
+def test_a_capture_whose_wait_leaves_no_time_to_issue_never_starts(candidate):
+    """The data wait plus the reserve for issuing must end by the deadline: after a 09:29 cutoff there is no time
+    for D at all; after 09:15 at most 13.3 minutes. Nothing is recorded and nothing is sent."""
+    from forecaster import live_capture as live
+    from forecaster import live_synthesis as ls
+    conn = candidate
+    client = _ArmsClient()
+    count = lambda: conn.execute("SELECT count(*) FROM journal.live_captures;").fetchone()[0]
+    before = count()
+    with pytest.raises(live.LiveCaptureError, match="no wait fits after a 09:29 cutoff"):
+        live.capture(conn, None, "2027-06-23", "research_0929", synthesis=ls.LiveSynthesis(client))
+    with pytest.raises(live.LiveCaptureError, match="at most 13.3 minutes fit"):
+        live.capture(conn, None, "2027-06-23", CANDIDATE, synthesis=ls.LiveSynthesis(client), wait_s=13.5 * 60)
+    live.check_wait("2027-06-23", CANDIDATE, 13 * 60, True)               # the candidate wait fits, with D
+    live.check_wait("2027-06-23", "research_0929", 20, False)             # A and B alone after 09:29
+    assert count() == before and client.calls == []
+
+
+class _DelayedIB(_LiveIB):
+    """IB on a delayed feed: a bar is served ``delay`` after it starts."""
+    def __init__(self, conn, day, delay):
+        super().__init__(conn, day)
+        self.delay = delay
+
+    def fetch_historical_bars(self, contract, end, duration, what_to_show=None):
+        return super().fetch_historical_bars(contract, end - self.delay, duration, what_to_show)
+
+
+@needs_db
+def test_a_long_wait_keeps_the_0915_evidence_cutoff_and_a_bar_too_late_is_a_missed_opportunity(candidate):
+    """On PREV (its bars restored afterwards), the 09:15 candidate with a 13-minute wait: on a feed 11 minutes late
+    the cutoff bar arrives within the wait and is taken (the database then refuses the snapshot: it is built now,
+    after PREV's open); 14 minutes late, the capture is stale - a missed opportunity recorded with the newest bar
+    and the wait it used. Started late, with bars past the cutoff already in, the evidence still ends at 09:15:
+    the later bars are stored with receipts and never used."""
+    from contracts import nq_forecast as fc
+    from database import journal_store as store
+    from database.queries import get_day_bars, save_trading_day
+    from forecaster import live_capture as live
+    from tests.synthetic import NQ_CID
+    conn = candidate
+    prev = date.fromisoformat(PREV)
+    cutoff = cal.ny_instant(prev, time(9, 15))
+    cutoff_bar = (cutoff - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    original = [dict(zip(r.keys(), r)) for r in get_day_bars(conn, NQ_CID, PREV)]
+
+    def run(delay_min, start):
+        save_trading_day(conn, NQ_CID, PREV, original)              # a capture stores the bars it was served
+        clock = _Clock(cal.ny_instant(prev, start))
+        result = live.capture(conn, _DelayedIB(conn, PREV, timedelta(minutes=delay_min)), PREV, CANDIDATE,
+                              clock=clock, sleep=clock.sleep, wait_s=13 * 60)
+        return result, store.capture_events(conn, result["capture_id"])
+
+    try:
+        taken, events = run(11, time(9, 14))
+        found = next(e for e in events if e["event"] == "bars_received")
+        assert taken["status"] == "failed" and "CheckViolation" in taken["reason"] and found
+        row = _capture_row(conn, taken["capture_id"])
+        assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"], row["with_d"]) == (
+            fc.ISSUE_POLICIES["live"], 780, fc.LIVE_RESERVE_S["AB"], False)
+        requested = [e["detail"] for e in events if e["event"] == "bars_requested"]
+        assert requested[0]["newest"] < cutoff_bar and requested[-1]["newest"] == cutoff_bar
+        assert 16 < len(requested) < 60                                  # fast at first, then every 15 s
+
+        missed, events = run(14, time(9, 14))
+        stale = events[-1]
+        assert missed["status"] == "stale" and stale["event"] == "stale" and "bars_received" not in \
+            [e["event"] for e in events]
+        assert stale["detail"]["wait_limit_s"] == 780 and stale["detail"]["newest"] < cutoff_bar
+        assert stale["detail"]["attempts"] == len([e for e in events if e["event"] == "bars_requested"])
+
+        late_start, _ = run(0, time(9, 24))
+        receipts = store.capture_receipts(conn, late_start["capture_id"])
+        after = [k for k in receipts if k >= cutoff.strftime("%Y-%m-%d %H:%M:%S")]
+        assert after and cutoff_bar in receipts                            # bars past the cutoff were received
+        snap = build_snapshot(conn, PREV, CANDIDATE, live_capture_id=late_start["capture_id"])
+        historical = build_snapshot(conn, PREV, CANDIDATE)
+        bars = snap.payload["bars"]
+        assert bars["window"][1] == cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert bars["1m"][-1][0] == cutoff_bar.replace(" ", "T") + "Z"     # the last bar ends at the cutoff
+        assert {k: bars[k] for k in ("1m", "2m", "5m", "15m")} == {k: historical.payload["bars"][k]
+                                                                   for k in ("1m", "2m", "5m", "15m")}
+        assert snap.payload["cutoff"]["last_received_bar"]["bar_start_at"] == cutoff_bar.replace(" ", "T") + "Z"
+    finally:
+        save_trading_day(conn, NQ_CID, PREV, original)
+
+
+@needs_db
+def test_live_arm_d_needs_an_approval_before_anything_starts(candidate, capsys):
+    """Without a valid approval (and no terminal here) the live command stops before connecting to IB; a wait that
+    leaves no time for D stops it before that."""
     from scripts.nq_journal import main
-    conn = market[0]
+    conn = candidate
     before = conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
-    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d", "--approval", "0123abcd"]) == 1
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d"]) == 1      # research_0929: no time for D
+    assert "Not started" in capsys.readouterr().out
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--profile", CANDIDATE, "--with-d",
+                 "--wait-minutes", "13", "--approval", "0123abcd"]) == 1
     assert "Nothing was sent" in capsys.readouterr().out
-    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d"]) == 1
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--profile", CANDIDATE, "--with-d"]) == 1
     assert "started by hand only" in capsys.readouterr().out
     assert conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0] == before
     assert store_captures(conn, "2027-06-23") == []
@@ -1554,3 +1668,94 @@ def test_live_arm_d_needs_an_approval_before_anything_starts(market, capsys):
 def store_captures(conn, day):
     from database import journal_store as store
     return store.live_captures(conn, day, day)
+
+
+@needs_db
+def test_d_availability_counts_every_scheduled_opportunity(candidate):
+    """Over 2027-06-14 to 06-23 (the captures above): one valid D stored by the deadline, every other outcome a
+    failure in the denominator - invalid, failed, no request (twice), no capture - with an exact interval."""
+    from forecaster import live_availability as la_
+    from forecaster.journal import pool_started
+    conn = candidate
+    assert pool_started(conn, CANDIDATE)                                 # Auto would keep this pool current
+    res = la_.availability(conn, "2027-06-14", "2027-06-23", CANDIDATE)
+    assert (res["numerator"], res["denominator"]) == (1, 7) and res["met"] is False
+    assert res["categories"] == {"timely": 1, "invalid": 1, "failed": 2, "no request": 2, "no capture": 1}
+    by_day = {x["session_date"]: (x["category"], x["detail"]) for x in res["sessions"]}
+    assert by_day["2027-06-17"] == ("no request", "not approved: Claude requests are started by hand only")
+    assert by_day["2027-06-21"][1].startswith("the deadline had passed")
+    assert by_day["2027-06-23"] == ("no capture", None)
+    lo, hi = res["interval"]
+    assert abs(lo - 0.00361) < 1e-4 and abs(hi - 0.57872) < 1e-4            # Clopper-Pearson, 1 of 7
+    assert la_.exact_interval(0, 10) == (0.0, pytest.approx(0.30850, abs=1e-4))
+    text = la_.report(res)
+    assert "1 of 7 scheduled opportunities" in text and "not met" in text and "not evidence of skill" in text
+    excluded = la_.availability(conn, "2027-06-14", "2027-06-23", CANDIDATE, excluded=["2027-06-23"])
+    assert excluded["denominator"] == 6
+
+
+@needs_db
+def test_the_live_comparison_scores_d_where_all_arms_were_timely_and_the_delivered_policy_everywhere(candidate):
+    """p1_live_abd_v1's manifest (registered here only to test it): the delivered arm is the first timely run of
+    D, B, A on every session; A, B and D are paired only where all three were timely; availability is part of the
+    results. No outcomes exist for 2027, so every case with a run is 'no_outcome' - nothing is scored."""
+    from contracts import nq_forecast as fc
+    from contracts import p1_live_abd
+    from database import journal_store as store
+    from forecaster import experiments as ex
+    conn = candidate
+    m = p1_live_abd.manifest("2027-06-14", "2027-06-23")
+    assert m["mode"] == "live" and m["official_run"]["rule"] == "first_timely" and m["profile"] == CANDIDATE
+    assert m["arms"]["delivered"]["delivered"] == [fc.SYNTHESIS_VERSION, fc.BASELINE_VERSION, fc.PRIOR_VERSION]
+    assert "does not establish that the true improvement is at least 0.01" in m["decision"]
+    assert m["availability"]["requirement"] == 0.90 and "late completion" in m["availability"]["denominator"]
+    assert ex.register_experiment(conn, m)
+    results = ex.score_experiment(conn, p1_live_abd.NAME)
+    cases = {(c["session_date"], c["arm"]): c for c in store.experiment_cases(conn, p1_live_abd.NAME)}
+    runs = lambda day: {r["algorithm_version"]: r["run_id"] for r in store.list_forecast_runs(conn, day, day,
+                                                                                              CANDIDATE, "live")}
+    assert cases[("2027-06-14", "delivered")]["run_id"] == runs("2027-06-14")[fc.SYNTHESIS_VERSION]
+    assert cases[("2027-06-15", "delivered")]["run_id"] == runs("2027-06-15")[fc.BASELINE_VERSION]
+    assert cases[("2027-06-15", "D")]["status"] == "no_run"                # invalid: no timely D
+    assert cases[("2027-06-23", "delivered")]["detail"].startswith("no timely run of")
+    assert results["cases"]["delivered"] == {"no_outcome": 6, "no_run": 1}
+    assert results["availability"]["numerator"] == 1 and results["availability"]["denominator"] == 7
+    assert set(results["primary"]["paired"]) == {"D-B", "D-A", "B-A", "delivered-B", "delivered-A"}
+
+
+@needs_db
+def test_the_latency_pilot_sends_nothing_above_its_cap_and_reports_no_score(candidate, monkeypatch, capsys):
+    """p1_d_latency_pilot_v1 on two candidate sessions here: a plan whose worst case is above the cap sends nothing;
+    an invalid approval sends nothing; approved, it sends what the plan needs, and its report gives durations,
+    validation and token costs - never a score. The timeliness estimate then has v5 generation times."""
+    from contracts import p1_d_latency_pilot as pilot
+    from forecaster import d_pilot
+    from forecaster import structure_llm as llm
+    from forecaster import timeliness as tl
+    from scripts.nq_journal import main
+    conn = candidate
+    monkeypatch.setattr(pilot, "SESSIONS", (PREV, DAY))
+    client = _ArmsClient()
+    monkeypatch.setattr(pilot, "MAX_USD", 1.00)                         # below one request's worst case
+    plan = d_pilot.plan(conn)
+    assert plan["requests"] == 2 and plan["worst"] > 1.0 and not plan["fits"] and plan["allowed"] == 0
+    with llm.manual_requests():
+        assert d_pilot.run(conn, client)["stopped"].startswith(f"stopped before {PREV}")
+    assert main(["--db", DSN, "d-pilot", "--estimate"]) == 1 and "nothing will be sent" in capsys.readouterr().out
+    monkeypatch.setattr(pilot, "MAX_USD", 2.00)
+    assert d_pilot.plan(conn)["allowed"] == 2
+    assert main(["--db", DSN, "d-pilot", "--approval", "0123abcd"]) == 1
+    assert "Nothing was sent" in capsys.readouterr().out and client.calls == []
+
+    before = len(tl.d_generation_seconds(conn))
+    with llm.manual_requests():
+        summary = d_pilot.run(conn, client)
+    assert summary["requests_sent"] == 2 and len(client.calls) == 2 and summary["stopped"] is None
+    rows = d_pilot.rows(conn)
+    assert [(r["session_date"], r["status"]) for r in rows] == [(PREV, "issued"), (DAY, "issued")]
+    assert all(r["seconds"] >= 0 and r["usage"]["output_tokens"] == 500 and r["usd"] == pytest.approx(0.014)
+               for r in rows)
+    text = d_pilot.report(conn)
+    assert "**Valid:** 2 of 2" in text and "No predictive score" in text and "brier" not in text.lower()
+    assert len(tl.d_generation_seconds(conn)) == before + 2
+    assert d_pilot.plan(conn)["requests"] == 0                            # answered: never sent again

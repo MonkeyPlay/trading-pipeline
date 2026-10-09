@@ -518,7 +518,7 @@ def _availability(conn, capture_id: str, cid: int, session: cal.Session, cutoff:
                   prev_archive: Dict[str, Any], prior: Dict[str, Any], daily_inputs: list,
                   events: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Point-in-time evidence of a live snapshot (issue policy nq_issue_live_v2): every overnight bar equal to a
+    Point-in-time evidence of a live snapshot (the live issue policy): every overnight bar equal to a
     receipt of the capture received before the freeze, every earlier session it reads stored before the cutoff,
     every event and coverage row recorded before it. ``verified`` only when all of them hold.
     """
@@ -569,7 +569,7 @@ def _availability(conn, capture_id: str, cid: int, session: cal.Session, cutoff:
         "sessions": {"read": len(days), "stored_after_cutoff_or_unknown": sessions_late[:5]},
         "events": {"rows": len(rows), "recorded_after_cutoff_or_unknown": events_late[:5]},
         "last_received_bar": None if last is None else {"bar_start_at": iso(last[0]), "received_at": iso(last[1][5])},
-        "rule": "nq_issue_live_v2 verification: overnight bars equal to a receipt of the capture received before the "
+        "rule": "live-capture verification: overnight bars equal to a receipt of the capture received before the "
                 "freeze; earlier sessions stored and events recorded before the cutoff",
     }
 

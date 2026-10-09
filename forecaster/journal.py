@@ -246,6 +246,13 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
     return created
 
 
+def pool_started(conn, profile: str) -> bool:
+    """Whether the profile has any snapshot yet - a candidate profile's pool is started by hand (backfill), then
+    kept current by Auto (collector.update_journal)."""
+    return conn.execute("SELECT 1 FROM journal.snapshots WHERE snapshot_version = %s LIMIT 1;",
+                        (defs.PROFILES[profile].snapshot_version,)).fetchone() is not None
+
+
 def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] = None) -> Dict[str, Any]:
     """
     Brings the journal up to date (see the module docstring). Returns

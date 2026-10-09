@@ -1,22 +1,27 @@
 # forecaster/live_capture.py
 """
-Live capture and issuance (guideline revision 2, 3D; issue policy nq_issue_live_v2
-in contracts/nq_forecast.py): the scheduled pre-open job, separate from the
-collector's after-the-fact catch-up.
+Live capture and issuance (guideline revision 2, 3D; issue policy nq_issue_live_v3
+in contracts/nq_forecast.py): the pre-open job, separate from the collector's
+after-the-fact catch-up.
 
     python scripts/nq_journal.py live            # before the open on a trading day
+    python scripts/nq_journal.py live --profile candidate_0915 --wait-minutes 13 --with-d
 
 ``capture(conn, app, day)`` for one session and profile:
 
-  1. a capture row (journal.live_captures); every later step is an event stamped
+  1. a capture row (journal.live_captures) with its settings - the data-wait limit,
+     the reserve kept for issuing, whether D is part of it; the wait plus the reserve
+     must end by the deadline, or nothing starts. Every later step is an event stamped
      by the database clock (journal.live_capture_events), so the end-to-end timing
      is measured on the server
   2. restart: a session that already has a live snapshot reuses it - never a new
      one from later bars - and carries on; after the open nothing new is frozen
   3. waits for the cutoff, then asks IB for the session's 1m bars from the overnight
-     start, every LIVE_RETRY_S seconds until the bar ending at the cutoff is among
-     them, at most LIVE_FRESHNESS_BUDGET_S after it; without it the capture is
-     stale and stops - no snapshot from older bars
+     start - every LIVE_RETRY_S seconds at first, every LIVE_SLOW_RETRY_S later - until
+     the bar ending at the cutoff is among them, at most the data-wait limit after it;
+     without it the capture is stale (a missed opportunity, recorded with the newest
+     bar received) and stops - no snapshot from older bars. However long the wait, the
+     evidence ends at the cutoff: later bars are stored, never used
   4. stores the day's bars as the collector does (the last minutes not completed,
      so the regular collector settles the day later) and one receipt per completed
      bar (journal.bar_receipts, database time)
@@ -89,13 +94,14 @@ def active_contract(conn, day: str):
 
 
 def fresh_bars(app, contract_info: Dict[str, Any], session: cal.Session, cutoff: datetime, what_to_show: str,
-               clock: Callable[[], datetime], sleep: Callable[[float], None],
-               event: Callable[..., Any]) -> Optional[List[Dict[str, Any]]]:
-    """The session's bars once the one ending at the cutoff has arrived; None when it has not within the freshness
-    budget (the capture is then stale)."""
+               clock: Callable[[], datetime], sleep: Callable[[float], None], event: Callable[..., Any],
+               wait_s: float = fc.LIVE_DEFAULT_WAIT_S) -> Optional[List[Dict[str, Any]]]:
+    """The session's bars once the one ending at the cutoff has arrived; None when it has not within ``wait_s``
+    after the cutoff (the capture is then stale). The last attempt is made at the limit itself."""
     first = cutoff + timedelta(seconds=fc.LIVE_FIRST_REQUEST_S)
     if clock() < first:
         sleep((first - clock()).total_seconds())
+    give_up = cutoff + timedelta(seconds=wait_s)
     want = (cutoff - MINUTE).strftime("%Y-%m-%d %H:%M:%S")
     day = session.session_date.isoformat()
     attempt = 0
@@ -103,14 +109,38 @@ def fresh_bars(app, contract_info: Dict[str, Any], session: cal.Session, cutoff:
         now = clock()
         seconds = int((now - session.overnight_start_at).total_seconds()) + 60
         attempt += 1
-        event("bars_requested", attempt=attempt, duration=f"{seconds} S")
         bars = app.fetch_historical_bars(contract_info, now, f"{seconds} S", what_to_show=what_to_show)
         day_bars = [b for b in bars or [] if b.get("trading_day") == day]
+        newest = max((b["timestamp_utc"] for b in day_bars), default=None)
+        event("bars_requested", attempt=attempt, duration=f"{seconds} S", newest=newest)
         if any(b["timestamp_utc"] == want for b in day_bars):
             return day_bars
-        if clock() + timedelta(seconds=fc.LIVE_RETRY_S) > cutoff + timedelta(seconds=fc.LIVE_FRESHNESS_BUDGET_S):
-            return None                                    # the next attempt would fall outside the budget
-        sleep(fc.LIVE_RETRY_S)
+        now = clock()
+        if now >= give_up:
+            return None
+        pause = fc.LIVE_RETRY_S if now - cutoff < timedelta(seconds=fc.LIVE_FAST_S) else fc.LIVE_SLOW_RETRY_S
+        sleep(min(pause, (give_up - now).total_seconds()))
+
+
+def reserve_s(with_d: bool) -> int:
+    """The time a capture keeps before the deadline for issuing (contracts/nq_forecast.LIVE_RESERVE_S)."""
+    return fc.LIVE_RESERVE_S["D" if with_d else "AB"]
+
+
+def check_wait(day: str, profile: str, wait_s: float, with_d: bool) -> None:
+    """Raises LiveCaptureError when the data wait and the reserve for issuing would end after the deadline."""
+    p = defs.PROFILES[profile]
+    d = date.fromisoformat(day)
+    cutoff, deadline = cal.ny_instant(d, p.cutoff), cal.ny_instant(d, fc.LIVE_DEADLINE_ET)
+    ends = cutoff + timedelta(seconds=wait_s + reserve_s(with_d))
+    if wait_s <= 0 or ends > deadline:
+        latest = (deadline - cutoff).total_seconds() - reserve_s(with_d)
+        raise LiveCaptureError(
+            f"a {wait_s / 60:.1f}-minute data wait after the {p.cutoff:%H:%M} cutoff and {reserve_s(with_d)} s for "
+            f"issuing {'A, B and D' if with_d else 'A and B'} end at {ends.astimezone(cal.NY_TZ):%H:%M:%S} ET, after "
+            f"the {fc.LIVE_DEADLINE_ET:%H:%M:%S} deadline - "
+            + (f"at most {latest / 60:.1f} minutes fit" if latest > 0 else f"no wait fits after a {p.cutoff:%H:%M} "
+                                                                             f"cutoff"))
 
 
 def _store_bars(conn, capture_id: str, row, day: str, bars: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
@@ -134,17 +164,22 @@ def _store_bars(conn, capture_id: str, row, day: str, bars: List[Dict[str, Any]]
 
 def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION,
             clock: Callable[[], datetime] = _utc_now, sleep: Callable[[float], None] = _time.sleep,
-            synthesis=None) -> Dict[str, Any]:
+            synthesis=None, wait_s: float = fc.LIVE_DEFAULT_WAIT_S) -> Dict[str, Any]:
     """Captures, freezes and issues one session live (see the module docstring); returns a summary. ``synthesis``
-    (a live_synthesis.LiveSynthesis) adds arm D; without it nothing is sent to Claude."""
+    (a live_synthesis.LiveSynthesis) adds arm D; without it nothing is sent to Claude. ``wait_s``: the data-wait
+    limit after the cutoff - with the reserve for issuing it must end by the deadline (check_wait), or
+    LiveCaptureError is raised before anything is recorded."""
     from collector.ib_collector import _contract_info, _instrument_for
     from forecaster.forecast_service import run_forecast, timely
     from forecaster.journal import annotate, match
     p = defs.PROFILES[profile]
     session = cal.session(day)
     cutoff = cal.ny_instant(session.session_date, p.cutoff)
+    check_wait(day, profile, wait_s, synthesis is not None)
     row = active_contract(conn, day)
-    capture_id = store.start_live_capture(conn, day, profile, int(row["contract_id"]), code_revision())
+    capture_id = store.start_live_capture(conn, day, profile, int(row["contract_id"]), code_revision(),
+                                          fc.ISSUE_POLICIES["live"], int(round(wait_s)),
+                                          reserve_s(synthesis is not None), synthesis is not None)
     summary: Dict[str, Any] = {"capture_id": capture_id, "session_date": day, "profile": profile, "runs": []}
 
     def event(name, **detail):
@@ -164,10 +199,13 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
         if clock() >= session.rth_open_at:
             return fail("the session has opened: a live snapshot can no longer be frozen")
         info = _contract_info(row)
-        bars = fresh_bars(app, info, session, cutoff, _instrument_for(defs.SYMBOL).what_to_show, clock, sleep, event)
-        if bars is None:
-            event("stale", want=(cutoff - MINUTE).strftime("%H:%M UTC"),
-                  budget_s=fc.LIVE_FRESHNESS_BUDGET_S)
+        bars = fresh_bars(app, info, session, cutoff, _instrument_for(defs.SYMBOL).what_to_show, clock, sleep, event,
+                          wait_s)
+        if bars is None:                                   # a missed opportunity, recorded as such
+            requested = [e for e in store.capture_events(conn, capture_id) if e["event"] == "bars_requested"]
+            event("stale", want=(cutoff - MINUTE).strftime("%H:%M UTC"), wait_limit_s=int(round(wait_s)),
+                  attempts=len(requested), newest=(requested[-1]["detail"] or {}).get("newest") if requested
+                  else None)
             summary["status"] = "stale"
             return summary
         event("bars_received", **_store_bars(conn, capture_id, row, day, bars, clock()))

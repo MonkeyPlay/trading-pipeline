@@ -28,6 +28,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py experiment-list
     python scripts/nq_journal.py live                                       # the pre-open live capture (3D)
     python scripts/nq_journal.py live --with-d                              # ... and arm D, after typing "send"
+    python scripts/nq_journal.py live --profile candidate_0915 --wait-minutes 13 --with-d   # the 09:15 candidate
     python scripts/nq_journal.py preview                                    # forecast now: a preview, never stored
     python scripts/nq_journal.py llm-forecast --sessions 1 --estimate      # arms C and D: the plan and its cost
     python scripts/nq_journal.py llm-forecast --sessions 1                 # ... sent after typing "send"
@@ -35,6 +36,8 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py llm-forecast --start 2026-09-21 --end 2026-10-02 --arms C
     python scripts/nq_journal.py annotate-llm --restricted --start 2025-09-01 --end 2026-10-02 --batch  # C's pool
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
+    python scripts/nq_journal.py d-pilot --estimate                         # the v5 latency pilot against its cap
+    python scripts/nq_journal.py d-pilot --report                           # its durations and costs - no score
     python scripts/nq_journal.py rth-issue                                  # RTH analogues of the session in progress
     python scripts/nq_journal.py rth-backfill --start 2025-09-02 --end 2026-10-08  # reconstructions at 15/30/60 min
     python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes      # every window of the first hour
@@ -597,6 +600,12 @@ def cmd_live(conn, args):
     if not session.is_open:
         print(f"{day} is not a scheduled session; nothing to capture.")
         return 0
+    wait_s = fc.LIVE_DEFAULT_WAIT_S if args.wait_minutes is None else args.wait_minutes * 60
+    try:
+        live.check_wait(day, args.profile, wait_s, args.with_d)
+    except live.LiveCaptureError as e:
+        print(f"Not started: {e}.")
+        return 1
     synthesis, manual = None, nullcontext()
     if args.with_d:
         synthesis = _live_synthesis(day, args)
@@ -611,7 +620,7 @@ def cmd_live(conn, args):
         return 1
     try:
         with manual:
-            result = live.capture(conn, app, day, args.profile, synthesis=synthesis)
+            result = live.capture(conn, app, day, args.profile, synthesis=synthesis, wait_s=wait_s)
     except live.LiveCaptureError as e:
         print(e)
         return 1
@@ -626,6 +635,54 @@ def cmd_live(conn, args):
         d = result["delivered"]
         print(f"  in force at the deadline: {'arm ' + d['arm'] if d['arm'] else 'nothing'} - {d['reason']}")
     return 0 if result["status"] == "issued" else 1
+
+
+def cmd_d_pilot(conn, args):
+    """The v5 latency pilot (contracts/p1_d_latency_pilot.py): its plan against the cap, then - confirmed by hand or
+    by a dashboard approval - at most five arm D requests; --report shows durations, validation and costs, never a
+    score."""
+    from contracts import p1_d_latency_pilot as pilot
+    from forecaster import approvals
+    from forecaster import d_pilot
+    from forecaster import structure_llm as llm
+    if args.report:
+        print(d_pilot.report(conn))
+        return 0
+    plan = d_pilot.plan(conn)
+    print(f"{pilot.NAME}: arm D ({pilot.ALGORITHM}, effort {plan['effort']}) on {pilot.PROFILE}, sessions "
+          f"{', '.join(pilot.SESSIONS)}")
+    for row in plan["sessions"]:
+        print(f"  {row['session_date']}: " + (f"skipped - {row['skip']}" if row.get("skip") else f"D {row['D']}"))
+    print(f"  {plan['requests']} request(s), roughly ${plan['usd']}; one request costs at most ${plan['worst']} (its "
+          f"whole token cap). Cap: {pilot.MAX_REQUESTS} request(s) and ${pilot.MAX_USD:.2f} - sent one at a time, each "
+          f"only while the spend so far (${plan['spent']:.2f}) plus its worst case fits")
+    if plan["requests"] and not plan["fits"]:
+        print("  Above the cap: nothing will be sent.")
+        return 1
+    if args.estimate or plan["allowed"] == 0:
+        return 0
+    scope = {"command": "d-pilot", "sessions": list(pilot.SESSIONS), "profile": pilot.PROFILE}
+    if args.approval:
+        approved, why = approvals.redeem(args.approval, scope)
+        print(why + ("" if approved else ". Nothing was sent."))
+        if approved is None:
+            return 1
+    elif not confirmed_by_hand(f"Send up to {plan['allowed']} arm D request(s) for the latency pilot, never more "
+                               f"than ${pilot.MAX_USD:.2f} in all?"):
+        return 1
+    with llm.manual_requests():
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            client.models.retrieve(preopen.LLM_MODEL)
+        except Exception as e:
+            print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
+            return 1
+        summary = d_pilot.run(conn, client)
+    print(f"{summary['requests_sent']} request(s) sent; " + ", ".join(f"{k}: {v}" for k, v in summary["counts"].items())
+          + (f"; {summary['stopped']}" if summary["stopped"] else ""))
+    print(d_pilot.report(conn))
+    return 0
 
 
 def _live_synthesis(day, args):
@@ -1055,6 +1112,13 @@ def main(argv=None):
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p.add_argument("--with-d", action="store_true",
                    help="Also arm D: one Claude synthesis request, confirmed by hand (or --approval)")
+    p.add_argument("--wait-minutes", type=float, default=None,
+                   help=f"How long after the cutoff to wait for its bar (default {fc.LIVE_DEFAULT_WAIT_S} s); with "
+                        f"the time kept for issuing it must end by the {fc.LIVE_DEADLINE_ET:%H:%M:%S} ET deadline")
+    p.add_argument("--approval", default=None, help="A dashboard approval token (forecaster/approvals.py)")
+    p = sub.add_parser("d-pilot", help="The v5 latency pilot: at most five arm D requests, by hand, under a cap")
+    p.add_argument("--estimate", action="store_true", help="The plan and its cost against the cap; nothing is sent")
+    p.add_argument("--report", action="store_true", help="Durations, validation and costs of the pilot's requests")
     p.add_argument("--approval", default=None, help="A dashboard approval token (forecaster/approvals.py)")
     p = sub.add_parser("preview", help="Forecast now: the next session's forecast from the data stored so far "
                                        "(a preview, never stored in the journal)")
@@ -1128,7 +1192,7 @@ def main(argv=None):
                    "annotation-review-report": cmd_annotation_review_report, "show": cmd_show, "review-set": cmd_review_set,
                    "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
-                   "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
+                   "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report, "d-pilot": cmd_d_pilot,
                    "preview": cmd_preview, "llm-forecast": cmd_llm_forecast, "rth-issue": cmd_rth_issue,
                    "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate, "timeliness": cmd_timeliness,
                    "rth-eval-status": cmd_rth_eval_status, "rth-eval-score": cmd_rth_eval_score,

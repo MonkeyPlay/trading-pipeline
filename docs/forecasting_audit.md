@@ -171,7 +171,9 @@ stays available as a separate experiment.
 - **0.01 means an absolute reduction** of the mean per-session Brier score on that 0–2 scale
   (0.005 on the halved 0–1 scale). It is not a relative reduction.
 - **Decision:** D is better only if *both* D − B and D − A are at most −0.01 and each whole
-  95 % interval lies below zero. Secondary targets are reported, never decisive.
+  95 % interval lies below zero. That is evidence of some improvement with a point estimate at
+  the threshold, not proof that the true improvement is at least 0.01. Secondary targets are
+  reported, never decisive.
 - **Research only:** the 09:29 snapshot exists only after the open on this feed, and D runs when
   approved. It measures skill from cutoff-frozen evidence, never timeliness.
 - **Three controls, kept separate:** the definition (`experiment-register --design d-research`
@@ -210,8 +212,8 @@ establish reliable predictive performance.
 
 ### The live D path (built and tested; not deployed)
 
-`nq_journal.py live --with-d` (branch `live-d`, `forecaster/live_synthesis.py`, migration
-0028). Verified only against simulated provider answers; no paid request was made.
+`nq_journal.py live --with-d` (`forecaster/live_synthesis.py`, migration 0028). Verified only
+against simulated provider answers; no paid request was made.
 
 - **Approval:** one Claude request per session, confirmed by hand (typed `send`) or by a
   one-time dashboard approval scoped to `live-d`, that day and that profile. Without one, the
@@ -222,9 +224,9 @@ establish reliable predictive performance.
   versions it names). It is recorded in the inference ledger before it is sent, and a snapshot
   that already has a request is never sent again. Runs, evidence and predictions are
   append-only.
-- **Deadline:** the database's (09:29:50 ET, `nq_issue_live_v2`). It stamps the issue time and
-  turns a run inserted later into `late`. The capture acknowledges an issued D after the
-  commit, as it does A and B.
+- **Deadline:** the database's (09:29:50 ET). It stamps the issue time and turns a run
+  inserted later into `late`. The capture acknowledges an issued D after the commit, as it
+  does A and B.
 - **The forecast in force:** awaited until the deadline, then recorded as a `delivered` step
   with the database's clock: the first timely run of D, B, A, else none, with the reason
   (e.g. "B timely (D invalid)").
@@ -234,32 +236,106 @@ establish reliable predictive performance.
 - **Tested fallbacks to B:** an invalid answer, a provider error, no approval, a deadline
   already passed, and no answer at all.
 
-### The live A/B/D comparison: frozen once the timing supports a cutoff
+### The 09:15 candidate (built and tested; not deployed)
 
-When ten or more measured sessions support a cutoff, freeze one definition with that cutoff
-and begin the prospective test. Proposed content:
+Fourth review: a 20-second wait cannot fit this feed, so the candidate gets a realistic
+waiting policy, `nq_issue_live_v3`. Run it as `nq_journal.py live --profile candidate_0915
+--wait-minutes 13 --with-d`.
 
-- **Fixed in advance:** the cutoff, the deadline, the model and prompt (`nq_synthesis_p1_v5`
-  at effort medium), the late policy above, and the delivery order D → B → A.
-- **The capture's freshness budget must fit the feed.** `nq_issue_live_v2` waits at most 20 s
-  after the cutoff for the bar ending at it. On this feed that bar arrives about 11 minutes
-  later, so every live capture goes stale, as on 2026-10-06, with or without D. Two ways out:
-  - an earlier-cutoff profile with a budget that fits the measured delay (e.g. a 09:15 cutoff
-    with about 13 minutes), as a new snapshot profile and issue policy;
-  - a real-time feed (your call; it is a paid subscription).
-- **Arms:** A, B and D, all from the same live snapshot at that cutoff. C stays out (pool
-  composition).
-- **Cases:** every scheduled session is a case. A session without a timely D is counted, never
-  dropped.
-- **Primary target and score:** `direction_15m`, unhalved multiclass Brier.
-- **Skill criterion:** D must improve on **both** A and B by an absolute 0.01 or more, with each
-  95 % block-bootstrap interval below zero, paired on the sessions where D was timely.
-- **Availability criterion, alongside:** D's on-time share over all scheduled sessions. The
-  threshold is yours to set when freezing; 90 % is my suggestion.
-- **Also reported:** the delivered system (D else B) against B on every session, i.e. what you
-  would actually have seen at the open.
+- **Profile `candidate_0915`:** snapshot version `nq_evidence_v5_c0915`, cutoff 09:15. Its
+  ATRs, thresholds and labels are its own, not comparable with the 09:29 pool.
+- **The evidence cutoff holds throughout the wait.** Bars that arrive during the wait,
+  including bars after 09:15, are stored with receipts but never enter the snapshot. Tested:
+  - a capture started at 09:24 with later bars already in still freezes evidence ending with
+    the 09:14 bar, identical to the historical 09:15 snapshot's bars;
+  - the snapshot's "last received bar" is the 09:14 bar.
+- **The data-wait limit is configurable** per capture and recorded on it, together with the
+  issue policy, the reserve and whether D was part of it (`journal.live_captures`).
+- **An absolute deadline that leaves time for issuing.** The wait plus a reserve (10 s for A
+  and B, 90 s with D) must end by 09:29:50 ET, or the capture is refused before anything is
+  recorded:
+  - after a 09:15 cutoff, at most 13.3 minutes fit with D;
+  - after 09:29, no time fits for D at all.
+- **Retries:** every 2 s for the first 30 s, then every 15 s. A 13-minute wait on an
+  11.5-minute-late feed takes under 60 requests.
+- **Missed opportunities:** if the cutoff bar has not arrived by the end of the wait, the
+  capture is `stale`. That is recorded as a missed opportunity, with the newest bar seen, the
+  wait used and the attempts. Tested at 11 minutes late (taken) and at 14 minutes late (missed).
+- **13 minutes is a candidate to test, not a guarantee.** The measured delay was 11.2 min on
+  both measurable mornings.
+- **The pool:** Auto keeps the candidate's pool current once it exists. Starting it is a
+  deployment step (below).
+
+### The v5 latency pilot (built and tested; needs your approval to run)
+
+`contracts/p1_d_latency_pilot.py`, `nq_journal.py d-pilot`. It fills the empty D columns
+before the comparison is frozen.
+
+- **What it sends:** five arm D v5 requests on fixed sessions (2026-10-05 to 2026-10-09) on the
+  09:15 candidate. They are historical replays, so nothing is scored, and the comparison
+  definition names these sessions as excluded from its confirmatory sample.
+- **The cap:** at most 5 requests and $2.00 in all.
+  - Requests go one at a time. Before each one, the spend so far plus that request at its worst
+    (its whole 64,000-token cap, about $1.34) must stay within $2.00.
+  - So the cap holds even if every request ran to its limit.
+  - At v4's measured $0.11–0.13 a request, all five fit, at about $0.60.
+- **Approval:** started by hand (typed `send`) or with a one-time dashboard approval.
+- **Measured:** each request's duration, its validation outcome, and its tokens and cost
+  (`d-pilot --report`). No predictive score is computed or read.
+- **What it can't tell you:** five requests are first observations of v5's timing, not an
+  estimate of its tail latency.
+
+### The live A/B/D comparison (`p1_live_abd_v1`, drafted, not registered)
+
+`contracts/p1_live_abd.py`. It is frozen once ten or more measured sessions support the cutoff
+and the pilot has run: the capture settings are checked against the timing, then the
+definition is registered. Registering sends nothing; each session's D request still needs its
+own approval.
+
+- **Capture:** `candidate_0915`, `nq_issue_live_v3`, a 13-minute wait (to be confirmed), D's
+  reserve, deadline 09:29:50 ET, delivery order D → B → A. The model is `nq_synthesis_p1_v5`
+  at effort medium.
+- **Cases:** every scheduled session. An arm's case is its first *timely* run (issued and
+  acknowledged by the deadline). Late, failed, invalid and missing runs stay as counted cases
+  without a run.
+- **D's skill:** primary target `direction_15m`, unhalved multiclass Brier (0–2). D − B and
+  D − A are paired on the sessions where A, B and D were *all* timely.
+- **The delivered policy:** D → B → A (the first timely run) is scored on every scheduled
+  session against B and A, so D's successful subset can't hide failures on difficult days.
+- **Decision:** D improves only if both D − B and D − A are at most −0.01 (absolute) and each
+  whole 95 % interval lies below zero. That is evidence of *some* improvement with a point
+  estimate at the chosen threshold. It does **not** establish that the true improvement is at
+  least 0.01. Secondary targets are reported, never decisive.
+- **Availability requirement: 90 %, over every scheduled opportunity**
+  (`forecaster/live_availability.py`):
+  - **Success:** a valid D forecast stored by the frozen deadline (issued and acknowledged on
+    the database clock).
+  - **In the denominator:** every scheduled session. Missing data, no capture, no request,
+    provider failure, invalid output, no stored answer and late completion all count as
+    failures, by category.
+  - **Reported:** the observed rate, numerator, denominator and an exact (Clopper–Pearson)
+    95 % interval. The requirement is met when the observed rate is at least 90 %.
+  - **What it is:** a practical acceptance threshold, not evidence of skill.
+  - **Precision:** 54 of 60 gives an interval of 79–96 %. Ten sessions can help choose the
+    setup; they can't establish reliable availability.
+- **D is adopted** only if both the skill criterion and the availability requirement are met.
+- **Endpoint:** scored once, at 60 scheduled sessions or on its end date. Availability may be
+  checked before; scores may not.
 - **Operational point:** under the manual-only rule, each session's D request needs your
   approval before the capture starts. The dashboard has no live-with-D button yet.
+
+### Deploying this (after `b8b5786`, as its own step)
+
+1. After a session: `scripts/deploy.sh <commit>` (schema v28: migration 0028), then restart the
+   dashboard and switch Auto on.
+2. Start the candidate's pool once (deterministic; no Claude requests):
+   `nq_journal.py backfill --profile candidate_0915 --start 2025-09-02 --end <last session>`,
+   then `nq_journal.py catch-up --profile candidate_0915`. Auto keeps it current after that.
+3. The pilot: `nq_journal.py d-pilot --estimate`, then `d-pilot` (type `send`), then
+   `d-pilot --report`.
+4. Live captures: `live --profile candidate_0915 --wait-minutes 13`, before 09:15 ET. Running
+   them without D measures the actual wait. When to schedule them, and whether to add D, is
+   your call.
 
 | Arm | What it is | State |
 |---|---|---|
@@ -431,7 +507,8 @@ your rule keeps manual. The offline request sizes above are the starting point.
 | p1_pool_tuning_v1 (definition, then scorer and report) | `35b629f`, `0afae63` | no (research) |
 | Synthesis v5, separate LLM runner, parallel C/D, honest labels, issue timing | `f300143` | **no.** Deploy after today's session: v5 registers on the first Auto journal step after deployment |
 | C's own database connection when parallel; D-only research design; experiment pairs; timeliness measurement | `b8b5786` | **no**, with the above |
-| Live D path (migration 0028), timeliness as estimates with spreads, explicit D research decision rule, pair labels in experiment reports | this commit (branch `live-d`) | **no**: needs its own deployment (schema v28) after `b8b5786` |
+| Live D path (migration 0028), timeliness as estimates with spreads, explicit D research decision rule, pair labels in experiment reports | `6022481` | **no**: needs its own deployment (schema v28) after `b8b5786` |
+| 09:15 candidate (profile, live policy v3 with a configurable wait, capture settings in 0028), v5 latency pilot, D availability measure, delivered arm and all-timely pairing in the scorer, `p1_live_abd_v1` draft | this commit (branch `live-d`) | **no**: with the above |
 
 **The combined revision, rechecked before deployment:**
 
