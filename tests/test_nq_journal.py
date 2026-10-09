@@ -342,6 +342,10 @@ def test_review_set_cli_and_append_only_verdicts(market, capsys):
     assert "1 of 2 sessions reviewed" in capsys.readouterr().out
 
 
+class _RolledBack(Exception):
+    """Raised to roll a test's temporary change back."""
+
+
 @needs_db
 def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
     """A session in progress gets its snapshot, annotation and analogue set once its bars past the cutoff are
@@ -349,7 +353,7 @@ def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
     from contracts import nq_preopen as pre
     from database import journal_store as store
     from forecaster.journal import PREOPEN_SETTLE, catch_up, snapshot_pending
-    from tests.synthetic import ES_CID
+    from tests.synthetic import ES_CID, NQ_CID
     conn = market[0]
     version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
     stored = lambda: {str(s["session_date"]): s for s in store.list_snapshots(conn, "2000-01-01", DAY, version)}
@@ -376,6 +380,14 @@ def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
 
         # every bar fetched after it: taken mid-session with its annotation and analogues, no outcome yet
         conn.execute("UPDATE session_days SET fetched_at = %s WHERE trading_day = %s;", (ready, DAY))
+        # ... but not before NQ's bar closing at the cutoff is stored (a delayed feed: fetched late, stored early)
+        with pytest.raises(_RolledBack):
+            with conn:
+                conn.execute("DELETE FROM bars WHERE trading_day = %s AND contract_id = %s AND timestamp_utc >= %s;",
+                             (DAY, NQ_CID, cal.ny_instant(d, time(9, 20))))
+                why = snapshot_pending(conn, DAY, now=midday)
+                assert "bar closing at the 09:29 ET cutoff is not stored yet (newest: 09:19 ET)" in why
+                raise _RolledBack
         assert snapshot_pending(conn, DAY, now=midday) is None
         result = catch_up(conn, now=midday)
         snap = stored()[DAY]

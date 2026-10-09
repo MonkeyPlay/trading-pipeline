@@ -57,8 +57,9 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
                      now: Optional[datetime] = None) -> Optional[str]:
     """
     Why the snapshot of session ``day`` cannot be taken yet, or None when it can: a final session always can; one
-    in progress from its cutoff + PREOPEN_SETTLE, once the day's NQ bars are stored and every instrument's bars of
-    the day were fetched after then (the collector fetches them all in one run).
+    in progress from its cutoff + PREOPEN_SETTLE, once the day's NQ bars are stored, every instrument's bars of the
+    day were fetched after then (the collector fetches them all in one run) and NQ's bar closing at the cutoff is
+    stored - on a delayed feed the first fetch after the cutoff can still end minutes before it.
     """
     now = now or datetime.now(timezone.utc)
     session = cal.session(day)
@@ -79,6 +80,20 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
     if early:
         return (f"the day's {', '.join(early)} bars were fetched before the {cutoff:%H:%M} ET cutoff - run the "
                 f"collector")
+    # A fetch after the cutoff is not enough on a delayed feed (2026-10-07: fetched at 09:31 ET, stored through
+    # about 09:21, so the snapshot froze without its cutoff price): the bar closing at the cutoff must be stored.
+    last_bar = cal.ny_instant(session.session_date, cutoff) - timedelta(minutes=1)
+    newest = conn.execute(
+        "SELECT MAX(b.timestamp_utc) AS t FROM bars b JOIN active_contracts a "
+        "ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+        "WHERE a.symbol = %s AND b.trading_day = %s AND b.interval = '1m' AND b.price_type = 'TRADES';",
+        (defs.SYMBOL, day)).fetchone()
+    t = newest["t"] if newest is not None else None
+    if t is None or datetime.fromisoformat(str(t)).replace(tzinfo=timezone.utc) < last_bar:
+        stored = ("none" if t is None else
+                  f"{datetime.fromisoformat(str(t)).replace(tzinfo=timezone.utc).astimezone(cal.NY_TZ):%H:%M} ET")
+        return (f"{defs.SYMBOL}'s bar closing at the {cutoff:%H:%M} ET cutoff is not stored yet (newest: {stored}) - "
+                f"the feed is delayed; the next collection takes it")
     return None
 
 
