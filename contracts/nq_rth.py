@@ -43,6 +43,7 @@ from contracts.nq_prompt_v2 import _record
 # is always issued (the predefined evaluation's 10:15 cutoff, docs/rth_analogues.md). Weights, tolerances and
 # features are v1's.
 RTH_MATCHER_VERSION = "nq_match_rth_v2"
+SUPERSEDED = ("nq_match_rth_v1",)                 # read for review only, newest first
 KIND = "rth_matcher"
 
 MAX_MINUTES = 60                                  # 09:30 + 60 = 10:30 ET: automatic matching stops there

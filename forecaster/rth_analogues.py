@@ -17,7 +17,8 @@ what matched, from which inputs, issued how and when. The pre-open analogue sets
   issue(conn, now, issued_by)     the session in progress: its newest window and any of
                                   15, 30, 45, 60 minutes not stored yet - Auto runs it
                                   after each collection ('auto'), a person by hand
-                                  ('manual')
+                                  ('manual'); for 15, 30 and 45 also the evaluation's
+                                  forecasts (forecaster/rth_eval.py), stored as issued
   reconstruct(conn, days, ...)    historical reconstructions ('backfill': never live)
   describe(set)                   the line naming a stored set: window, data cutoff,
                                   checkpoint, provisional, how and when it was issued
@@ -50,6 +51,7 @@ from contracts import nq_prompt_v2 as defs
 from contracts import nq_rth as rth
 from database import journal_store as store
 from features import calendar as cal
+from forecaster import rth_eval
 from forecaster.provenance import code_revision
 from matching import rth as mr
 
@@ -280,8 +282,11 @@ def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta
 
 
 def register(conn) -> None:
-    """Registers the RTH matcher's definition (a changed definition under its version name stops the run)."""
+    """Registers the RTH matcher's definition and its evaluation's (contracts/rth_eval.py) - before any set or
+    evaluation forecast of the run is stored; a changed definition under a registered version name stops the run."""
+    from contracts import rth_eval
     store.register_version(conn, rth.matcher_record())
+    store.register_version(conn, rth_eval.record())
 
 
 def _target_snapshot_ok(openings: Dict[str, mr.Opening], day: str) -> Optional[str]:
@@ -303,8 +308,10 @@ def issue(conn, now: Optional[datetime] = None, day: Optional[str] = None, issue
     """
     The session in progress (``day``, else the one the New York date of ``now`` names): its newest confirmed
     window and any of the always-issued windows (15, 30, 45, 60) not stored yet, issued by ``issued_by`` ('auto':
-    Auto mode, 'manual': a person). Returns ``{'status': 'issued' | 'waiting' | 'busy' | 'closed',
-    'session_date', 'minutes', 'stored': [(minutes, set_id, new)], 'stop', 'reason'}``. Takes a database-wide lock:
+    Auto mode, 'manual': a person) - and, for the evaluation's cutoff windows (15, 30, 45), its forecasts
+    (forecaster/rth_eval.py), stored once per session and cutoff. Returns ``{'status': 'issued' | 'waiting' | 'busy'
+    | 'closed', 'session_date', 'minutes', 'stored': [(minutes, set_id, new)], 'forecasts': [(minutes, forecast_id,
+    new)], 'stop', 'reason'}``. Takes a database-wide lock:
     a second issue running at the same time (another process) returns 'busy' and stores nothing.
     """
     if issued_by not in rth.LIVE_ISSUERS:
@@ -331,16 +338,22 @@ def issue(conn, now: Optional[datetime] = None, day: Optional[str] = None, issue
             return {"status": "waiting", "session_date": day, "reason": why, "stored": []}
         target = openings[day]
         newest = min(target.minutes, rth.MAX_MINUTES)
-        have = {w["elapsed_minutes"] for w in store.rth_windows(conn, defs.SYMBOL, day, rth.RTH_MATCHER_VERSION)}
+        # windows issued already by Auto or by hand - a backfill of the session does not stand in for an issue
+        have = {w["elapsed_minutes"] for w in store.rth_windows(conn, defs.SYMBOL, day, rth.RTH_MATCHER_VERSION)
+                if w["issued"]}
         due = sorted({m for m in rth.ALWAYS_ISSUED if m <= newest and m not in have} | {newest})
         pool = [o for d, o in openings.items() if d < day]
-        stored = []
+        stored, forecasts = [], []
         for m in due:
-            rec, members, _ = build_set(target, pool, m, meta, issued_by)
+            rec, members, ranked = build_set(target, pool, m, meta, issued_by)
             set_id, new = store.save_rth_set(conn, rec, members)
             stored.append((m, set_id, new))
+            # the evaluation's forecasts of a cutoff window, from this ranking - stored once, when issued
+            made = rth_eval.issue_forecasts(conn, target, m, ranked, openings, set_id)
+            if made is not None:
+                forecasts.append((m, *made))
         return {"status": "issued", "session_date": day, "minutes": newest, "stored": stored, "reason": None,
-                "stop": meta[day]["stop"], "newest_bar_end": meta[day]["newest_bar_end"]}
+                "forecasts": forecasts, "stop": meta[day]["stop"], "newest_bar_end": meta[day]["newest_bar_end"]}
     finally:
         conn.execute("SELECT pg_advisory_unlock(%s);", (_LOCK_KEY,))
 

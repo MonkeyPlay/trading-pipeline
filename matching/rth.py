@@ -238,8 +238,9 @@ def score(components: Dict[str, Dict[str, Any]]) -> Tuple[Optional[float], float
 
 def rank(target: Opening, pool: Sequence[Opening], minutes: int) -> Dict[str, Any]:
     """
-    The target's RTH analogues at ``minutes`` from ``pool``: ``{'selected': [...], 'excluded': {reason: n},
-    'pool_size', 'pool_hash', 'target_features', 'scored': [(opening, features), ...]}``. Every earlier session is
+    The target's RTH analogues at ``minutes`` from ``pool``: ``{'selected': [...], 'ordered': every candidate past
+    the coverage floor, best first, 'excluded': {reason: n}, 'pool_size', 'pool_hash', 'target_features', 'scored':
+    [(opening, features), ...]}``. Every earlier session is
     scored afresh; each excluded one is counted under its reason (not_earlier, other_symbol, no_preopen_context,
     incomplete_window, low_coverage).
     """
@@ -271,8 +272,10 @@ def rank(target: Opening, pool: Sequence[Opening], minutes: int) -> Dict[str, An
     candidates.sort(key=lambda c: (-round(c[0], 9), -c[1], _neg_date(c[2].session_date)))
     selected = [{"rank": i, "opening": other, "similarity": sim, "comparable_weight": comp, "components": comps}
                 for i, (sim, comp, other, comps) in enumerate(candidates[:rth.TOP_ANALOGUES], 1)]
-    return {"selected": selected, "excluded": dict(sorted(excluded.items())), "pool_size": len(scored),
-            "pool_hash": pool_hash, "target_features": target_features, "scored": scored}
+    ordered = [{"rank": i, "opening": other, "similarity": sim, "comparable_weight": comp}
+               for i, (sim, comp, other, _) in enumerate(candidates, 1)]
+    return {"selected": selected, "ordered": ordered, "excluded": dict(sorted(excluded.items())),
+            "pool_size": len(scored), "pool_hash": pool_hash, "target_features": target_features, "scored": scored}
 
 
 def input_digest(target: Opening, minutes: int, ranked: Dict[str, Any]) -> str:

@@ -808,16 +808,19 @@ def save_rth_set(conn: Database, rec: Dict[str, Any], members: List[Dict[str, An
     """
     Stores one RTH analogue set and its members (``rec``: the journal.rth_analogue_sets columns but ``set_id``,
     ``checkpoint``, ``data_mode`` and ``created_at``, which the database derives and stamps - live only when
-    ``issued_by`` is auto or manual and it is within 30 minutes of the cutoff). Idempotent: the same
-    session, matcher version, window and input digest return the stored set - repeated runs on unchanged inputs add
-    nothing, a revised input adds a set beside the earlier one.
+    ``issued_by`` is auto or manual and it is within 30 minutes of the cutoff). Idempotent: an issue (auto, manual)
+    of a session, matcher version, window and input digest already issued returns that set; a backfill of inputs
+    already stored in any way returns the stored set. An issue is recorded even after a backfill of the same inputs.
+    Repeated runs on unchanged inputs add nothing; a revised input adds a set beside the earlier one.
     """
     key = (rec["symbol"], rec["session_date"], rec["matcher_version"], rec["elapsed_minutes"], rec["input_digest"])
+    backfill = rec["issued_by"] == "backfill"
     with conn:
         _lock(conn, "journal.rth_analogue_sets", *key)
         row = conn.execute(
             "SELECT set_id FROM journal.rth_analogue_sets WHERE symbol = %s AND session_date = %s "
-            "AND matcher_version = %s AND elapsed_minutes = %s AND input_digest = %s;", key).fetchone()
+            "AND matcher_version = %s AND elapsed_minutes = %s AND input_digest = %s "
+            "AND (%s OR issued_by IN ('auto', 'manual')) ORDER BY created_at LIMIT 1;", (*key, backfill)).fetchone()
         if row is not None:
             return str(row[0]), False
         set_id = str(uuid.uuid4())
@@ -894,12 +897,70 @@ def rth_set_issued(conn: Database, symbol: str, session_date: str, matcher_versi
 
 def rth_windows(conn: Database, symbol: str, session_date: str, matcher_version: str) -> List[Dict[str, Any]]:
     """The session's stored RTH windows, shortest first: ``elapsed_minutes``, ``checkpoint``, ``sets`` (how many -
-    more than one when an input was revised), ``live`` (how many were issued live), the first and latest
-    ``created_at``."""
+    more than one when an input was revised), ``live`` (how many were issued live), ``issued`` (how many by Auto or
+    by hand, live or late - not backfills), the first and latest ``created_at``."""
     rows = conn.execute(
         "SELECT elapsed_minutes, max(checkpoint) AS checkpoint, count(*) AS sets, min(created_at) AS first_at, "
-        "max(created_at) AS latest_at, count(*) FILTER (WHERE data_mode = 'live') AS live "
+        "max(created_at) AS latest_at, count(*) FILTER (WHERE data_mode = 'live') AS live, "
+        "count(*) FILTER (WHERE issued_by IN ('auto', 'manual')) AS issued "
         "FROM journal.rth_analogue_sets "
         "WHERE symbol = %s AND session_date = %s AND matcher_version = %s GROUP BY elapsed_minutes "
         "ORDER BY elapsed_minutes;", (symbol, session_date, matcher_version)).fetchall()
     return [dict(zip(r.keys(), r)) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# The RTH evaluation (migration 0026)
+# --------------------------------------------------------------------------
+
+def save_rth_eval_forecast(conn: Database, rec: Dict[str, Any]) -> Tuple[str, bool]:
+    """Stores the evaluation forecasts of one session and cutoff (``rec``: the journal.rth_eval_forecasts columns
+    but ``forecast_id``, ``created_at``, ``issue_delay_s`` and ``eligible``, which the database stamps). Only the
+    first per evaluation, session and cutoff is stored; a later one returns the first."""
+    key = (rec["evaluation_version"], rec["symbol"], rec["session_date"], rec["elapsed_minutes"])
+    with conn:
+        _lock(conn, "journal.rth_eval_forecasts", *key)
+        row = conn.execute(
+            "SELECT forecast_id FROM journal.rth_eval_forecasts WHERE evaluation_version = %s AND symbol = %s "
+            "AND session_date = %s AND elapsed_minutes = %s;", key).fetchone()
+        if row is not None:
+            return str(row[0]), False
+        forecast_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO journal.rth_eval_forecasts (forecast_id, evaluation_version, set_id, symbol, session_date, "
+            "elapsed_minutes, cutoff_at, horizon_minutes, target_atr, forecasts, sources, digest, code_revision) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+            (forecast_id, rec["evaluation_version"], rec["set_id"], rec["symbol"], rec["session_date"],
+             rec["elapsed_minutes"], rec["cutoff_at"], rec["horizon_minutes"], rec["target_atr"],
+             canonical_json(rec["forecasts"]), canonical_json(rec["sources"]), rec["digest"], rec["code_revision"]))
+    return forecast_id, True
+
+
+def rth_eval_forecasts(conn: Database, evaluation_version: str) -> List[Dict[str, Any]]:
+    """Every stored evaluation forecast of a version, oldest session first."""
+    rows = conn.execute("SELECT * FROM journal.rth_eval_forecasts WHERE evaluation_version = %s "
+                        "ORDER BY session_date, elapsed_minutes;", (evaluation_version,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(zip(r.keys(), r))
+        d.update(forecasts=_load(d["forecasts"]), sources=_load(d["sources"]), forecast_id=str(d["forecast_id"]),
+                 set_id=str(d["set_id"]), session_date=str(d["session_date"]))
+        out.append(d)
+    return out
+
+
+def save_rth_eval_result(conn: Database, evaluation_version: str, results: Dict[str, Any], code_revision: str) -> None:
+    """Stores an evaluation's one scoring (a second is refused by the primary key)."""
+    with conn:
+        conn.execute("INSERT INTO journal.rth_eval_results (evaluation_version, results, code_revision) "
+                     "VALUES (%s, %s, %s);", (evaluation_version, canonical_json(results), code_revision))
+
+
+def rth_eval_result(conn: Database, evaluation_version: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT * FROM journal.rth_eval_results WHERE evaluation_version = %s;",
+                       (evaluation_version,)).fetchone()
+    if row is None:
+        return None
+    d = dict(zip(row.keys(), row))
+    d["results"] = _load(d["results"])
+    return d

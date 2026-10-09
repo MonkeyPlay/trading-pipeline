@@ -268,7 +268,11 @@ Pages:
     session was in the tolerances' calibration sample; windows under ten minutes are
     provisional, the 15/30/60-minute checkpoints marked. **Window** follows the session (in
     playback, the candle played to - never a later window) or picks any stored window.
-    Similarity is agreement of the observed openings, not a probability.
+    Similarity is agreement of the observed openings, not a probability. Whether the analogues'
+    next 15 minutes carry information is judged by an evaluation fixed before its forward sample
+    (`rth_continuation_v2`): its forecasts are stored as issued, it counts only those stored
+    within 14 minutes of their cutoff, and it is scored once at its endpoint
+    (`nq_journal.py rth-eval-status` shows its health, never a score).
   - **Pre-open set** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
     the session and its analogues side by side, feature by feature - their realised labels and
     the outcome frequencies hidden until asked for - with P1's 47-field pre-open record; for the

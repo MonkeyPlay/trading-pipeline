@@ -11,7 +11,7 @@ most like this one, over the same minutes?**
 It is a description of resemblance, not a forecast. Similarity scores are agreement between
 two observed openings and are **never calibrated probabilities**. Whether the analogues'
 continuations say anything about this session's is a separate question, with its own
-[predefined evaluation](#the-predefined-evaluation).
+[evaluation](#the-evaluation), fixed before its forward sample.
 
 The record is meant to answer, for every set: **what matched, using what information, at what
 time.**
@@ -23,7 +23,11 @@ time.**
 | `nq_match_rth_v1` | 2026-10-09 09:35 UTC, by the first `rth-backfill` (774 reconstructions at 15/30/60 minutes over 258 sessions, kept) | — |
 | `nq_match_rth_v2` | on its first issue or backfill | After an outside review: confirmation by any later bar (v1 required the next minute's bar, so a missing minute also dropped the bar before it). Issuance mode and input receipt times recorded. The calibration's provenance is part of the definition. The 45-minute window is always issued. Weights, tolerances and features are unchanged. |
 
-The dashboard and the CLI read v2 sets. v1's sets stay in the journal as history.
+Who launched the v1 backfill is not confirmed: no Claude session on this machine ran it.
+
+The CLI reads v2 sets. The dashboard shows a day's v2 sets; on a day without any it shows v1's
+reconstructions for review, labelled as a superseded version. v1's sets stay in the journal as
+history.
 
 ## What is unchanged
 
@@ -168,9 +172,12 @@ Each set records:
 - its provenance (below);
 - its five members with ranks, similarities and per-feature components.
 
-**Idempotent:** one set per (session, version, window, input digest). The digest covers the
-target's window bars, context and features, and every scored candidate's session, context
-snapshot and features. Repeated runs on unchanged inputs store nothing new.
+**Idempotent:** one set per (session, version, window, input digest) and kind of issue. The
+digest covers the target's window bars, context and features, and every scored candidate's
+session, context snapshot and features. Repeated issues, or repeated backfills, of unchanged
+inputs store nothing new. An issue by Auto or by hand is still recorded when a backfill of the
+same inputs came first, so the backfill never stands in for it; a backfill of inputs already
+issued adds nothing.
 
 **Revised data never overwrites:** a vendor revision of a bar inside a window, or a new
 candidate session, gives a new digest and a new set beside the earlier one. The tables are
@@ -214,7 +221,12 @@ Reconstructed shows the correction, As issued never does.
   RTH minute until 11:00 ET, and only when the collection succeeded
   (`dashboard/jobs.NEEDS_SUCCESS`).
 - **What one issue stores:** the newest confirmed window, plus any of 15, 30, 45 and 60 not
-  yet stored. If two bars arrive at once, the window between them is still saved.
+  yet issued (a backfill does not count as issued). If two bars arrive at once, the window
+  between them is still saved. For 15, 30 and 45 the run also stores the evaluation's
+  forecasts.
+- **Collection must be running:** sets are issued only while Auto runs during the first hour.
+  Auto belongs to the dashboard process, so it keeps running with the browser tab closed, but
+  not when the dashboard process stops. A session without Auto is counted `not_issued`.
 - **Duplicate jobs:** one dashboard runs one job at a time, and only one process runs Auto. An
   issue also holds a database advisory lock: a second issue running at the same moment, from
   another process, stores nothing and says so.
@@ -226,11 +238,13 @@ python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes       
 python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15      # reconstructed view at 09:45
 python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
 python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the calibration
+python scripts/nq_journal.py rth-eval-status                             # the evaluation's health, never a score
+python scripts/nq_journal.py rth-eval-score                              # its one scoring, at the endpoint only
 ```
 
-The first `rth-issue` or `rth-backfill` registers `nq_match_rth_v2`. From then on its
-definition is frozen: changed weights, tolerances, features or calibration need a new version
-name.
+The first `rth-issue` or `rth-backfill` registers `nq_match_rth_v2` and `rth_continuation_v2`.
+From then on both are frozen: changed weights, tolerances, features, calibration or evaluation
+rules need a new version name.
 
 ## Dashboard
 
@@ -266,52 +280,96 @@ set (evolving)**.
   pre-open set's outcome rows and frequencies, and in the forecast's per-target table. It is
   no longer a forecast of anything still to come.
 
-## The predefined evaluation
+## The evaluation
 
-`rth_continuation_v1` is defined in
-[contracts/rth_eval.py](../contracts/rth_eval.py), with a copy in
-[rth_continuation_v1_definition.json](rth_continuation_v1_definition.json) (hash
-`977d4c124a257b14`, pinned by a test). It was fixed **before any result exists**. Nothing
-scores it yet and nothing registers it.
+`rth_continuation_v2` is defined in [contracts/rth_eval.py](../contracts/rth_eval.py), with a
+copy in [rth_continuation_v2_definition.json](rth_continuation_v2_definition.json) (hash
+`0308613ba27505d0`, pinned by a test). It is registered (kind `rth_evaluation`) by the first
+RTH issue, in the same run and before that run stores any evaluation forecast. So it is fixed
+before the forward sample starts.
 
-**The question:** at 09:45, 10:00 and 10:15 ET, do the analogues' **next 15 minutes** describe
-the session's next 15 minutes better than the frozen pre-open analogue set and a same-clock
-history? Movement size and direction are measured separately.
+`rth_continuation_v1` (hash `977d4c124a257b14`) was committed and superseded before any data.
+It would have rebuilt RTH-20 at scoring time and had no rule for issue time.
 
-**Sample:**
+**The question:** at 09:45, 10:00 and 10:15 ET, do the analogues' **next 15 minutes**
+describe the session's next 15 minutes better than the frozen pre-open analogue set and a
+same-clock history? Movement size and direction are measured separately.
 
-- forward sessions only, after the calibration sample (after 2026-10-07);
-- only cutoffs with a **live** set; a missing one is reported, never filled from a
-  reconstruction;
-- results are not looked at before 60 sessions hold all three cutoffs, and are then scored
-  once.
+### Forecasts are stored when issued
 
-**Forecasts:**
+The run that issues a cutoff window's live RTH set also stores the evaluation's four forecasts
+from the same ranking and inputs (`journal.rth_eval_forecasts`, migration 0026):
 
 | Name | Role | Members |
 |---|---|---|
-| RTH-20 | Primary | The 20 highest similarities, recomputed with the frozen matcher. Accepted only when its input digest equals the live set's. |
-| RTH-5 | Secondary | The five members of the set as issued, i.e. what was on screen. |
-| PRE-5 | Baseline | The frozen pre-open analogue set. |
-| CLOCK | Baseline | Every eligible earlier session over the same clock window. |
+| RTH-20 | Primary | The 20 highest similarities of the matcher's ranking at the cutoff |
+| RTH-5 | Secondary | The live set's five members, i.e. what was on screen |
+| PRE-5 | Baseline | The session's pre-open analogue set (`nq_match_p1_v2`), the newest stored at issue |
+| CLOCK | Baseline | Every session of the matcher's scored pool at the cutoff |
 
-**Scores:**
+- **What is stored for each member:** session, context snapshot, contract, similarity, an equal
+  weight, and its own move over the same clock window from its bars as stored at issue. The
+  versions and the pre-open set id are stored with the forecast.
+- **Never rebuilt:** the scorer only adds the target's realised move. A later vendor revision
+  or a bigger history changes nothing that was issued.
+- **One per session and cutoff:** the first stored counts.
 
-- **Size:** fair ensemble CRPS of the absolute move.
-- **Direction:** Brier score of a Laplace-smoothed up-share.
-- **Signed:** a secondary CRPS of the signed move.
+### Eligibility is apart from provenance
 
-Moves are in each session's frozen daily ATR.
+Who issued a set and when its inputs reached the store are provenance, recorded on the set.
+Whether a forecast counts is decided separately, by the database's stamp of when the forecast
+was stored:
 
-**Uncertainty and decision:**
+- it counts only when stored **within 14 minutes of its cutoff**, so before its 15-minute
+  window ends;
+- a forecast stored after its window ends never counts;
+- the limit is read from the registered definition.
 
-- Paired per-session differences, averaged over the session's cutoffs.
-- Intervals from a moving-block bootstrap over sessions.
-- Four primary comparisons (RTH-20 against CLOCK and against PRE-5, for size and for
-  direction), each at 98.75 %.
-- A comparison shows an improvement only when its whole interval is below zero. Otherwise:
-  "no sufficiently reliable improvement was established".
-- The five displayed analogues are never treated as the probability model.
+**Why 14 minutes:** on the one session with receipt times (2026-10-07), first-hour bars reached
+the store a median 10.2 minutes after their minute ended (90 % by 10.3, worst 16.0). A set for
+cutoff *C* is therefore issued about *C* + 12 at the earliest.
+
+**What that means:** on this delayed feed, every forecast arrives about 12 minutes into its
+window. The evaluation measures the information at the cutoff, out of sample, since nothing
+after the cutoff is read. It does **not** measure a tradeable lead time.
+
+### Cases, endpoint and decision
+
+- **Universe:** every scheduled NQ session from the registration day, at each cutoff.
+- **Excluded cases:** each case is reported under the first reason that applies, in this order:
+
+  | Reason | Meaning |
+  |---|---|
+  | `not_issued` | No forecast stored for the cutoff. |
+  | `late` | Stored after the delay limit. |
+  | `unverified_inputs` | The set's inputs were not verified as of the cutoff. |
+  | `forecast_incomplete` | Too few members with a move: RTH-20 < 10, RTH-5 < 3, PRE-5 < 3, CLOCK < 30. |
+  | `outcome_pending` | The window has not ended, or its bars are not confirmed yet. |
+  | `outcome_missing` | A gap in the window's bars; never filled in. |
+
+- **Counted sessions:** a session counts toward the endpoint when at least one of its cutoffs is
+  scored. Its paired score difference is averaged over its scored cutoffs, so sessions weigh
+  equally. Each cutoff is also reported alone, as a secondary result.
+- **Endpoint:** 60 counted sessions, or 2027-06-30 if that comes first. At the end date there
+  must be at least 30 counted sessions; otherwise the result is "insufficient" and no
+  comparison is made.
+- **Scored once:** `rth-eval-score` refuses before the endpoint and after it has run; the stored
+  result stands. Sixty sessions is a checkpoint, not a promise of a conclusive result, and more
+  data means a new version.
+- **Before the endpoint:** `rth-eval-status` shows operational health only: cases by reason and
+  cutoff, issue delays and member counts, never a score.
+- **Scores:**
+  - **size:** fair ensemble CRPS of the absolute move;
+  - **direction:** Brier score of a Laplace-smoothed up-share;
+  - **signed:** a secondary CRPS of the signed move.
+
+  Moves are in each session's frozen daily ATR.
+- **Decision:** four primary comparisons: RTH-20 against CLOCK and against PRE-5, for size and
+  for direction. Each uses a circular moving-block bootstrap over sessions at 98.75 %.
+  - An improvement only when the whole interval is below zero.
+  - Otherwise: "no sufficiently reliable improvement was established".
+  - Size and direction are concluded separately.
+  - The five displayed analogues are never the probability model.
 
 ## What this is not
 
@@ -319,4 +377,4 @@ Moves are in each session's frozen daily ATR.
   or turned into one on the dashboard.
 - **No direction claim:** earlier work found NQ first-hour direction unpredictable from pre-open
   matches, momentum and 15/30-minute matching (2026-09).
-- **Usefulness is untested** until the predefined evaluation has its 60 forward sessions.
+- **Usefulness is untested** until the evaluation reaches its endpoint.

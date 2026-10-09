@@ -132,15 +132,56 @@ def test_the_definition_adds_up_and_the_database_agrees_on_live():
 
 
 def test_the_evaluation_is_fixed_before_any_result():
-    """The predefined usefulness evaluation: its docs copy is the code's definition, hash included - any change is
-    a new version, visible in review."""
+    """The usefulness evaluation: its docs copy is the code's definition, hash included - any change is a new version,
+    visible in review; v1, committed and superseded before any data, keeps its hash."""
     import json
     from contracts import rth_eval
-    doc = json.load(open(os.path.join(os.path.dirname(__file__), "..", "docs", "rth_continuation_v1_definition.json")))
+    here = os.path.join(os.path.dirname(__file__), "..", "docs")
+    doc = json.load(open(os.path.join(here, "rth_continuation_v2_definition.json")))
     assert doc == json.loads(json.dumps(rth_eval.document()))
-    assert doc["definition_hash"] == "977d4c124a257b14"
-    assert doc["cutoffs"] == {"09:45": 15, "10:00": 30, "10:15": 45}
-    assert set(doc["cutoffs"].values()) <= set(rth.ALWAYS_ISSUED)          # every cutoff is always issued
+    assert doc["definition_hash"] == "0308613ba27505d0"
+    old = json.load(open(os.path.join(here, "rth_continuation_v1_definition.json")))
+    assert rth_eval.HISTORY == {"rth_continuation_v1": old["definition_hash"]} == {"rth_continuation_v1":
+                                                                                    "977d4c124a257b14"}
+    assert rth_eval.MAX_ISSUE_DELAY < rth_eval.HORIZON           # a forecast after its window never counts
+    assert set(rth_eval.CUTOFFS) <= set(rth.ALWAYS_ISSUED)        # every cutoff is always issued
+    assert rth_eval.record()["definition"]["max_issue_delay_s"] == 840
+
+
+def test_the_scores():
+    from forecaster import rth_eval as re_
+    assert re_.fair_crps([0.0, 0.0], 1.0) == 1.0
+    assert re_.fair_crps([-1.0, 1.0], 0.0) == 0.0                 # the spread term: no penalty for two members
+    assert re_.fair_crps([0.0, 2.0], 1.0) == 0.0
+    with pytest.raises(ValueError):
+        re_.fair_crps([1.0], 1.0)
+    assert re_.p_up([0.1, -0.2, 0.3]) == 3 / 5 and re_.p_up([]) == 0.5
+    assert re_.brier(0.6, True) == pytest.approx(0.16) and re_.brier(0.6, False) == pytest.approx(0.36)
+    iv = re_.block_bootstrap([-1.0] * 30, 5, 2000, 1, 0.9875)
+    assert iv["mean"] == -1.0 and iv["high"] == -1.0 and re_.decide(iv).startswith("RTH-20 better")
+    wide = re_.block_bootstrap([(-1) ** i * 1.0 for i in range(30)], 5, 2000, 1, 0.9875)
+    assert wide["low"] < 0 < wide["high"] and re_.decide(wide) == "no sufficiently reliable improvement was established"
+    assert re_.block_bootstrap([0.3, -0.1, 0.2], 5, 500, 7, 0.9) == re_.block_bootstrap([0.3, -0.1, 0.2], 5, 500, 7, 0.9)
+
+
+def test_the_analysis_pools_sessions_and_keeps_size_and_direction_apart():
+    from forecaster import rth_eval as re_
+    cases = []
+    for i in range(40):
+        day = f"2026-11-{1 + i % 28:02d}" if i < 28 else f"2026-12-{i - 27:02d}"
+        for minutes in (15, 30):
+            better = {"size": 0.1, "direction": 0.25 + 0.05 * (-1) ** i, "signed": 0.2}
+            base = {"size": 0.3, "direction": 0.25, "signed": 0.3}
+            cases.append({"session_date": day, "minutes": minutes, "reason": None,
+                          "scores": {"RTH-20": better, "RTH-5": better, "PRE-5": base, "CLOCK": base}})
+    cases.append({"session_date": "2026-12-20", "minutes": 45, "reason": "late", "scores": None})
+    out = re_.analyse(cases)
+    assert out["counted_sessions"] == 40 and out["by_reason"] == {"scored": 80, "late": 1}
+    assert out["primary"]["RTH-20 vs CLOCK: size"]["decision"].startswith("RTH-20 better")
+    assert out["primary"]["RTH-20 vs PRE-5: direction"]["decision"] == \
+        "no sufficiently reliable improvement was established"
+    assert out["primary"]["RTH-20 vs CLOCK: size"]["n"] == 40              # sessions weigh equally
+    assert set(out["per_cutoff"]) == {"09:45", "10:00", "10:15"}
 
 
 def test_features_read_only_the_window_and_the_frozen_context():
@@ -285,8 +326,10 @@ def journal():
     set_active_contracts(conn, "NQ", {d: NQ_CID for d in days}, "test")
     set_active_contracts(conn, "ES", {d: ES_CID for d in days}, "test")
     register(conn)
+    from database import journal_store as store
+    from forecaster.journal import annotate
     for d in days[-24:]:                                   # the last 24 have a valid daily ATR (70 true ranges)
-        take_snapshot(conn, d, defs.DEFAULT_PROFILE)
+        annotate(conn, store.get_snapshot(conn, take_snapshot(conn, d, defs.DEFAULT_PROFILE)))
     yield conn, days
     conn.close()
 
@@ -548,3 +591,120 @@ def test_cli_backfill_show_and_calibrate(journal, capsys):
     assert main(["--db", DSN, "rth-calibrate", "--end", DAY]) == 0
     out = capsys.readouterr().out
     assert "(registered: 258 2025-09-29..2026-10-07)" in out and "path" in out
+
+
+@needs_db
+def test_issue_stores_the_evaluation_forecasts_once_as_issued(journal):
+    """Each cutoff window's issue stores RTH-20, RTH-5, PRE-5 and CLOCK with their members, weights, moves and
+    versions - once per session and cutoff, never rebuilt: a later bar revision leaves them as issued."""
+    from contracts import rth_eval as ev
+    from database import journal_store as store
+    from database.queries import get_day_bars, save_trading_day
+    from forecaster import rth_analogues as ra
+    from forecaster import rth_eval as re_
+    from forecaster.journal import match
+    from tests.synthetic import NQ_CID
+    conn, days = journal
+    match(conn)                                            # the pre-open sets PRE-5 reads
+    ra.register(conn)
+    day = days[-5]                                         # its windows were backfilled by an earlier test: a
+                                                           # backfill never stands in for an issue
+    first = ra.issue(conn, now=_ny(day, 11, 0), day=day, issued_by="auto")
+    assert [m for m, _, _ in first["forecasts"]] == [15, 30, 45]
+    assert [new for _, _, new in first["stored"]] == [True] * 4                # recorded beside the backfills
+    assert all(store.get_rth_set(conn, sid)["issued_by"] == "auto" for _, sid, _ in first["stored"])
+    stored = {f["elapsed_minutes"]: f for f in store.rth_eval_forecasts(conn, ev.VERSION) if f["session_date"] == day}
+    f = stored[30]
+    assert set(f["forecasts"]) == set(ev.FORECASTS)
+    pool = store.get_rth_set(conn, f["set_id"])["pool_size"]               # the synthetic store holds ~20 earlier
+    assert len(f["forecasts"]["RTH-20"]["members"]) == min(20, pool)        # sessions with a snapshot
+    assert len(f["forecasts"]["RTH-5"]["members"]) == 5
+    assert len(f["forecasts"]["PRE-5"]["members"]) >= 3 and f["sources"]["preopen_set_id"] is not None
+    assert len(f["forecasts"]["CLOCK"]["members"]) == pool
+    assert sum(float(m["weight"]) for m in f["forecasts"]["CLOCK"]["members"]) == pytest.approx(1, abs=1e-5)
+    assert f["sources"]["matcher_version"] == rth.RTH_MATCHER_VERSION and f["eligible"] is False   # issued late
+    member = f["forecasts"]["RTH-20"]["members"][0]
+    assert set(member) >= {"session_date", "snapshot_id", "contract_id", "similarity", "weight", "move"}
+    # the first per session and cutoff only
+    assert ra.issue(conn, now=_ny(day, 11, 0), day=day, issued_by="auto")["forecasts"] == []
+    # a vendor revision of a member's bars after the issue does not touch what was issued
+    rows = [dict(zip(r.keys(), r)) for r in get_day_bars(conn, NQ_CID, member["session_date"])]
+    for r in rows:
+        r["close"] += 50.0
+        r["high"] += 50.0
+    save_trading_day(conn, NQ_CID, member["session_date"], rows)
+    again = [x for x in store.rth_eval_forecasts(conn, ev.VERSION) if x["session_date"] == day]
+    assert {x["elapsed_minutes"]: x["digest"] for x in again} == {m: x["digest"] for m, x in stored.items()}
+
+
+@needs_db
+def test_the_database_decides_whether_a_forecast_was_in_time(journal):
+    """Eligibility is apart from provenance: the database stamps when the forecast was stored, and only one stored
+    within 14 minutes of its cutoff - before its window ends - counts."""
+    from contracts import rth_eval as ev
+    from database import journal_store as store
+    from forecaster import rth_analogues as ra
+    conn, days = journal
+    ra.register(conn)
+    openings, meta = ra.load_openings(conn, DAY)
+    rec, members, ranked = ra.build_set(openings[DAY], [o for d, o in openings.items() if d < DAY], 15, meta, "auto")
+    set_id, _ = store.save_rth_set(conn, {**rec, "input_digest": "eval-timing"}, members)
+    from forecaster import rth_eval as re_
+    base = re_.build_forecasts(conn, openings[DAY], 15, ranked, openings, set_id)
+    now = datetime.now(UTC)
+    results = {}
+    for i, ago in enumerate((5, 14.5, 20)):
+        fid, _ = store.save_rth_eval_forecast(conn, {**base, "session_date": f"2030-01-0{i + 1}",
+                                                     "cutoff_at": now - timedelta(minutes=ago)})
+        row = next(f for f in store.rth_eval_forecasts(conn, ev.VERSION) if f["forecast_id"] == fid)
+        results[ago] = (row["eligible"], int(float(row["issue_delay_s"]) // 60))
+    assert results == {5: (True, 5), 14.5: (False, 14), 20: (False, 20)}
+
+
+@needs_db
+def test_cases_status_and_the_one_scoring(journal, monkeypatch):
+    """Cases get the first reason that keeps them out; status never scores; the scoring waits for the endpoint, runs
+    once, and reads the stored forecasts with the realised moves."""
+    from contracts import rth_eval as ev
+    from database import journal_store as store
+    from forecaster import rth_analogues as ra
+    from forecaster import rth_eval as re_
+    from forecaster.journal import match
+    conn, days = journal
+    match(conn)
+    ra.register(conn)
+    june = [d for d in days if d >= "2026-06-01"]
+    monkeypatch.setattr(re_, "_registered", lambda c: {"registered_at": ra.utc("2026-06-01 00:00:00")})
+    now = _ny(DAY, 16, 0)
+    # forecasts issued in time for a few sessions (the database's clock is stamped now, so fake recent cutoffs), and
+    # inputs taken as verified - a synthetic store has no real receipt times
+    for d in june[:4]:
+        openings, meta = ra.load_openings(conn, d)
+        pool = [o for x, o in openings.items() if x < d]
+        rec, members, ranked = ra.build_set(openings[d], pool, 15, meta, "auto")
+        set_id, _ = store.save_rth_set(conn, {**rec, "input_digest": f"case-{d}"}, members)
+        f = re_.build_forecasts(conn, openings[d], 15, ranked, openings, set_id)
+        store.save_rth_eval_forecast(conn, {**f, "cutoff_at": datetime.now(UTC) - timedelta(minutes=3)})
+    real = store.get_rth_set
+    monkeypatch.setattr(re_.store, "get_rth_set", lambda c, sid: {**real(c, sid), "pit_status": "verified"})
+    # the synthetic store has ~20 earlier sessions with a snapshot: CLOCK falls short of its 30 members
+    assert {c["reason"] for c in re_.cases(conn, now) if c["session_date"] in june[:4] and c["minutes"] == 15} == \
+        {"forecast_incomplete"}
+    monkeypatch.setitem(ev.MIN_MEMBERS, "CLOCK", 5)
+    cases = re_.cases(conn, now)
+    scored = [c for c in cases if c["reason"] is None]
+    assert {c["session_date"] for c in scored} == set(june[:4]) and all(c["minutes"] == 15 for c in scored)
+    assert all(c["scores"]["RTH-20"]["size"] >= 0 and c["y"] is not None for c in scored)
+    assert {c["reason"] for c in cases if c["reason"]} <= set(ev.REASONS)
+    st = re_.status(conn, now)
+    assert st["counted_sessions"] == 4 and "scored" in st["by_reason"] and "primary" not in st
+    with pytest.raises(re_.NotAtEndpoint, match="4 of 60 sessions counted"):
+        re_.score(conn, now)
+    assert store.rth_eval_result(conn, ev.VERSION) is None
+    monkeypatch.setattr(ev, "ENDPOINT_SESSIONS", 4)
+    result = re_.score(conn, now)
+    assert result["counted_sessions"] == 4 and result["definition_hash"] == ev.definition_hash()
+    assert set(result["primary"]) == {f"{a} vs {b}: {m}" for a, b, m in ev.PRIMARY}
+    with pytest.raises(re_.NotAtEndpoint, match="scored already"):
+        re_.score(conn, now)
+

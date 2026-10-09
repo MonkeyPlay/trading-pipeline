@@ -15,7 +15,9 @@ Two views, switched explicitly:
   Reconstructed   the latest calculation of the window replayed, live or not -
                   labelled as such; for a day nothing was issued live for, the only one
 
-A day with live sets opens on As issued, any other on Reconstructed. The window
+A day with live sets opens on As issued, any other on Reconstructed. A day without a
+set of the current matcher shows a superseded version's reconstructions (v1's backfill),
+labelled as such - for review, not the record. The window
 follows the explorer (``Follow``) or any stored window is picked - the 15, 30 and 60
 minute checkpoints (09:45, 10:00, 10:30 ET) are marked. A window is never read past
 the minute replayed.
@@ -86,6 +88,7 @@ class RthAnaloguesPanel:
         self.aset: Optional[Dict[str, Any]] = None
         self.reason: Optional[str] = None
         self.windows: List[Dict[str, Any]] = []
+        self.version = rth.RTH_MATCHER_VERSION         # the matcher version shown (a superseded one for review)
         self.chosen: Optional[str] = None
         self.date_buttons: Dict[str, Any] = {}
         self.view_choice: Optional[str] = None          # the view picked; None: as issued when anything was
@@ -142,7 +145,13 @@ class RthAnaloguesPanel:
         if not day or symbol != defs.SYMBOL:
             self.reason = f"RTH analogues are kept for {defs.SYMBOL}, the journal symbol."
             return self._empty()
-        self.windows = store.rth_windows(self.conn, defs.SYMBOL, day, rth.RTH_MATCHER_VERSION)
+        self.version = rth.RTH_MATCHER_VERSION
+        self.windows = store.rth_windows(self.conn, defs.SYMBOL, day, self.version)
+        for older in () if self.windows else rth.SUPERSEDED:
+            self.windows = store.rth_windows(self.conn, defs.SYMBOL, day, older)
+            if self.windows:
+                self.version = older
+                break
         self._window_options()
         if not self.windows:
             self.reason = (f"No RTH analogue set of {day} is stored. The session in progress gets one a minute from "
@@ -152,7 +161,7 @@ class RthAnaloguesPanel:
         self.view = self.view_choice or (ISSUED if any(w["live"] for w in self.windows) else RECONSTRUCTED)
         self._set_view(self.view)
         if self.view == ISSUED:
-            self.aset = store.rth_set_issued(self.conn, defs.SYMBOL, day, rth.RTH_MATCHER_VERSION,
+            self.aset = store.rth_set_issued(self.conn, defs.SYMBOL, day, self.version,
                                              at=None if self.window is not None else at, minutes=self.window)
             if self.aset is None:
                 when = (f"window {self.window}" if self.window is not None else
@@ -162,7 +171,7 @@ class RthAnaloguesPanel:
                 return self._empty(keep_controls=True)
         else:
             upto = self.window if self.window is not None else minute
-            self.aset = store.rth_set_at(self.conn, defs.SYMBOL, day, rth.RTH_MATCHER_VERSION, upto)
+            self.aset = store.rth_set_at(self.conn, defs.SYMBOL, day, self.version, upto)
             if self.aset is None:
                 first = self.windows[0]["elapsed_minutes"]
                 self.reason = (f"No RTH set of {day} as of {upto} minute(s) after the open: the first stored window "
@@ -243,6 +252,9 @@ class RthAnaloguesPanel:
                 "Reconstructed (the latest calculation of this window): ")
         self.title.text = view + ra.describe(aset)
         notes = []
+        if self.version != rth.RTH_MATCHER_VERSION:
+            notes.append(f"Superseded matcher {self.version}: its reconstructions are shown for review only - "
+                         f"{rth.RTH_MATCHER_VERSION} keeps the record.")
         if aset["quality"].get("provisional"):
             notes.append(f"Provisional: only {aset['elapsed_minutes']} minute(s) of the opening observed - early "
                          f"matches move a lot.")
