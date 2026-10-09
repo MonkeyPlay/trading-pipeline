@@ -70,7 +70,9 @@ _FORECAST_FIELDS = set(range(25, 37)) | set(range(42, 46))
 _ARMS = {v: f"{ml.ARM_NAMES[a]} (arm {a})" for a, v in ml.ARMS.items()}
 # The arms on the grading radar: A, the benchmark, a dashed neutral grey; B, N and M the first three categorical slots
 # of the dark palette (validated all-pairs against #1c212e and #131722: CVD dE 9.4, normal-vision dE 20.9, >= 3:1).
-_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "N": "#d95926", "M": "#199e70"}
+# P takes slot 4 (yellow): it fails the all-pairs gate against N's orange (validate_palette.py: normal-vision dE 10.6),
+# so it is used only where its label is shown beside it (the arm tiles), never in an overlaid chart.
+_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "N": "#d95926", "M": "#199e70", "P": "#c98500"}
 _SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
           "direction_15m": "15-min direction", "session_type_rth": "Session type", "close_direction_rth": "RTH close",
           "first_level_tested": "First level"}
@@ -220,6 +222,11 @@ class ForecastPanel:
                  f"experimental until a forward evaluation shows they improve on B. A historical replay is research "
                  f"on reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
                  f"hidden until you show them.").classes("text-sm").style(_MUTED)
+        with ui.card().classes("w-full gap-1").style("background:#1c212e"):
+            ui.label("Summary - from the stored numbers only: the forecast in force and why, every arm's "
+                     "probabilities and the ML forecasts' differences from A and B, the reference levels, the "
+                     "instruments used and what they showed at the cutoff").classes("text-xs").style(_MUTED)
+            self.summary = ui.column().classes("w-full gap-0")
         with ui.row().classes("w-full items-center gap-4"):
             self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
             ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
@@ -229,7 +236,7 @@ class ForecastPanel:
                 ui.label("one tile per arm: the one shown below is highlighted - click another to show it").classes(
                     "text-xs").style(_MUTED)
             self.arm_row = ui.element("div").classes("w-full grid gap-3").style(
-                "grid-template-columns:repeat(4,minmax(0,1fr))")
+                "grid-template-columns:repeat(5,minmax(0,1fr))")
             ui.separator().style("background:#2a2e39")
             self.grading = ui.column().classes("w-full gap-2")
         with ui.column().classes("w-full gap-3") as self.run_body:
@@ -270,6 +277,7 @@ class ForecastPanel:
         elif self.arm not in have:
             self.arm = "B" if "B" in have else next((a for a in ml.ARMS if a in have), None)
         self.current = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in current_runs(runs).items()}
+        self._render_summary()
         self._render_arms(self.day, runs)
         self._render_grading()
         mine = [r for r in runs if ml.arm_of(r["algorithm_version"]) == self.arm]
@@ -280,6 +288,21 @@ class ForecastPanel:
         if not mine:
             self.run = None
             self.chart.apply(dict(_EMPTY_SPEC))
+
+    def _render_summary(self) -> None:
+        """The day's summary (forecaster/forecast_summary.py) as sentences - measurements and stored fields only."""
+        from forecaster import forecast_summary as fsum
+        self.summary.clear()
+        with self.summary:
+            if not self.day or not self.runs:
+                ui.label("No forecast run for this session.").classes("text-sm").style(_MUTED)
+                return
+            try:
+                text = fsum.lines(fsum.build(self.conn, self.day))
+            except Exception as e:              # the page stays usable; the summary says why it is missing
+                text = [f"Summary unavailable: {type(e).__name__}: {e}"]
+            for line in text:
+                ui.label(line).classes("text-sm break-words")
 
     def pick_arm(self, arm: str) -> None:
         self.arm = arm
@@ -324,6 +347,7 @@ class ForecastPanel:
             detail = {"A": f"the prior of {(ev.get('prior') or {}).get('sessions', '?')} earlier session(s)",
                       "B": f"{n} rule-based analogue(s)",
                       "N": f"NQ's own features · {ml.STATUS[ml.ML_NQ_VERSION]}",
+                      "P": f"NQ's own features, trained on NQ, ES and RTY · {ml.STATUS[ml.ML_POOLED_VERSION]}",
                       "M": (f"{', '.join(k for k, v in used.items() if v == 'used') or 'no context instrument'} used"
                             + (f"; {', '.join(k for k, v in used.items() if v != 'used')} missing" if any(
                                 v != 'used' for v in used.values()) else "")
@@ -582,14 +606,21 @@ class ForecastPanel:
                 self._scorecard(g)
         ui.label(f"p(realised): the probability the arm gave the class that happened; a hit: its predicted class "
                  f"was it. Arm {BENCHMARK} (the earlier-session prior) is the benchmark; chance is 1 / the number of "
-                 f"classes. One session is a view, not a score - experiments score many (Evaluation).").classes(
+                 f"classes. The radar draws only the arms that forecast every target - the ML arms (N, M, P) cover "
+                 f"the 15-minute direction alone, so their numbers are in the table. One session is a view, not a "
+                 f"score - experiments score many (Evaluation).").classes(
             "text-[10px]").style(_MUTED)
 
     def _radar_options(self, targets: List[str], values: Dict[str, List[Optional[float]]],
                        chance: List[float]) -> Dict[str, Any]:
-        """A radar over ``targets`` (0-100 %): one polygon per arm, the benchmark dashed, chance dotted."""
+        """A radar over ``targets`` (0-100 %): one polygon per arm that forecast every target, the benchmark
+        dashed, chance dotted. The ML arms forecast direction_15m only: a missing axis is never drawn as 0, so they
+        are left to the table (which also keeps the radar within the three categorical colours that stay apart for
+        every pair)."""
         series = []
         for arm, vals in values.items():
+            if any(v is None for v in vals):
+                continue
             color, bench = _ARM_COLOR[arm], arm == BENCHMARK
             series.append({
                 "name": f"{arm} · {ml.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),

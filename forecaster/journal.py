@@ -17,8 +17,10 @@ once the session is final.
                   oldest first; then annotations and outcomes for stored snapshots
                   without one, a re-check of the outcomes of the sessions the
                   collector re-downloads (the vendor revises recent bars), the
-                  analogue sets, and the historical-replay baseline forecasts
-                  (forecaster/forecast_service.py) - each stored once
+                  analogue sets, the historical-replay baseline forecasts
+                  (forecaster/forecast_service.py) and the ML forecasts of the sessions
+                  after the models' training window, with the forecast in force
+                  (forecaster/ml_service.py) - each stored once
 
 A snapshot reads nothing after its cutoff, so a session in progress gets its snapshot,
 annotation, analogue set and forecasts as soon as its bars past the cutoff are stored;
@@ -101,8 +103,9 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
 
 def register(conn) -> None:
     from contracts import nq_forecast
+    from forecaster import ml_model
     for rec in (defs.all_records() + [preopen.rules_record(), preopen.matcher_record()]
-                + nq_forecast.all_records()):
+                + nq_forecast.all_records() + ml_model.records()):
         store.register_version(conn, rec)
 
 
@@ -304,6 +307,8 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
                 + (f", {len(failed)} session(s) failed: {', '.join(failed)}" if failed else "") + ".")
     sets = match(conn, profile)
     from forecaster.forecast_service import forecast_all
+    from forecaster.ml_service import issue_pending
     forecasts = forecast_all(conn, profile)
+    ml_runs = issue_pending(conn, profile, now)
     return {"snapshots": len(taken), "annotations": annotated, "outcomes": recorded, "analogue_sets": sets,
-            "forecasts": forecasts, "failed": failed}
+            "forecasts": forecasts, "ml_runs": ml_runs, "failed": failed}

@@ -14,12 +14,10 @@ prompt **P2** (prompt version 2.1, definitions NQ-v2, overnight classification
 ON-v1, revised 2026-09-15), in `prompts/source/` (renamed after their titles; the
 manifest keeps the original file names), hashed in `prompts/manifest.json` (a test
 checks the hashes). Their author confirmed them as the original files on
-2026-10-04 (`byte_exact_original: true`). The guideline's **Appendix A** - its
-proposed runtime prompts A1 structure annotation, A2 forecast synthesis, A3
-supplementary outcome annotation and the A4 interface sketch - is beside them
-(`GUIDELINE APPENDIX A - RUNTIME PROMPTS.md`, pasted 2026-10-04, also hashed).
-Runtime prompts adapted from it belong in `prompts/runtime/`, each under its own
-version identifier.
+2026-10-04 (`byte_exact_original: true`). The guideline's Appendix B (field
+ownership) is beside them. Its Appendix A - proposed LLM runtime prompts - and the
+runtime prompts adapted from it were removed with the LLM forecasting system on
+2026-10-09 (docs/ml_forecaster.md).
 
 ## What is built
 
@@ -67,28 +65,17 @@ version identifier.
 | `nq_structure_rules_v3` | annotation | v2's labels, HTB-v1 worded as exclusive bands, its basis naming a close beyond the range; never stored |
 | `nq_structure_rules_v2` | annotation | v1 plus Higher-Timeframe Bias (HTB-v1) |
 | `nq_structure_rules_v1` | annotation | the same without Higher-Timeframe Bias |
-| `nq_structure_llm_v4` | annotation | the Claude structure annotation (Appendix A, A1), `claude-opus-5-5` at effort `xhigh`, Higher-Timeframe Bias from HTB-v1; v2's prompt and schema with strict local validation and the request ledger - built, the API key is in `.env`, not run yet |
-| `nq_structure_llm_v3` | annotation | the same at effort `high`; registered, never run |
-| `nq_structure_llm_v2` | annotation | the same, validated less strictly and without the ledger; registered, never run |
-| `nq_structure_llm_v1` | annotation | registered, never run: Claude judged Higher-Timeframe Bias itself |
 | `nq_match_p1_v2` | matcher | P1 section 7's analogue rubric (stage 2B / 2C); each session counts once; the prior from every snapshot (annotated or not), known as of the target, its manifest archived and hashed - current |
 | `nq_match_p1_v1` | matcher | the same rubric; a session with several records could count more than once, and a set recorded only its analogues' outcome revisions, not the prior's (its 274 impl5 sets stay as they are) |
 | `nq_forecast_schema_v1` | forecast_schema | P1's 47 properties as local specs (key, type, unit, vocabulary, owner, window, version, missing policy), prediction and lifecycle statuses, probability units - current |
-| `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A, stage 4 arm B): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence; no LLM - current |
+| `nq_baseline_p1_v1` | forecast_algorithm | the deterministic baseline (stage 3A, stage 4 arm B): per P1 target the smoothed analogue distribution, recomputed exactly from the frozen evidence - current, the forecast in force |
 | `nq_prior_p1_v1` | forecast_algorithm | the earlier-session prior alone (stage 4 arm A): the same prior manifest, no structure, no analogues - current |
-| `nq_restricted_p1_v3` | forecast_algorithm | stage 4 arm C: the baseline over the analogue set of `nq_structure_restricted_v3` (effort medium) - current |
-| `nq_restricted_p1_v2` | forecast_algorithm | the same over `nq_structure_restricted_v2` (effort xhigh) |
-| `nq_restricted_p1_v1` | forecast_algorithm | the same over `nq_structure_restricted_v1`; registered, never issued |
-| `nq_synthesis_p1_v4` | forecast_algorithm | stage 4 arm D: v3 at effort `medium`, without the 5m bars and swing points (15m and final 2m bars kept beside the frozen annotation, analogues and baseline), live or through the Batch API (the user's choices, 2026-10-05) - current |
-| `nq_synthesis_p1_v3` | forecast_algorithm | Claude's forecast synthesis (Appendix A, A2) from arm B's evidence, `claude-opus-5-5` at `xhigh`, 64,000 tokens streamed; a flat response schema (a list of one item per target, probabilities as class/value pairs, no nullable field) validated locally; its first answer used 6,568 output tokens |
-| `nq_synthesis_p1_v2` | forecast_algorithm | the same with one object per target and named probability fields: the API refused its compiled grammar as too large; one failed run (2026-10-05) |
-| `nq_synthesis_p1_v1` | forecast_algorithm | the same with 29 nullable fields - the API refused its schema (at most 16) - and 20,000 tokens; one failed run (2026-10-05) |
-| `nq_forecast_schema_v2` | forecast_schema | v1 with the judgement estimation status and the synthesis' Forecast Confidence (1-5); arm D's runs only |
-| `nq_structure_restricted_v3` | annotation | arm C: v2 at effort `medium`, with the 5m bars and swing points only (the 15m and final 2m bars dropped), live or through the Batch API (the user's choices, 2026-10-05) - current |
-| `nq_structure_restricted_v2` | annotation | Claude owns Overnight Structure and Premarket Pattern (date-blinded request), the rules the rest; 64,000 tokens, streamed, effort `xhigh` (its first answer used 23,239 output tokens) |
-| `nq_structure_restricted_v1` | annotation | the same capped at 16,000 tokens: at `xhigh` its one request (2026-10-05) spent them all thinking and returned nothing |
 | `nq_issue_replay_v1` | issue_policy | historical replay: research on reconstructed evidence, issued at the database clock, never timely live |
-| `nq_issue_live_v2` | issue_policy | live (3D): v1 plus the capture rules - bars requested after the cutoff until the bar ending at it arrives (at most 20 s), receipts with the database time, age-0 freshness, point-in-time verification, restart on the frozen snapshot, both arms - current |
+| `nq_issue_live_v4` | issue_policy | live (3D): v2's capture rules with a data wait set per capture (recorded with it; the wait plus a 10 s reserve must end by 09:29:50 ET), the evidence ending at the cutoff however long the wait, a stale capture recorded as a missed opportunity, the forecast in force recorded - current |
+| `nq_issue_live_v2` | issue_policy | live (3D): v1 plus the capture rules - bars requested after the cutoff until the bar ending at it arrives (at most 20 s), receipts with the database time, age-0 freshness, point-in-time verification, restart on the frozen snapshot, both arms; never issued a run (v3, which added the LLM arm D, was deleted with it) |
+| `nq_forecast_schema_v3` | forecast_schema | v1 with the `model` estimation status: the ML forecasts' runs (direction_15m only; the other targets unavailable with the reason) |
+| `nq_ml_features_v1` | ml_features | the ML forecaster's instruments, features, normalisation, freshness and missing-data rules (contracts/nq_ml.py, docs/ml_forecaster.md) |
+| `nq_ml_nq_p1_v1`, `nq_ml_multi_p1_v1`, `nq_ml_pooled_p1_v1` | forecast_algorithm | the scikit-learn forecasts of direction_15m (arms N, M, P): NQ-only, multi-instrument, pooled NQ+ES+RTY training - each naming its artifact's sha256; experimental |
 | `nq_issue_live_v1` | issue_policy | live: a live_capture snapshot issued by 09:29:50 ET by the database clock, acknowledged after commit; registered, never used |
 
 Each label version keeps every rule of the one before unchanged (checked on the
@@ -460,9 +447,8 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   - Snapshots (`nq_evidence_v2_*`) hold scheduled releases from the previous
     session's close to the end of the day and earnings only up to the cutoff.
 - **Rule-based structure annotation** (`nq_structure_rules_v4`,
-  [forecaster/structure_rules.py](../forecaster/structure_rules.py)): the stand-in
-  for the Claude structure annotation (Appendix A, A1) until the API is in place.
-  It reads one frozen snapshot only and returns the shape A1 will return - per
+  [forecaster/structure_rules.py](../forecaster/structure_rules.py)). It reads one
+  frozen snapshot only and returns - per
   field a value or null with a reason, a status, evidence ids inside the snapshot
   and a short basis with the numbers - plus the price location and the numeric
   layer (2/2 swing points on 5m bars confirmed by the cutoff, the moving averages,
@@ -504,39 +490,6 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   exclusive wording and names a close beyond the range as such in the basis. On the 274 sessions: Bullish 99, Neutral 77, Bearish
   55, Neutral-bullish 11, Neutral-bearish 4, unavailable 28 (19 without a daily ATR
   in September 2025, 9 uncovered). Not a matcher input.
-- **Claude structure annotation** (`nq_structure_llm_v4`,
-  [forecaster/structure_llm.py](../forecaster/structure_llm.py)), built and tested
-  against a stand-in client; it runs once `ANTHROPIC_API_KEY` is in `.env`. The
-  system prompt [prompts/runtime/structure_annotation_v2.md](../prompts/runtime/structure_annotation_v2.md)
-  quotes Appendix A's A1 and P1 section 4 verbatim and adds the conventions and
-  vocabularies; its hash is part of the registered protocol, so an edit needs a new
-  version. The user message is the evidence bundle - references, the overnight 5m
-  and 15m bars, the last 45 2m bars with the three lines, the confirmed swing
-  points, every item with an id - and the answer must follow the
-  structure_annotation JSON schema (structured outputs). `claude-opus-5-5`, effort
-  `xhigh` (v3, never run, was `high`). Claude annotates the nine descriptive fields; Event Risk, Event Notes,
-  Higher-Timeframe Bias and the price location come from the same rules as the
-  rule-based protocol. Validation, locally before anything is stored: the whole
-  answer against the output JSON schema (types, enums, required and unknown keys - a
-  boolean is not a Chop Score), then classified exactly when there is a value; a
-  classified field with no reason, at least one evidence id and a basis; an
-  unavailable one with a reason; every evidence id in the bundle. Every request is a
-  row in `journal.inference_requests` before it is sent (migration 0013) - the exact
-  canonical request, its prompt, schema and evidence hashes and the code revision -
-  and a batch's id
-  is recorded the moment it exists, its request ids being the custom_ids; every
-  answer, failures included, is an attempt in `journal.annotation_attempts` tied to
-  its request; only a valid answer becomes an annotation. A request without an
-  attempt is unresolved: `annotate-llm` collects a recorded batch on its next run
-  instead of sending it again and leaves those sessions out of new requests; a live
-  request whose run ended before the answer was stored cannot be fetched again and
-  stays unresolved until `--close-unresolved` records it as an error (it may have
-  been billed). Live requests have the
-  server-side refusal fallback on, but an answer another model served is kept as an
-  attempt, not as an annotation of this protocol. A snapshot holding anything after
-  its cutoff is never sent. The historical backfill goes through the Batch API at
-  half price; `--estimate` sizes it first.
-
 ### Analogues (2B-2D)
 
 [matching/structural.py](../matching/structural.py), matcher `nq_match_p1_v2`:
@@ -575,8 +528,8 @@ Built on 2026-10-04. Definitions in [contracts/nq_preopen.py](../contracts/nq_pr
   (migration 0013) and the outcome summary; a set is new only when its pool, its
   analogues' outcome revisions or its prior manifest change - a revised outcome of an
   earlier session that is not an analogue changes the prior, so it makes a new set.
-  A set is looked up by its target's annotation protocol, so a rules set is never
-  shown for a Claude one.
+  A set is looked up by its target's annotation protocol, so a set over one
+  protocol's annotation is never shown for another's.
   Historical sets are marked `historical_reconstruction`: their outcomes were
   computed after the fact.
 - **Dashboard:** the **Session Explorer** (`/`) charts one of the selected NQ
@@ -601,16 +554,10 @@ python scripts/nq_journal.py match                          # analogue sets (als
 python scripts/nq_journal.py analogues --date 2026-10-02 [--outcomes]
 python scripts/nq_journal.py annotation-review-set --name preopen_review_v1
 python scripts/nq_journal.py annotation-review-report --name preopen_review_v1
-python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --estimate
-python scripts/nq_journal.py annotate-llm --start 2025-09-01 --end 2026-10-02 --batch
-python scripts/nq_journal.py match --protocol llm           # analogues over Claude's annotations
 python scripts/nq_journal.py show --date 2026-10-02         # snapshot, annotation and outcome
 ```
 
-The collector's journal step does everything above except the review set and the
-Claude requests, which cost money and are manual only, for now: `annotate-llm` sends
-them only from a terminal after you type "send" (`structure_llm.manual_requests`); the
-collector, catch-up, the live capture, the dashboard's jobs and cron cannot.
+The collector's journal step does everything above except the review set.
 
 ### P1's 47-field pre-open record (Appendix B)
 
@@ -629,7 +576,7 @@ the Session Explorer's analogues panel has it under "P1 pre-open record".
 | 10-11 Premarket High / Low | snapshot references, every minute of [08:00 ET, cutoff) (`nq_conv_v4`, `nq_conv_v5`) | done |
 | 12 Price at 09:29 | neither profile observes 09:29:00-09:29:59; the cutoff price is a separate field, never renamed | unavailable by design |
 | 13-14 Daily ATR, 2-Min ATR at 09:29 | snapshot ATRs; the 09:27 profile shows 2-Min ATR at 09:29 unavailable | done |
-| 15-19 structure, trends, Higher-Timeframe Bias | structure annotation (rules now, Claude later); HTB-v1 | done |
+| 15-19 structure, trends, Higher-Timeframe Bias | the rule-based structure annotation; HTB-v1 | done |
 | 20-22 MA fields | 2m TradingView lines + the rules convention | done |
 | 23-24 Premarket Pattern, Chop Score | outcome-blind annotation | done |
 | 25-36 predictions, probabilities, first level, confidence | the forecast run (`nq_baseline_p1_v1`), read by its run id; Forecast Confidence null (no convention registered) | done (historical replay) |
@@ -763,17 +710,12 @@ today's session:
    cutoff) and issues both arms in mode `live`: the database stamps the issue time and
    makes a run after 09:29:50 ET `late`; an issued run is acknowledged after commit,
    and only an issued and acknowledged run counts as timely;
-7. with `--with-d` ([forecaster/live_synthesis.py](../forecaster/live_synthesis.py),
-   migration 0028), arm D too: one Claude request from the live B run's frozen
-   evidence, confirmed by hand ("send") or by a one-time dashboard approval, recorded
-   before it is sent and never sent twice for a snapshot. It is awaited until the
-   deadline; then the forecast in force is recorded (`delivered`: the first timely run
-   of D, B, A, or none). An answer after the deadline is still stored for up to 120 s
-   and the database makes it late; it never replaces the forecast in force. Every
-   capture without `--with-d` records `delivered` too (B, else A).
-
-The timer below runs the capture without D: Claude requests are manual only, so a
-scheduled job never sends one.
+7. on the research profile, the ML forecasts with a stored artifact are issued live
+   beside A and B ([forecaster/ml_service.py](../forecaster/ml_service.py)); then the
+   forecast in force is recorded - a capture step and a row of
+   `journal.forecast_deliveries` (migrations 0028, 0030): the first timely run in the
+   delivery order (B, then A, while the ML forecasts are experimental), or none, with
+   the reason any earlier one was passed over.
 
 It uses its own IB client id (`IB_CLIENT_ID + 1`), so the collector can run beside
 it; IB Gateway must be up and the session's NQ contract stored (the regular
@@ -795,11 +737,11 @@ ExecStart=/home/monkeyplay/trading_pipeline/.venv/bin/python scripts/nq_journal.
 
 Tested with a fake IB and clock - waiting for the cutoff, retries, the freshness
 budget, receipts, verification, the refused snapshot after the open, restart on a
-frozen snapshot, late issuance - and arm D with simulated provider answers (timely,
-invalid, an error, none, late, unapproved) - not yet against IB on a trading day:
-unit coverage is not live operation (guideline 4E: a shadow period comes first). On
-the current feed the bar ending at the cutoff arrives about 11 minutes late, beyond
-the 20-second budget, so a capture goes stale (docs/forecasting_audit.md, section 5).
+frozen snapshot, late issuance, the ML forecasts issued live - not yet against IB on a
+trading day: unit coverage is not live operation (guideline 4E: a shadow period comes
+first). On the current feed the bar ending at the cutoff arrives about 11 minutes late,
+beyond the default 20-second wait, so a capture goes stale unless given a longer wait on
+an earlier-cutoff profile (`--profile candidate_0915 --wait-minutes 13`).
 
 ## Stage 4: registered experiments (guideline revision 2)
 
@@ -809,68 +751,10 @@ the 20-second budget, so a capture goes stale (docs/forecasting_audit.md, sectio
 - **Arms (4B):** A `nq_prior_p1_v1`, the earlier-session prior alone; B
   `nq_baseline_p1_v1`, rules-only structure, the P1 matcher and the smoothed analogue
   forecast. Both are issued from the same snapshot, annotation and analogue set (the
-  catch-up issues both). C and D need Claude, so they are issued only by a run started by
-  hand (below).
-- **Arm C, restricted LLM** ([forecaster/llm_arms.py](../forecaster/llm_arms.py),
-  sequence item 6): protocol `nq_structure_restricted_v3` - Claude classifies only
-  Overnight Structure and Premarket Pattern
-  ([prompt](../prompts/runtime/structure_annotation_restricted_v3.md), A1 and P1 section 4
-  verbatim), every other field and the price location are `nq_structure_rules_v4`'s; the
-  same request ledger, validation and one attempt per request as the full Claude protocol.
-  Its analogue set is matched among the earlier sessions annotated under the same protocol
-  only, then smoothed like B (`nq_restricted_p1_v3`). So arm C needs its pool annotated:
-  with none it has no analogues and is the prior alone. The pool is cheapest through the
-  Batch API: `annotate-llm --restricted --start ... --end ... --batch`.
-- **Arm D, synthesis** (`nq_synthesis_p1_v4`, Appendix A, A2,
-  [prompt](../prompts/runtime/forecast_synthesis_v4.md) with every target's registered
-  rule): Claude forecasts each target from arm B's frozen evidence - the snapshot, the
-  rule-based annotation, the analogues with their eligible outcomes, the prior and the
-  smoothed baseline, each target's eligibility and the candidate levels - returning
-  probabilities, a class, evidence ids, a departure when it differs from the baseline, and
-  a confidence 1-5. Validated locally before anything is stored (exact decimals summing to
-  1, the class the single most probable, ineligible targets unavailable, evidence ids in the
-  bundle, the answer from the model itself); stored as a run on arm B's evidence ids, its
-  request in the ledger (`forecast_runs.request_id`, migration 0017), probabilities as exact
-  fractions with estimation status `judgement`. An invalid answer is an invalid run with
-  its raw text; issued evidence is never sent again.
-- **Evidence per arm:** arm C sends the references, the 5m bars and their swing points (the
-  15m bars repeat the 5m ones; the final 2m bars with the moving averages were context only
-  for its two fields); arm D the references, the 15m bars and the final 2m bars with the
-  moving averages beside the frozen annotation, analogues and baseline (its input about 30%
-  smaller than with every bar set).
-- **Batch API:** `llm-forecast --batch` (the dashboard's Batch API box) sends each arm's
-  requests as one batch - half price, no refusal fallback there - and waits up to
-  `--wait-minutes` (30); a batch still processing stays recorded, its sessions shown as
-  pending and never sent again, and the next run collects it first (a confirmation is asked
-  for that too). A synthesis answer is matched to its evidence by the archived request's hash.
-- **Effort, token caps and cost:** both arms ask at effort `medium` (`ARMS_EFFORT`, since
-  2026-10-05; the full nine-field protocol keeps `xhigh`). The thinking counts against
-  `max_tokens` and is billed: v1 capped arm C at 16,000 and at `xhigh` its first request
-  spent all of them thinking; both arms allow 64,000 and stream (the SDK sends nothing that
-  long otherwise). At `xhigh` a restricted annotation used 23,239 output tokens and a
-  synthesis 6,568. The plan estimates a request's output from the arm's answered requests
-  (the median, the current version first, else earlier versions - an upper estimate - else a
-  guess) and its input from its text at the characters per token measured on earlier requests
-  (about 1.8 for this numeric JSON), halves both through the Batch API, and gives the most a
-  run can cost, every request at its cap. Another effort is a new protocol / algorithm
-  version.
-- **The API's schema limits:** structured outputs compile at most 16 nullable or union-typed
-  parameters and 24 optional ones, and refuse a grammar that compiles too large (internal,
-  grows with the named properties and nesting); `tests/test_llm_arms.py` counts the unions of
-  every schema sent and keeps the synthesis schema flat (at most 16 properties). The
-  synthesis' one item per target and each class once are checked locally. The full nine-field
-  protocol `nq_structure_llm_v4` has 18 and would be refused - it needs a new version before
-  `annotate-llm` (without `--restricted`) can run.
-- **Blinding:** both arms' requests name no session date, weekday, contract or absolute
-  price - times on the New York clock, prices relative to the previous RTH close - so a
-  historical replay cannot draw on a remembered outcome; evidence ids are mapped back.
-- **Started by hand:** `python scripts/nq_journal.py llm-forecast --sessions N [--arms C|D|CD]`,
-  or for chosen days `--date D` (repeatable) and `--start S --end E`, shows the plan (per
-  session what it needs, the requests, a rough cost, arm C's pool) and sends after typing
-  "send"; the dashboard's **Run LLM forecast** (the last sessions, default 1: today, or chosen
-  days on a calendar) and the Forecast page's **Run C and D for <day>** show the same plan and
-  send only after its confirmation, through a one-time approval for exactly those days that
-  the job redeems ([forecaster/approvals.py](../forecaster/approvals.py)).
+  catch-up issues both). The ML forecasts of direction_15m - N (NQ-only), M
+  (multi-instrument), P (pooled training) - are issued beside them for the sessions after
+  their training window (docs/ml_forecaster.md); experimental, never the forecast in force
+  until a forward evaluation establishes an improvement.
 - **Arms and grading (dashboard):** the Forecast page's arm tiles show, per session, which
   arms ran and which is shown; below them a radar against arm A
   ([forecaster/grading.py](../forecaster/grading.py)) - before the outcome the probability each
@@ -916,8 +800,6 @@ python scripts/nq_journal.py experiment-list
 - **Shadow operation:** the live job scheduled and run on trading days, then a
   prospective experiment (`--purpose test --official-run first_timely`) over sessions
   after it starts.
-- **Experiments over arms C and D:** `experiment-register` still registers arms A and B; a
-  manifest with C and D (and a decision on how sessions without their runs count) is next.
 - **Forecast Confidence:** a registered evidence-quality convention (your decision).
 - **Review:** the review pages were removed (2026-10-04), so the guideline's human
   review (1E, 2A) has no form; the stored verdicts came from a form that preselected

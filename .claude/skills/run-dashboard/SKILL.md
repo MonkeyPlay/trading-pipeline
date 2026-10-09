@@ -51,12 +51,11 @@ python3 -m venv /tmp/pw && /tmp/pw/bin/pip install -q playwright
   progress (18:00-17:00 ET on session days); the `fan` step says so otherwise.
 - **Update data** (header) runs real jobs against the dashboard's `DATABASE_URL`: **Run collector** and
   **Run forecaster** write to it (incremental, idempotent), **Forecast now** collects (writes bars) and then
-  replaces `data/preview/forecast_preview.json` (nothing in the journal), **Live forecast** records an
-  append-only live capture with its forecasts, and **Run LLM forecast**'s confirmation **Send** sends Claude
-  requests that cost money - never click those two to test (opening the confirmation sends nothing). Arms C
-  and D with a realised outcome exist in `tp_test` after `tests/test_nq_journal.py` (session 2026-06-12) -
-  the place to look at the grading radar. Opening the dialog is harmless; point a
-  test dashboard at `tp_test` before starting a job you only want to watch.
+  replaces `data/preview/forecast_preview.json` (nothing in the journal), and **Live forecast** records an
+  append-only live capture with its forecasts - never click that one to test. Arms A, B and the ML forecasts
+  N, M and P with a realised outcome exist in `tp_test` after `tests/test_ml.py` (sessions after its training
+  window, to 2026-06-12) - the place to look at the summary and the grading. Opening the dialog is harmless;
+  point a test dashboard at `tp_test` before starting a job you only want to watch.
 - NiceGUI talks over a websocket: wait for the text you need (`wait_for_selector`), never for network idle.
 - `tp_test` is the disposable database for anything that writes (the test suite resets it).
 - The session bar (day, instrument, contract) is on every page and travels in the URL

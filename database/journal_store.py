@@ -577,6 +577,28 @@ def current_forecast_run(conn: Database, session_date: str, profile: str, mode: 
     return None if row is None else _run(row)
 
 
+def save_delivery(conn: Database, session_date: str, profile: str, mode: str, run_id: Optional[str],
+                  algorithm: Optional[str], order: List[str], reason: str) -> int:
+    """Records the forecast in force for a session (migration 0030); the database stamps decided_at."""
+    with conn:
+        row = conn.execute("INSERT INTO journal.forecast_deliveries (session_date, profile, mode, run_id, algorithm, "
+                           "delivery_order, reason) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING delivery_id;",
+                           (session_date, profile, mode, run_id, algorithm, canonical_json(order), reason)).fetchone()
+    return int(row[0])
+
+
+def latest_delivery(conn: Database, session_date: str, profile: str, mode: str) -> Optional[Dict[str, Any]]:
+    """The newest recorded forecast in force of a session, profile and mode, or None."""
+    row = conn.execute("SELECT * FROM journal.forecast_deliveries WHERE session_date = %s AND profile = %s AND "
+                       "mode = %s ORDER BY delivery_id DESC LIMIT 1;", (session_date, profile, mode)).fetchone()
+    if row is None:
+        return None
+    d = dict(zip(row.keys(), row))
+    d["session_date"], d["delivery_order"] = str(d["session_date"]), _load(d["delivery_order"])
+    d["run_id"] = None if d["run_id"] is None else str(d["run_id"])
+    return d
+
+
 # --------------------------------------------------------------------------
 # Experiments (migration 0015)
 # --------------------------------------------------------------------------

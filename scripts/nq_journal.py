@@ -25,6 +25,11 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py live --profile candidate_0915 --wait-minutes 13   # the 09:15 candidate
     python scripts/nq_journal.py preview                                    # forecast now: a preview, never stored
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
+    python scripts/nq_journal.py instrument-inventory                       # what each instrument's data holds
+    python scripts/nq_journal.py ml-dev-eval                                # A, B and the ML models (development)
+    python scripts/nq_journal.py ml-train                                   # the model artifacts, offline
+    python scripts/nq_journal.py summary --date 2026-10-12                  # a session's forecast summary
+    python scripts/nq_journal.py experiment-register --name p1_ml_forward_v1 --design ml-forward --start ... --end ...
     python scripts/nq_journal.py rth-issue                                  # RTH analogues of the session in progress
     python scripts/nq_journal.py rth-backfill --start 2025-09-02 --end 2026-10-08  # reconstructions at 15/30/60 min
     python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes      # every window of the first hour
@@ -341,8 +346,14 @@ def cmd_experiment_register(conn, args):
     """Registers an experiment's manifest (forecaster/experiments.py) - before any score exists."""
     from forecaster import experiments as ex
     try:
-        manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
-                                          args.official_run)
+        if args.design == "ml-forward":
+            from contracts import nq_ml
+            if args.name != nq_ml.FORWARD["name"]:
+                raise ValueError(f"the ml-forward design is named {nq_ml.FORWARD['name']}")
+            manifest = nq_ml.forward_manifest(args.start, args.end)
+        else:
+            manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
+                                              args.official_run)
         new = ex.register_experiment(conn, manifest)
     except (ValueError, store.VersionConflict) as e:
         print(f"Not registered: {e}")
@@ -602,6 +613,74 @@ def cmd_rth_eval_score(conn, args):
     return 0
 
 
+def cmd_instrument_inventory(conn, args):
+    """The instrument inventory (forecaster/instrument_inventory.py) with each instrument's inclusion decision
+    (contracts/nq_ml.py); writes docs/reports/instrument_inventory.md."""
+    from contracts import nq_ml as ml
+    from forecaster import instrument_inventory as inv
+    rows = [inv.inventory(conn, s, args.since) for s in inv.symbols(conn)]
+    decisions = {"NQ": {"decision": "target", "reason": "the instrument forecast (direction_15m)"}}
+    decisions.update({s: {"decision": "included" + (" (required)" if i.required else " (optional)"),
+                          "reason": f"{i.role}. {i.reason[0].upper()}{i.reason[1:]}."}
+                      for s, i in ml.INSTRUMENTS.items()})
+    decisions.update({s: {"decision": "excluded", "reason": f"{r[0].upper()}{r[1:]}."} for s, r in ml.EXCLUDED.items()})
+    text = inv.report(rows, decisions)
+    path = args.out or os.path.join(_PROJECT_ROOT, "docs", "reports", "instrument_inventory.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(text + f"\nWritten to {path}")
+    return 0
+
+
+def cmd_ml_train(conn, args):
+    """Trains the NQ direction models offline (forecaster/ml_train.py) into data/models/nq_ml/ - a version with an
+    artifact already is never overwritten."""
+    from forecaster import ml_model, ml_train
+    try:
+        manifests = ml_train.train(conn, until=args.until)
+    except ml_model.ArtifactError as e:
+        print(f"Not trained: {e}")
+        return 1
+    for v, m in manifests.items():
+        t = m["training"]
+        print(f"{v}: {m['family']} {m['params']}, trained on {t['sessions']} sessions {t['from']} to {t['to']} "
+              f"(rows {t['rows']}), sha256 {m['sha256'][:16]} -> {m['path']}")
+    return 0
+
+
+def cmd_ml_dev_eval(conn, args):
+    """The development comparison of A, B and the ML models (forecaster/ml_eval.py); writes
+    docs/reports/ml_development.md - development data, not a test."""
+    import json
+    from contracts import nq_ml as ml
+    from forecaster import ml_eval, ml_model
+    res = ml_eval.run(conn)
+    chosen = {cfg: ml.FAMILY[v] for v, cfg in ml.CONFIG_OF.items()}
+    have = [v for v in ml.ALGORITHMS if ml_model.manifest(v) is not None]
+    lat = None
+    if have:                                     # the inference latency of the stored artifacts, on recent sessions
+        from forecaster.ml_train import pool
+        lat = ml_eval.latency(conn, have, [str(s["session_date"]) for s in pool(conn)][-(1 if args.quick else 5):])
+    text = ml_eval.report(res, chosen, lat)
+    os.makedirs(args.report_dir, exist_ok=True)
+    path = os.path.join(args.report_dir, "ml_development.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    with open(os.path.join(args.report_dir, "ml_development.json"), "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in res.items() if k != "folds"} | {"folds": res["folds"], "latency": lat}, f,
+                  indent=1, default=str)
+    print(text + f"\nWritten to {path}")
+    return 0
+
+
+def cmd_summary(conn, args):
+    """The session's forecast summary (forecaster/forecast_summary.py): validated numbers only."""
+    from forecaster import forecast_summary as fsum
+    for line in fsum.lines(fsum.build(conn, args.date, args.profile, args.mode)):
+        print(line)
+    return 0
+
+
 def cmd_timeliness(conn, args):
     """Estimated issuance times: when a pre-open forecast at each candidate cutoff could have been issued on this
     feed, reconstructed from the bars' receipt times and the Auto runs' recorded ends (forecaster/timeliness.py) -
@@ -729,6 +808,20 @@ def main(argv=None):
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p.add_argument("--purpose", default="development", choices=("development", "test"))
     p.add_argument("--official-run", default="first", choices=("first", "latest", "first_timely"))
+    p.add_argument("--design", choices=("ab", "ml-forward"), default="ab",
+                   help="ml-forward: p1_ml_forward_v1 (arms A, B and the ML models; contracts/nq_ml.FORWARD)")
+    p = sub.add_parser("instrument-inventory", help="What the database holds per instrument, and the ML's choice")
+    p.add_argument("--since", default="2025-09-01", help="Sessions from (hours and cutoff checks)")
+    p.add_argument("--out", default=None, help="Report path (default docs/reports/instrument_inventory.md)")
+    p = sub.add_parser("ml-train", help="Train the NQ direction models offline into data/models/nq_ml/")
+    p.add_argument("--until", default=None, help="Last training session (default: every labelled one)")
+    p = sub.add_parser("ml-dev-eval", help="Development comparison of A, B and the ML models (not a test)")
+    p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
+    p.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
+    p = sub.add_parser("summary", help="A session's forecast summary from validated numbers")
+    p.add_argument("--date", required=True)
+    p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
+    p.add_argument("--mode", default="historical_replay", choices=("historical_replay", "live"))
     p = sub.add_parser("experiment-score", help="Freeze, score and report a registered experiment")
     p.add_argument("--name", required=True)
     p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
@@ -810,7 +903,8 @@ def main(argv=None):
                    "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
                    "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
-                   "preview": cmd_preview, "rth-issue": cmd_rth_issue,
+                   "preview": cmd_preview, "rth-issue": cmd_rth_issue, "instrument-inventory": cmd_instrument_inventory,
+                   "ml-train": cmd_ml_train, "ml-dev-eval": cmd_ml_dev_eval, "summary": cmd_summary,
                    "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate, "timeliness": cmd_timeliness,
                    "rth-eval-status": cmd_rth_eval_status, "rth-eval-score": cmd_rth_eval_score,
                    "review-report": cmd_review_report}[args.command]

@@ -3,12 +3,10 @@
 A local research pipeline for the **CME equity-index futures**: it collects 1-minute bars
 from Interactive Brokers into a day-partitioned TimescaleDB store and serves the sessions
 in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. Besides Interactive
-Brokers, two outside services are used, both by the NQ pre-open journal
+Brokers, one outside service is used, by the NQ pre-open journal
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): SEC EDGAR, for the earnings filings behind
-Event Risk, and optionally the Claude API, for the structure annotation and forecast arms C
-and D, which run only when started by hand - in a terminal after typing "send", or in the
-dashboard after its confirmation; nothing else can start them - with `ANTHROPIC_API_KEY` set.
-Everything else is computed locally.
+Event Risk. Everything else - including the scikit-learn forecaster of NQ's 15-minute
+direction ([docs/ml_forecaster.md](docs/ml_forecaster.md)) - is computed locally.
 
 Twelve instruments are collected out of the box:
 
@@ -143,8 +141,7 @@ the command line:
 | Button | Runs | What it does |
 |---|---|---|
 | **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection; in a session's first hour (to 11:00 ET) then its RTH analogue sets (`nq_journal.py rth-issue --by manual`), when the collection succeeded |
-| **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - and outcomes once a session is final. No Claude requests |
-| **Run LLM forecast** | `python scripts/nq_journal.py llm-forecast --date D ... --arms CD` | Arms C (restricted LLM) and D (synthesis) for the last N sessions up to today (default 1: today) or for **chosen days** (a calendar of the journal's sessions: single days, or ranges with its switch), arm C or D or both. The Session Explorer forecast's **Run C and D for <day>** does the same for the session day. **Batch API** sends them at half price, answers within 24 h (usually far sooner): the job waits up to 30 minutes and the next run collects a batch still processing. Claude requests: a confirmation first shows each session, the requests and a rough cost, and only its **Send** button lets the job send them (a one-time approval, [forecaster/approvals.py](forecaster/approvals.py)). Evidence already answered is never sent again |
+| **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - the ML forecasts of the sessions after the models' training window with the forecast in force, and outcomes once a session is final |
 | **Forecast now** | the collector, then `python scripts/nq_journal.py preview` | The next session's forecast from the data so far, at any time from its Globex open (18:00 ET the evening before) until its official snapshot is due at 09:31 ET: the latest bars, then the evidence as of now, its rule-based annotation, analogues and both arms - in memory, never stored. Shown on the Session Explorer forecast's **Forecast now** tab, which has the same button. The preview step runs even when collecting failed, from the bars already stored |
 | **Live forecast** | `python scripts/nq_journal.py live` | Today's pre-open live capture and its forecasts ([below](#both-together)); offered on a session day before 09:30 ET only - it then waits for the 09:29 cutoff |
 
@@ -295,10 +292,14 @@ Pages:
     shown, by its id: provenance, the chart drawn from the snapshot's frozen bars, per-target
     distributions with their denominators, P1's 47 fields, and the realised outcome only when
     asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
-    **Arms for the day** (at the top): one tile per arm - A prior (the benchmark), B
-    baseline, C restricted LLM, D synthesis - saying whether it ran (issued, failed, no run)
-    and what it rests on (analogues, the C pool, D's confidence); the arm shown is highlighted
-    and a click shows another. Below the tiles a radar compares the arms with the benchmark
+    **Summary** (at the top): the forecast in force and why, every arm's probabilities with
+    the ML forecasts' differences from A and B, the reference levels and their distances, the
+    instruments the multi-instrument model used and what they showed - stored numbers only
+    ([forecaster/forecast_summary.py](forecaster/forecast_summary.py)). **Arms for the day**: one
+    tile per arm - A prior (the benchmark), B baseline, N, M and P the ML forecasts (NQ-only,
+    multi-instrument, pooled; experimental) - saying whether it ran (issued, unavailable and why,
+    failed, no run) and what it rests on; the arm shown is highlighted and a click shows
+    another. Below the tiles a radar compares the arms that forecast every target with the benchmark
     (arm A dashed, chance dotted) ([forecaster/grading.py](forecaster/grading.py)): before the
     outcome, how sure each arm is of its predicted class per target, with a table of the classes
     marking each that differs from arm A's; with the realised outcome shown and recorded, the
@@ -535,8 +536,7 @@ session windows and holiday calendar checked, since those assume the 18:00 ET ro
 CME equity calendar.
 
 **No API keys are needed** for collecting and the dashboard. The journal's earnings fetch
-asks for `SEC_USER_AGENT` ("<name> <contact e-mail>", SEC's rule for automated clients);
-the optional Claude structure annotation needs `ANTHROPIC_API_KEY`.
+asks for `SEC_USER_AGENT` ("<name> <contact e-mail>", SEC's rule for automated clients).
 
 Check what config resolves to:
 
@@ -636,7 +636,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [forecasting audit (2026-10-09)](docs/forecasting_audit.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [the NQ direction forecaster](docs/ml_forecaster.md), [reports](docs/reports/) |
 
 ## Database
 
@@ -646,18 +646,18 @@ CLIs) only check that the database's schema version is the one their code's migr
 at, and stop when it is not (`database/connection.init_database`): a migration file created
 in a checkout can never change a database by itself.
 
-**Production runs one fixed revision** from its own checkout, `~/trading_pipeline_prod` (a
-git worktree of this repository, `PROD_DIR` to change it):
+**Production runs a tested revision** from the main checkout, `~/trading_pipeline`, on
+branch `main` (`PROD_DIR` to change it):
 
 ```bash
-scripts/deploy.sh <revision>     # check the revision out there, link the shared runtime state
-                                 # (.env, .venv, logs/, data caches, the Auto lock), apply its
-                                 # migrations, check the schema, log to logs/deployments.log
-cd ~/trading_pipeline_prod && .venv/bin/python -m dashboard.app    # then run production there
+scripts/deploy.sh <revision>     # fast-forward main there to the revision (anything else is
+                                 # refused), apply its migrations, check the schema, log to
+                                 # logs/deployments.log - outside a session
+cd ~/trading_pipeline && .venv/bin/python -m dashboard.app    # then restart production there
 ```
 
-Development happens in the main checkout against the development database; its code reaches
-production only through a deployment. `bars` is a TimescaleDB hypertable chunked monthly (30
+Development happens in separate git worktrees against the development database; its code
+reaches production only through a deployment. `bars` is a TimescaleDB hypertable chunked monthly (30
 days) on `timestamp_utc`; everything else is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
@@ -669,10 +669,10 @@ forecasting records (the v1 tables, the `forecast` schema) and `bar_receipts`.
 The `journal` schema (`0009`-`0014`) holds the NQ prompt-v2 records
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): the definition registry, evidence
 snapshots, revisioned outcomes, review sets, structure annotations, analogue sets, the
-inference request ledger, the forecast runs with their evidence and predictions, the
-registered experiments with their frozen cases and results (`0015`), and the live captures
-with their bar receipts (`0016`). All of it is append-only - the database rejects UPDATE,
-DELETE and TRUNCATE.
+forecast runs with their evidence and predictions, the registered experiments with their
+frozen cases and results (`0015`), the live captures with their bar receipts (`0016`) and the
+forecast in force per session (`0030`); `0029` removed the LLM forecasts' records and their
+request ledger. All of it is append-only - the database rejects UPDATE, DELETE and TRUNCATE.
 
 Every table is keyed by `contract_id`, so instruments never need separate tables — adding
 ES and RTY needed no migration — only the VIX context columns did (`0002`), and the roll

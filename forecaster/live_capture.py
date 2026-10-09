@@ -1,17 +1,17 @@
 # forecaster/live_capture.py
 """
-Live capture and issuance (guideline revision 2, 3D; issue policy nq_issue_live_v3
+Live capture and issuance (guideline revision 2, 3D; issue policy nq_issue_live_v4
 in contracts/nq_forecast.py): the pre-open job, separate from the collector's
 after-the-fact catch-up.
 
     python scripts/nq_journal.py live            # before the open on a trading day
-    python scripts/nq_journal.py live --profile candidate_0915 --wait-minutes 13 --with-d
+    python scripts/nq_journal.py live --profile candidate_0915 --wait-minutes 13
 
 ``capture(conn, app, day)`` for one session and profile:
 
-  1. a capture row (journal.live_captures) with its settings - the data-wait limit,
-     the reserve kept for issuing, whether D is part of it; the wait plus the reserve
-     must end by the deadline, or nothing starts. Every later step is an event stamped
+  1. a capture row (journal.live_captures) with its settings - the data-wait limit and
+     the reserve kept for issuing; the wait plus the reserve must end by the deadline,
+     or nothing starts. Every later step is an event stamped
      by the database clock (journal.live_capture_events), so the end-to-end timing
      is measured on the server
   2. restart: a session that already has a live snapshot reuses it - never a new
@@ -28,9 +28,10 @@ after-the-fact catch-up.
   5. freezes the live snapshot - same snapshot version as the historical pool, data
      mode live_capture, point-in-time verified when every input shows it was known
      (features/nq_evidence._availability) - annotates it, matches it against the
-     earlier sessions (outcomes known as of its cutoff), and issues both arms in mode
-     live: the database stamps the issue time and marks a run after 09:29:50 ET late;
-     an issued run is acknowledged after its commit
+     earlier sessions (outcomes known as of its cutoff), and issues A and B in mode
+     live - on the research profile also the experimental ML forecasts whose artifact
+     is stored (forecaster/ml_service.py): the database stamps the issue time and marks
+     a run after 09:29:50 ET late; an issued run is acknowledged after its commit
   6. records the forecast in force at the deadline (forecaster/delivery.py): the first
      timely run in the delivery order (contracts/nq_ml.delivery_order), with the reason
      any earlier one was passed over
@@ -227,18 +228,44 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
         summary["runs"].append({"run_id": run["run_id"], "algorithm": algorithm, "status": run["lifecycle_status"],
                                 "timely": timely(run)})
     summary["status"] = "issued" if all(r["timely"] for r in summary["runs"]) else "not timely"
+    _issue_ml(conn, snapshot, profile, event, summary)
     runs = [store.get_forecast_run(conn, r["run_id"]) for r in summary["runs"]]
-    _deliver(runs, event, summary)
+    _deliver(conn, day, profile, runs, event, summary)
     return summary
 
 
-def _deliver(runs, event, summary) -> None:
-    """Records the forecast in force at the deadline (forecaster/delivery.py)."""
+def _issue_ml(conn, snapshot, profile, event, summary) -> None:
+    """The ML forecasts with a stored artifact (forecaster/ml_service.py), live, from the same snapshot - for the
+    profile they were trained for only; the session's features built once, as of now."""
+    from contracts import nq_ml
+    from forecaster import ml_model, ml_service
+    from forecaster.forecast_service import timely
+    if profile != nq_ml.PROFILE:
+        return
+    fs = None
+    for version in nq_ml.ALGORITHMS:
+        if ml_model.manifest(version) is None:
+            continue
+        if fs is None:
+            fs = ml_service.features(conn, snapshot, datetime.now(timezone.utc))
+        run, created = ml_service.issue(conn, snapshot, profile, "live", version, fs=fs)
+        event("forecast", run_id=run["run_id"], algorithm=version, status=run["lifecycle_status"],
+              issued_at=None if run["issued_at"] is None else str(run["issued_at"]), timely=timely(run),
+              new=created, reason=run["failure_reason"])
+        summary["runs"].append({"run_id": run["run_id"], "algorithm": version, "status": run["lifecycle_status"],
+                                "timely": timely(run), "experimental": nq_ml.STATUS[version] != "production"})
+
+
+def _deliver(conn, day, profile, runs, event, summary) -> None:
+    """Records the forecast in force at the deadline (forecaster/delivery.py): a capture step and a delivery."""
     from contracts import nq_ml
     from forecaster.delivery import delivered
-    run, why = delivered(runs, nq_ml.delivery_order(), lambda v: nq_ml.ARM_LABELS.get(v, v))
+    order = nq_ml.delivery_order()
+    run, why = delivered(runs, order, lambda v: nq_ml.ARM_LABELS.get(v, v))
     name = None if run is None else nq_ml.ARM_LABELS.get(run["algorithm_version"], run["algorithm_version"])
     event("delivered", run_id=None if run is None else run["run_id"], arm=name, reason=why)
+    store.save_delivery(conn, day, profile, "live", None if run is None else run["run_id"],
+                        None if run is None else run["algorithm_version"], order, why)
     summary["delivered"] = {"run_id": None if run is None else run["run_id"], "arm": name, "reason": why}
 
 

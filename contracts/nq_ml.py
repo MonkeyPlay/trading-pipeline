@@ -45,14 +45,20 @@ FEATURE_VERSION = "nq_ml_features_v1"
 SCHEMA_VERSION = "nq_forecast_schema_v3"                       # schema v1 plus the 'model' estimation status
 ML_NQ_VERSION = "nq_ml_nq_p1_v1"                               # NQ's own features
 ML_MULTI_VERSION = "nq_ml_multi_p1_v1"                         # NQ's own plus the context group
-ALGORITHMS = (ML_NQ_VERSION, ML_MULTI_VERSION)
-CONFIG_OF = {ML_NQ_VERSION: "nq_only", ML_MULTI_VERSION: "multi"}
+ML_POOLED_VERSION = "nq_ml_pooled_p1_v1"                       # NQ's own, trained on NQ, ES and RTY sessions
+ALGORITHMS = (ML_NQ_VERSION, ML_MULTI_VERSION, ML_POOLED_VERSION)
+CONFIG_OF = {ML_NQ_VERSION: "nq_only", ML_MULTI_VERSION: "multi", ML_POOLED_VERSION: "pooled"}
+# The estimator family per model: the lower development Brier score of the walk-forward comparison
+# (docs/reports/ml_development.md, 2026-10-09: logistic 0.624 vs boosted 0.637 NQ-only, 0.613 vs 0.635 multi,
+# boosted 0.600 vs logistic 0.603 pooled) - a development choice the forward evaluation tests.
+FAMILY = {ML_NQ_VERSION: "logit", ML_MULTI_VERSION: "logit", ML_POOLED_VERSION: "gbm"}
 VERSION_OF = {v: k for k, v in CONFIG_OF.items()}
 ARM_LABELS = {ML_MULTI_VERSION: "ML multi-instrument", ML_NQ_VERSION: "ML NQ-only",
+              ML_POOLED_VERSION: "ML pooled (NQ+ES+RTY)",
               fc.BASELINE_VERSION: "B (analogues)", fc.PRIOR_VERSION: "A (frequencies)"}
-# The arms the Forecast page and the grading show: A and B (contracts/nq_forecast.ARMS) and the two ML forecasts.
-ARMS = {**fc.ARMS, "N": ML_NQ_VERSION, "M": ML_MULTI_VERSION}
-ARM_NAMES = {**fc.ARM_NAMES, "N": "ML NQ-only", "M": "ML multi-instrument"}
+# The arms the Forecast page and the grading show: A and B (contracts/nq_forecast.ARMS) and the three ML forecasts.
+ARMS = {**fc.ARMS, "N": ML_NQ_VERSION, "M": ML_MULTI_VERSION, "P": ML_POOLED_VERSION}
+ARM_NAMES = {**fc.ARM_NAMES, "N": "ML NQ-only", "M": "ML multi-instrument", "P": "ML pooled"}
 
 
 def arm_of(algorithm: str):
@@ -200,6 +206,7 @@ CONFIGS["multi"] = (CONFIGS["nq_only"] + [f.name for f in CONTEXT_FEATURES] + [f
 POOLED_INSTRUMENTS = ("NQ", "ES", "RTY")
 POOLED_FEATURES = [f.name for f in OWN_FEATURES] + [f.name for f in CALENDAR_FEATURES] + \
     [f"is_{s.lower()}" for s in POOLED_INSTRUMENTS[1:]]
+CONFIGS["pooled"] = POOLED_FEATURES                 # an NQ row: its own features, is_es = is_rty = 0
 
 # --------------------------------------------------------------------------
 # Models, tuning, evaluation
@@ -268,17 +275,49 @@ FORWARD = {
                 "multi - nq_only meets the same rule",
 }
 # Experimental until FORWARD's decision rule is met; delivery_order() then puts it first.
-STATUS = {ML_MULTI_VERSION: "experimental", ML_NQ_VERSION: "experimental"}
+STATUS = {ML_MULTI_VERSION: "experimental", ML_NQ_VERSION: "experimental", ML_POOLED_VERSION: "experimental"}
 # Replay forecasts wait for the context instruments' cutoff bars up to this long after the cutoff, then issue with
 # whatever is fresh (a stale optional instrument is imputed and flagged; a stale required one makes the multi model
 # abstain); NQ's own features come from the snapshot, which already waited for NQ's cutoff bar.
 MAX_WAIT_MINUTES = 30
 
 
+def forward_manifest(start: str, end: str) -> Dict[str, Any]:
+    """The forward ML evaluation (FORWARD) over the prospective sessions [start, end] - registering it writes one
+    definition row; it sends nothing and schedules nothing (Auto issues the runs it scores)."""
+    from forecaster import experiments as ex
+    m = ex.experiment_manifest(FORWARD["name"], start, end, profile=PROFILE, purpose="test", official_run="first",
+                               mode="historical_replay", arms={a: v for a, v in ARMS.items()})
+    m["arms"]["delivered"] = {"algorithm": "delivered", "delivered": delivery_order(),
+                              "question": "the forecast in force (delivery_order(): B, then A, while the ML "
+                                          "forecasts are experimental)"}
+    m.update({
+        "pairs": [["M", "B"], ["N", "B"], ["P", "B"], ["M", "A"], ["N", "A"], ["P", "A"], ["M", "N"], ["P", "N"],
+                  ["B", "A"]],
+        "common_arms": list(ARMS),
+        "primary": {"target": TARGET, "metric": "multiclass Brier score, the unhalved sum over the classes "
+                                                "sum_c (p_c - [c realised])^2, 0 to 2 per session, lower is better"},
+        "companions": ["multiclass log loss (natural log), lower is better",
+                       "calibration (reliability of the issued probabilities)",
+                       "accuracy of the issued class (ambiguous predictions counted apart)"],
+        "minimum_practical_improvement": f"an absolute reduction of {FORWARD['minimum_improvement']} in the mean "
+                                         "per-session Brier score on the unhalved 0-2 scale; not a relative one",
+        "decision": FORWARD["decision"],
+        "endpoint": f"scored once, at {FORWARD['endpoint_sessions']} scheduled sessions or on the end date; "
+                    "availability may be checked before, never a score",
+        "availability_rule": "every scheduled session is an opportunity for every arm: a run that is unavailable, "
+                             "failed or missing counts against it (results.availability)",
+        "development_note": "the arms' development comparison (docs/reports/ml_development.md) used sessions that "
+                            "were inspected before; only these prospective sessions can confirm an improvement",
+        "controls": "registering writes one definition; the runs are those Auto issues at each snapshot",
+    })
+    return m
+
+
 def delivery_order() -> List[str]:
     """The forecast in force, most preferred first: a promoted ML model (multi-instrument, then NQ-only), then B,
     then A."""
-    ml = [v for v in (ML_MULTI_VERSION, ML_NQ_VERSION) if STATUS[v] == "production"]
+    ml = [v for v in (ML_MULTI_VERSION, ML_NQ_VERSION, ML_POOLED_VERSION) if STATUS[v] == "production"]
     return ml + [fc.BASELINE_VERSION, fc.PRIOR_VERSION]
 
 
@@ -324,7 +363,9 @@ def schema_record() -> Dict[str, Any]:
 def algorithm_definition(version: str, manifest: Dict[str, Any]) -> Dict[str, Any]:
     """An ML algorithm's registered definition, from its trained artifact's manifest (forecaster/ml_model.py)."""
     return {
-        "name": f"{ARM_LABELS[version]} (scikit-learn): direction_15m from {CONFIG_OF[version]} features",
+        "name": f"{ARM_LABELS[version]} (scikit-learn): direction_15m from {CONFIG_OF[version]} features"
+                + (" - trained on NQ's, ES's and RTY's sessions, each with its own label (contracts/nq_ml.POOLED)"
+                   if version == ML_POOLED_VERSION else ""),
         "target": TARGET, "config": CONFIG_OF[version], "feature_version": FEATURE_VERSION,
         "features": CONFIGS[CONFIG_OF[version]], "status": STATUS[version],
         "artifact": {k: manifest[k] for k in ("sha256", "family", "params", "training", "software", "path")},

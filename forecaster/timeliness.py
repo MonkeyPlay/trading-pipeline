@@ -2,7 +2,7 @@
 """
 Estimated issuance times: when could a pre-open forecast with a given cutoff have been
 issued on this feed? Reconstructed from what each session recorded - before any cutoff
-is chosen for a live pre-open experiment (docs/forecasting_audit.md, section 7). These
+is chosen for a live pre-open experiment (docs/ml_forecaster.md). These
 are estimates, not demonstrated delivery: they add the ML forecasts' measured
 generation time to the A/B times. Delivery is demonstrated only by a live capture's
 'delivered' step (forecaster/live_capture.py).

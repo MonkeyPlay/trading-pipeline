@@ -2,7 +2,8 @@
 """
 Deployment (database/connection.py, scripts/deploy.sh): routine processes only check the
 schema and stop on a mismatch - a migration file in a checkout never changes a database by
-itself; only the explicit deployment step migrates, from a fixed revision.
+itself; only the explicit deployment step migrates, after fast-forwarding production's main
+to a tested revision.
 
 Needs a disposable PostgreSQL + TimescaleDB database whose name contains "test", which it
 RESETS (TEST_DATABASE_URL, see tests/test_dashboard_data.py).
@@ -56,26 +57,32 @@ def test_the_cli_refuses_a_database_it_does_not_match(fresh, monkeypatch):
         main(["--db", DSN, "rth-eval-status"])
 
 
-def test_deploy_runs_a_fixed_revision_with_the_shared_state(fresh, tmp_path):
-    """scripts/deploy.sh checks a commit out, detached, links the shared runtime state, applies that revision's
-    migrations and checks the schema; it refuses a production checkout with local changes."""
+def test_deploy_fast_forwards_main_and_migrates_from_a_committed_revision(fresh, tmp_path):
+    """scripts/deploy.sh on a production checkout (here a clone standing in for ~/trading_pipeline): main is
+    fast-forwarded to the revision, its migrations applied, the schema checked and the deployment logged; it refuses
+    a checkout with local changes, one not on main, and a revision that is not a fast-forward."""
     head = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
-    state, prod = tmp_path / "state", tmp_path / "prod"
-    (state / "data").mkdir(parents=True)
-    (state / ".env").write_text(f"DATABASE_URL={DSN}\n")
-    os.symlink(os.path.join(ROOT, ".venv"), state / ".venv")
-    env = dict(os.environ, DATABASE_URL=DSN, PROD_DIR=str(prod), STATE_DIR=str(state))   # never the default store
-    try:
-        run = subprocess.run([os.path.join(ROOT, "scripts", "deploy.sh"), head], env=env, capture_output=True,
-                             text=True, timeout=300)
-        assert run.returncode == 0, run.stdout + run.stderr
-        assert subprocess.check_output(["git", "-C", str(prod), "rev-parse", "HEAD"], text=True).strip() == head
-        for path in (".env", ".venv", "logs", "data/auto_mode.lock"):
-            assert os.path.islink(prod / path) and os.path.realpath(prod / path) == os.path.realpath(state / path)
-        assert f"deployed {head}" in (state / "logs" / "deployments.log").read_text()
-        (prod / "README.md").write_text("changed\n")                   # production runs committed revisions only
-        again = subprocess.run([os.path.join(ROOT, "scripts", "deploy.sh"), head], env=env, capture_output=True,
-                               text=True, timeout=300)
-        assert again.returncode != 0 and "local changes" in again.stderr
-    finally:
-        subprocess.run(["git", "-C", ROOT, "worktree", "remove", "--force", str(prod)], capture_output=True)
+    prod = tmp_path / "prod"
+    subprocess.run(["git", "clone", "--quiet", ROOT, str(prod)], check=True)
+    git = lambda *a: subprocess.run(["git", "-C", str(prod), *a], check=True, capture_output=True,  # noqa: E731
+                                    text=True).stdout.strip()
+    git("checkout", "--quiet", "-B", "main", f"{head}~1")
+    (prod / ".env").write_text(f"DATABASE_URL={DSN}\n")
+    os.symlink(os.path.join(ROOT, ".venv"), prod / ".venv")
+    env = dict(os.environ, DATABASE_URL=DSN, PROD_DIR=str(prod))                    # never the default store
+    deploy = lambda rev: subprocess.run([os.path.join(ROOT, "scripts", "deploy.sh"), rev], env=env,  # noqa: E731
+                                        capture_output=True, text=True, timeout=300)
+    run = deploy(head)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert git("rev-parse", "HEAD") == head and git("branch", "--show-current") == "main"
+    log = (prod / "logs" / "deployments.log").read_text()
+    assert f"deployed {head} ({head}) to {prod} (main), schema v" in log
+    (prod / "README.md").write_text("changed\n")                             # production runs committed revisions
+    again = deploy(head)
+    assert again.returncode != 0 and "local changes" in again.stderr
+    git("checkout", "--quiet", "--", "README.md")
+    older = deploy(f"{head}~1")                                               # moving main backwards: refused
+    assert older.returncode != 0 and "not a fast-forward" in older.stderr and git("rev-parse", "HEAD") == head
+    git("checkout", "--quiet", "--detach")
+    detached = deploy(head)
+    assert detached.returncode != 0 and "not main" in detached.stderr

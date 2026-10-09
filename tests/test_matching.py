@@ -43,7 +43,7 @@ def test_ranking_rules_and_exclusions():
         t,
         rec("2026-06-15"),                                                 # later
         rec("2026-06-01", symbol="ES"),
-        rec("2026-06-02", protocol="llm"),
+        rec("2026-06-02", protocol="other"),
         rec("2026-06-03", integrity="contaminated"),
         rec("2026-06-04", **{k: None for k in list(FULL)[:8]}),            # 63% comparable
         rec("2026-06-05"), rec("2026-06-08"),                              # both 100 at full coverage: recent first
@@ -66,7 +66,7 @@ def test_a_session_counts_once():
     # day; the session is left out entirely rather than letting either record stand for it
     t = rec("2026-06-12")
     pool = [rec("2026-06-10"), rec("2026-06-11", sid="a"), rec("2026-06-11", sid="b"),
-            rec("2026-06-11", sid="c", protocol="llm")]                          # another protocol: not eligible
+            rec("2026-06-11", sid="c", protocol="other")]                          # another protocol: not eligible
     out = ms.rank(t, pool)
     assert [m["record"].session_date for m in out["selected"]] == ["2026-06-10"]
     assert out["excluded"] == {"duplicate_session": 2, "incompatible_version": 1} and out["pool_size"] == 1
