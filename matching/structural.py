@@ -28,6 +28,7 @@ shows it. Arithmetic is exact (fractions); stored values are decimal strings.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -101,6 +102,26 @@ def score(components: Dict[str, Dict[str, Any]]):
     return (100 * matched / comparable if comparable else None), comparable
 
 
+# The weights as integers over their common denominator and every score in thirds (the Chop Score's steps), so that
+# rank() scores each pair in integer arithmetic: score(compare(...)) is (100 M / 3C, C / D) for the integer sums M of
+# weight x 3 x score and C of the comparable weights - the same exact fractions, built once per pair.
+_DEN = math.lcm(*(w.denominator for w in pre.MATCH_WEIGHTS.values()))
+_INT_WEIGHTS = [(name, int(w * _DEN), name == "Chop Score") for name, w in pre.MATCH_WEIGHTS.items()]
+
+
+def _pair_score(target: Record, other: Record):
+    """score(compare(target, other)), computed in integers - see _INT_WEIGHTS."""
+    comparable = matched = 0
+    tf, of = target.features, other.features
+    for name, weight, chop in _INT_WEIGHTS:
+        a, b = tf.get(name), of.get(name)
+        if a is None or b is None:
+            continue
+        comparable += weight
+        matched += weight * (max(0, 3 - abs(int(a) - int(b))) if chop else 3 * int(a == b))
+    return (Fraction(100 * matched, 3 * comparable) if comparable else None), Fraction(comparable, _DEN)
+
+
 def rank(target: Record, pool: Sequence[Record]) -> Dict[str, Any]:
     """
     The target's analogues from ``pool``: ``{'selected': [...], 'excluded': {reason: n},
@@ -128,16 +149,16 @@ def rank(target: Record, pool: Sequence[Record]) -> Dict[str, Any]:
                                .encode()).hexdigest()
     candidates = []
     for other in scored:
-        components = compare(target, other)
-        similarity, comparable = score(components)
+        similarity, comparable = _pair_score(target, other)
         if comparable < pre.MIN_COMPARABLE:
             excluded["low_coverage"] += 1
             continue
-        candidates.append((similarity, comparable, other, components))
+        candidates.append((similarity, comparable, other))
     # highest similarity, then higher coverage, then the more recent session, then the snapshot id
     candidates.sort(key=lambda c: (-c[0], -c[1], _neg_date(c[2].session_date), c[2].snapshot_id))
-    selected = [{"rank": i, "record": other, "similarity": sim, "comparable_weight": comp, "components": components}
-                for i, (sim, comp, other, components) in enumerate(candidates[:pre.TOP_ANALOGUES], 1)]
+    selected = [{"rank": i, "record": other, "similarity": sim, "comparable_weight": comp,
+                 "components": compare(target, other)}
+                for i, (sim, comp, other) in enumerate(candidates[:pre.TOP_ANALOGUES], 1)]
     return {"selected": selected, "excluded": dict(sorted(excluded.items())), "pool_size": len(scored),
             "pool_hash": pool_hash}
 

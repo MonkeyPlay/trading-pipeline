@@ -12,7 +12,8 @@ pooled candidate, on identical NQ targets and opportunities.
              (forecaster/ml_features.py)
   folds      chronological walk-forward: train on every earlier session (expanding), skip
              the embargo session(s), test the next block - preprocessing, tuning and the
-             fit inside each training window only
+             fit inside each training window only; the folds are independent, so they run
+             in parallel worker processes (``jobs``; the results are the same as one by one)
   A, B       their stored historical-replay runs of the same snapshots (first issued)
   scores     per session the unhalved multiclass Brier score (primary) and log loss;
              paired differences on the sessions all compared arms forecast and a label
@@ -29,6 +30,7 @@ candidate for the forward evaluation (contracts/nq_ml.FORWARD), not a finding.
 from __future__ import annotations
 
 import math
+import os
 import time
 from datetime import timedelta
 from fractions import Fraction
@@ -119,8 +121,38 @@ def calibration(preds: Dict[str, np.ndarray], y: Dict[str, str], days: Sequence[
     return {"classes": out, "ece_mean": float(np.mean(eces)) if eces else None}
 
 
-def run(conn, profile: str = ml.PROFILE, progress=print, data=None) -> Dict[str, Any]:
-    """The development comparison (see the module docstring); returns the results."""
+ML_ARMS = [(cfg, fam) for cfg in ("nq_only", "multi") for fam in ("logit", "gbm")]
+
+
+def _fold(X, PX, y, py_, abstain, days, train_end: int, test_start: int, test_end: int):
+    """One walk-forward fold - in a worker process: the four NQ-trained fits and the two pooled ones, tuned and fitted
+    on the training sessions only, and their probabilities for the test sessions; ``(predictions, log entry)``."""
+    train_days = [d for d in days[:train_end] if y[d] is not None]
+    test_days = days[test_start:test_end]
+    entry = {"train": [train_days[0], train_days[-1], len(train_days)], "test": [test_days[0], test_days[-1]],
+             "chosen": {}}
+    preds: Dict[str, Dict[str, np.ndarray]] = {}
+    for cfg, fam in ML_ARMS:
+        model, params, _ = mm.tune(X[cfg].loc[train_days].to_numpy(), [y[d] for d in train_days], fam)
+        avail = [d for d in test_days if cfg == "nq_only" or d not in abstain]
+        preds[f"{cfg}/{fam}"] = ({} if not avail else
+                                 dict(zip(avail, mm.probabilities(model, X[cfg].loc[avail].to_numpy()))))
+        entry["chosen"][f"{cfg}/{fam}"] = params
+    # pooled: every instrument's rows of the training dates (labels present), NQ's test rows
+    train_set = set(train_days)
+    keep = [(s, d) for (s, d) in PX.index if d in train_set and isinstance(py_[(s, d)], str)]
+    for fam in ("logit", "gbm"):
+        model, params, _ = mm.tune(PX.loc[keep].to_numpy(), [py_[k] for k in keep], fam)
+        preds[f"pooled/{fam}"] = dict(zip(test_days, mm.probabilities(model, X["pooled"].loc[test_days].to_numpy())))
+        entry["chosen"][f"pooled/{fam}"] = params
+    entry["pooled_training_rows"] = len(keep)
+    return preds, entry
+
+
+def run(conn, profile: str = ml.PROFILE, progress=print, data=None, jobs: Optional[int] = None) -> Dict[str, Any]:
+    """The development comparison (see the module docstring); returns the results. ``jobs``: worker processes for
+    the folds (default one per fold, at most one per CPU; 1 runs them here, one by one)."""
+    from joblib import Parallel, delayed
     from forecaster.ml_train import dataset
     t0 = time.time()
     data = data or dataset(conn, profile)
@@ -128,38 +160,23 @@ def run(conn, profile: str = ml.PROFILE, progress=print, data=None) -> Dict[str,
     progress(f"features of {len(days)} sessions in {time.time() - t0:.1f} s")
     stored = {arm: stored_arm(conn, snaps, alg) for arm, alg in ARMS_A_B.items()}
     preds: Dict[str, Dict[str, np.ndarray]] = {a: {} for a in ("A", "B")}
-    fold_log = []
-    ml_arms = [(cfg, fam) for cfg in ("nq_only", "multi") for fam in ("logit", "gbm")]
-    for cfg, fam in ml_arms:
+    for cfg, fam in ML_ARMS:
         preds[f"{cfg}/{fam}"] = {}
     for fam in ("logit", "gbm"):
         preds[f"pooled/{fam}"] = {}
-    for train_end, test_start, test_end in folds(len(days)):
-        train_days = [d for d in days[:train_end] if y[d] is not None]
-        test_days = days[test_start:test_end]
-        entry = {"train": [train_days[0], train_days[-1], len(train_days)], "test": [test_days[0], test_days[-1]],
-                 "chosen": {}}
-        for cfg, fam in ml_arms:
-            model, params, _ = mm.tune(X[cfg].loc[train_days].to_numpy(), [y[d] for d in train_days], fam)
-            avail = [d for d in test_days if cfg == "nq_only" or not mf.required_missing(fs, d)]
-            if avail:
-                pr = mm.probabilities(model, X[cfg].loc[avail].to_numpy())
-                for d, row in zip(avail, pr):
-                    preds[f"{cfg}/{fam}"][d] = row
-            entry["chosen"][f"{cfg}/{fam}"] = params
-        # pooled: every instrument's rows of the training dates (labels present), NQ's test rows
-        train_set = set(train_days)
-        keep = [(s, d) for (s, d) in PX.index if d in train_set and isinstance(py_[(s, d)], str)]
-        for fam in ("logit", "gbm"):
-            model, params, _ = mm.tune(PX.loc[keep].to_numpy(), [py_[k] for k in keep], fam)
-            pr = mm.probabilities(model, X["pooled"].loc[test_days].to_numpy())
-            for d, row in zip(test_days, pr):
-                preds[f"pooled/{fam}"][d] = row
-            entry["chosen"][f"pooled/{fam}"] = params
-        entry["pooled_training_rows"] = len(keep)
+    abstain = {d for d in days if mf.required_missing(fs, d)}       # the multi-instrument model abstains there
+    plan = folds(len(days))
+    jobs = min(len(plan), os.cpu_count() or 1) if jobs is None else jobs
+    t1 = time.time()
+    done = Parallel(n_jobs=jobs)(delayed(_fold)(X, PX, y, py_, abstain, days, *f) for f in plan)
+    fold_log = []
+    for fold_preds, entry in done:                  # in fold order, whatever order the workers finished in
+        for arm, got in fold_preds.items():
+            preds[arm].update(got)
         fold_log.append(entry)
-        progress(f"fold {len(fold_log)}: trained to {train_days[-1]} ({len(train_days)} sessions), tested "
-                 f"{test_days[0]} to {test_days[-1]}")
+        progress(f"fold {len(fold_log)}: trained to {entry['train'][1]} ({entry['train'][2]} sessions), tested "
+                 f"{entry['test'][0]} to {entry['test'][1]}")
+    progress(f"{len(plan)} folds in {time.time() - t1:.1f} s ({jobs} worker process(es))")
     test_days = days[folds(len(days))[0][1]:]
     for arm in ("A", "B"):
         preds[arm] = {d: stored[arm][d] for d in test_days if d in stored[arm]}

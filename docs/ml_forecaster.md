@@ -8,7 +8,7 @@ markets. It replaced the LLM forecasting system on 2026-10-09.
 stays the forecast in force because it is the existing baseline**, not because these results show
 it better than A: B − A is +0.017 [−0.013, +0.047], nominally worse. A remains the benchmark
 that any promotion must beat. The three ML forecasts are issued beside B as **experimental**.
-The forward evaluation `p1_ml_forward_v1` on fresh sessions decides whether any is promoted.
+The forward evaluation `p1_ml_forward_v2` on fresh sessions decides whether any is promoted.
 
 Contract: [contracts/nq_ml.py](../contracts/nq_ml.py). Code: [forecaster/ml_features.py](../forecaster/ml_features.py),
 [ml_model.py](../forecaster/ml_model.py), [ml_train.py](../forecaster/ml_train.py),
@@ -170,15 +170,19 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
   though, so it is a separate candidate (P), not promoted.
 - **Calibration:** A is well calibrated (mean ECE 0.022) and the pooled models nearly so (0.03);
   B and the NQ-trained models less so (0.06–0.10).
-- **Latency:** about 5 s per session for the features, mostly loading about 85 sessions of bars
-  for six instruments. The prediction itself takes milliseconds, and one build serves all three
-  models.
+- **Latency:** about 2 s per session for the features: about 85 sessions of bars for six
+  instruments, loaded in parallel threads. The prediction itself takes milliseconds, and one
+  build serves all three models.
 
-## Forward evaluation `p1_ml_forward_v1`
+## Forward evaluation `p1_ml_forward_v2`
 
 [contracts/nq_ml.py](../contracts/nq_ml.py) `forward_manifest` and `promotion_rule`. It is
 registered after deployment for the sessions from 2026-10-12. Registering writes one definition
 and sends and schedules nothing.
+
+`p1_ml_forward_v1` was registered on 2026-10-09 at 17:55 UTC from 363c818, before the review's
+promotion rule and version pins. Registered definitions cannot change, so v2 replaces it before
+any forward session. `experiment-score` refuses v1 (`SUPERSEDED`), and v1 is never scored.
 
 **What it pins.** Registration records:
 - the code revision, which must be a clean commit;
@@ -275,6 +279,6 @@ python scripts/nq_journal.py instrument-inventory        # docs/reports/instrume
 python scripts/nq_journal.py ml-dev-eval                 # docs/reports/ml_development.md (development data)
 python scripts/nq_journal.py ml-train                    # data/models/nq_ml/<version>/ (a new version per model)
 python scripts/nq_journal.py summary --date 2026-10-12   # the session's forecast summary
-python scripts/nq_journal.py experiment-register --name p1_ml_forward_v1 --design ml-forward --start 2026-10-12 --end 2027-06-30
-python scripts/nq_journal.py experiment-score --name p1_ml_forward_v1   # once, at the endpoint
+python scripts/nq_journal.py experiment-register --name p1_ml_forward_v2 --design ml-forward --start 2026-10-12 --end 2027-06-30
+python scripts/nq_journal.py experiment-score --name p1_ml_forward_v2   # once, at the endpoint
 ```

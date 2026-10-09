@@ -244,14 +244,21 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
     start = min(m["training"]["to"] for m in mans.values())
     version = defs.PROFILES[profile].snapshot_version
     in_order = [v for v in ml.delivery_order() if v in ml.ALGORITHMS]      # promoted models: none while experimental
-    for snap in store.list_snapshots(conn, start, now.date().isoformat(), version):
-        day = str(snap["session_date"])
-        if day <= start or snap["data_mode"] == "live_capture":
+    today = now.date().isoformat()
+    # which sessions have which runs and a delivery, in one query each; a snapshot's payload is read only to issue
+    runs: Dict[str, set] = {}
+    for r in store.list_forecast_runs(conn, start, today, profile, "historical_replay"):
+        runs.setdefault(str(r["session_date"]), set()).add(r["algorithm_version"])
+    delivered = store.delivery_days(conn, start, today, profile, "historical_replay")
+    for ref in store.list_snapshots(conn, start, today, version, payload=False):
+        day = str(ref["session_date"])
+        if day <= start or ref["data_mode"] == "live_capture":
             continue
-        deadline = ml.replay_deadline(_utc(snap["cutoff_at"]))
-        have = {r["algorithm_version"] for r in store.list_forecast_runs(conn, day, day, profile, "historical_replay")}
+        deadline = ml.replay_deadline(_utc(ref["cutoff_at"]))
+        have = set(runs.get(day, ()))
         todo = [v for v in mans if v not in have]
-        if todo and context_ready(conn, snap, now):
+        if todo and context_ready(conn, ref, now):
+            snap = store.get_snapshot(conn, ref["snapshot_id"])
             fs = features(conn, snap, now)
             for v in todo:
                 _, created = issue(conn, snap, profile, "historical_replay", v, root, now, fs)
@@ -260,8 +267,7 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
             have |= set(todo)
         elif todo:
             counts["waiting"] += 1
-        if (now <= deadline and all(v in have for v in in_order)
-                and store.first_delivery(conn, day, profile, "historical_replay") is None):
+        if now <= deadline and all(v in have for v in in_order) and day not in delivered:
             record_delivery(conn, day, profile, "historical_replay")
             counts["deliveries"] += 1
     if any(counts.values()):

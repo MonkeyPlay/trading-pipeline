@@ -9,7 +9,8 @@ did not produce.
                      percentage points, whether a run is a reconstruction (a replay issued
                      after its replay deadline, contracts/nq_ml.replay_deadline), the
                      forecast in force and why (the session's first recorded delivery,
-                     forecaster/delivery.py), B's reference levels with their
+                     if decided by the replay deadline - one recorded later is shown as
+                     such, forecaster/delivery.py), B's reference levels with their
                      distances from the cutoff price (points and multiples of T), the
                      instruments the multi-instrument model used, missed or found stale,
                      with their market times and ages, what was observed in each (its
@@ -62,6 +63,11 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
         if arm is not None and arm not in runs:
             runs[arm] = store.get_forecast_run(conn, r["run_id"])
     delivery = store.first_delivery(conn, day, profile, mode)
+    late = None
+    if delivery is not None and mode == "historical_replay" and runs:
+        cutoff = next(iter(runs.values()))["input_cutoff_at"]
+        if ml._instant(delivery["decided_at"]) > ml.replay_deadline(ml._instant(cutoff)):
+            late, delivery = delivery, None       # recorded after the fact: not the forecast in force that morning
     a, b = _dist(runs.get("A"), ml.TARGET), _dist(runs.get("B"), ml.TARGET)
     arms = {}
     for arm, run in runs.items():
@@ -91,6 +97,8 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
                            "in_force": None if delivery is None else {
                                "run_id": delivery["run_id"], "label": ml.ARM_LABELS.get(delivery["algorithm"]),
                                "reason": delivery["reason"], "decided_at": _et(delivery["decided_at"])},
+                           "late_delivery": None if late is None else {
+                               "label": ml.ARM_LABELS.get(late["algorithm"]), "decided_at": _et(late["decided_at"])},
                            "sources": {}, "levels": None, "instruments": None, "observed": None}
     # every target's source: the ML forecast in force covers direction_15m; B every other target (A without B)
     covered = delivery and delivery.get("algorithm") in ml.ALGORITHMS
@@ -128,7 +136,10 @@ def lines(s: Dict[str, Any]) -> List[str]:
     out = [f"{s['session_date']}: {ml.TARGET} over {s['window']}, from data to the {s['cutoff'] or '?'} cutoff "
            f"({s['mode'].replace('_', ' ')})."]
     f = s.get("in_force")
+    late = s.get("late_delivery")
     out.append(f"In force: {f['label'] or 'no forecast'} - {f['reason']} (decided {f['decided_at']})." if f else
+               f"In force: none recorded by the replay deadline - {late['label']} was recorded after it "
+               f"({late['decided_at']}), a reconstruction." if late else
                "In force: not recorded for this session (none is recorded after its replay deadline).")
     for arm, e in s["arms"].items():
         head = (f"{arm} {e['label'] or e['version']}" + (" [experimental]" if e["experimental"] else "")

@@ -115,6 +115,14 @@ class Database:
         with self._lock:
             return self.raw.execute(query, params)
 
+    def fetch_tuples(self, query: str, params: Optional[Any] = None) -> list:
+        """Every row as a plain tuple - for bulk reads of many rows (no per-row Row object)."""
+        from psycopg.rows import tuple_row
+        with self._lock:
+            cur = self.raw.cursor(row_factory=tuple_row)
+            cur.execute(query, params)
+            return cur.fetchall()
+
     def executemany(self, query: str, params_seq) -> psycopg.Cursor:
         with self._lock:
             cur = self.raw.cursor()
@@ -142,6 +150,12 @@ class Database:
             return self._tx.stack.pop().__exit__(exc_type, exc, tb)
         finally:
             self._lock.release()
+
+    def reopen(self) -> "Database":
+        """A new connection to the same database with the same settings - for a worker thread (it reads only what
+        is committed)."""
+        info = self.raw.info
+        return get_db_connection(psycopg.conninfo.make_conninfo(info.dsn, password=info.password))
 
     def close(self) -> None:
         self.raw.close()

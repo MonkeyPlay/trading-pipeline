@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from contracts.nq_prompt_v2 import canonical_json
 from database.connection import Database
@@ -122,9 +122,17 @@ def save_snapshot(conn: Database, snap) -> Tuple[str, bool]:
 
 def _snapshot_dict(row) -> Dict[str, Any]:
     d = dict(zip(row.keys(), row))
-    d["payload"] = _load(d["payload"])
+    if "payload" in d:
+        d["payload"] = _load(d["payload"])
     d["snapshot_id"] = str(d["snapshot_id"])
     return d
+
+
+# every snapshot column but the payload (by far the largest - the journal's passes over all sessions need the ids,
+# sessions, times and modes only)
+_SNAPSHOT_REF = ("snapshot_id, symbol, contract_id, session_date, snapshot_version, convention_version, cutoff_at, "
+                 "rth_open_at, data_mode, pit_availability_status, source_payload_hash, built_at, "
+                 "supersedes_snapshot_id")
 
 
 def get_snapshot(conn: Database, snapshot_id: str) -> Optional[Dict[str, Any]]:
@@ -135,10 +143,11 @@ def get_snapshot(conn: Database, snapshot_id: str) -> Optional[Dict[str, Any]]:
 
 
 def list_snapshots(conn: Database, start: str, end: str, snapshot_version: str,
-                   symbol: str = "NQ") -> List[Dict[str, Any]]:
-    """The newest snapshot of every session in [start, end], oldest session first."""
+                   symbol: str = "NQ", payload: bool = True) -> List[Dict[str, Any]]:
+    """The newest snapshot of every session in [start, end], oldest session first; ``payload=False`` leaves the
+    payload out, for a pass that only needs to know which snapshot each session has."""
     rows = conn.execute(
-        "SELECT DISTINCT ON (session_date) * FROM journal.snapshots "
+        f"SELECT DISTINCT ON (session_date) {'*' if payload else _SNAPSHOT_REF} FROM journal.snapshots "
         "WHERE session_date BETWEEN %s AND %s AND snapshot_version = %s AND symbol = %s "
         "ORDER BY session_date, built_at DESC;",
         (start, end, snapshot_version, symbol),
@@ -149,6 +158,12 @@ def list_snapshots(conn: Database, start: str, end: str, snapshot_version: str,
 # --------------------------------------------------------------------------
 # Outcomes (revisioned)
 # --------------------------------------------------------------------------
+
+def outcome_snapshot_ids(conn: Database, label_version: str) -> set:
+    """The snapshots with any outcome under a label version (latest_outcome is not None), in one query."""
+    return {str(r[0]) for r in conn.execute("SELECT DISTINCT snapshot_id FROM journal.outcomes WHERE label_version = %s;",
+                                            (label_version,)).fetchall()}
+
 
 def latest_outcome(conn: Database, snapshot_id: str, label_version: str) -> Optional[Dict[str, Any]]:
     row = conn.execute(
@@ -295,6 +310,15 @@ def latest_annotation(conn: Database, snapshot_id: str, protocol_version: str) -
         "ORDER BY created_at DESC LIMIT 1;", (snapshot_id, protocol_version)).fetchone())
 
 
+def latest_annotations(conn: Database, snapshot_ids: Sequence[str], protocol_version: str) -> Dict[str, Dict[str, Any]]:
+    """latest_annotation of many snapshots in one query: ``{snapshot_id: annotation}``, the unannotated left out."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (snapshot_id) * FROM journal.structure_annotations WHERE snapshot_id = ANY(%s::uuid[]) "
+        "AND protocol_version = %s ORDER BY snapshot_id, created_at DESC;",
+        (list(snapshot_ids), protocol_version)).fetchall()
+    return {str(r["snapshot_id"]): _annotation(r) for r in rows}
+
+
 def _is_uuid(value) -> bool:
     try:
         uuid.UUID(str(value))
@@ -378,6 +402,29 @@ def get_analogue_set(conn: Database, set_id: str) -> Optional[Dict[str, Any]]:
         "SELECT s.*, a.protocol_version FROM journal.analogue_sets s JOIN journal.structure_annotations a "
         "ON a.annotation_id = s.target_annotation_id WHERE s.set_id = %s;", (str(set_id),)).fetchone()
     return None if row is None else _analogue_set(conn, row)
+
+
+def latest_set_refs(conn: Database, target_snapshot_ids: Sequence[str], matcher_version: str, label_version: str,
+                    protocol_version: str) -> Dict[str, Dict[str, str]]:
+    """latest_analogue_set's ids for many targets in one query, without the set's contents or members:
+    ``{target_snapshot_id: {'set_id', 'target_annotation_id'}}``."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (s.target_snapshot_id) s.target_snapshot_id, s.set_id, s.target_annotation_id "
+        "FROM journal.analogue_sets s JOIN journal.structure_annotations a ON a.annotation_id = s.target_annotation_id "
+        "WHERE s.target_snapshot_id = ANY(%s::uuid[]) AND s.matcher_version = %s AND s.label_version = %s "
+        "AND a.protocol_version = %s ORDER BY s.target_snapshot_id, s.created_at DESC;",
+        (list(target_snapshot_ids), matcher_version, label_version, protocol_version)).fetchall()
+    return {str(r[0]): {"set_id": str(r[1]), "target_annotation_id": str(r[2])} for r in rows}
+
+
+def analogue_set_keys(conn: Database, target_annotation_ids: Sequence[str], matcher_version: str,
+                      label_version: str) -> set:
+    """The identities (save_analogue_set's key) of the sets stored for these target annotations, in one query."""
+    rows = conn.execute(
+        "SELECT target_annotation_id, matcher_version, label_version, pool_hash, outcome_digest, prior_digest "
+        "FROM journal.analogue_sets WHERE target_annotation_id = ANY(%s::uuid[]) AND matcher_version = %s "
+        "AND label_version = %s;", (list(target_annotation_ids), matcher_version, label_version)).fetchall()
+    return {(str(r[0]), r[1], r[2], r[3], r[4], r[5]) for r in rows}
 
 
 def latest_analogue_set(conn: Database, target_snapshot_id: str, matcher_version: str, label_version: str,
@@ -490,6 +537,13 @@ def find_forecast_run(conn: Database, idempotency_key: str) -> Optional[str]:
     return None if row is None else str(row[0])
 
 
+def stored_run_keys(conn: Database, idempotency_keys: Sequence[str]) -> set:
+    """Which of these idempotency keys already have a run (find_forecast_run for many keys, in one query)."""
+    rows = conn.execute("SELECT idempotency_key FROM journal.forecast_runs WHERE idempotency_key = ANY(%s);",
+                        (list(idempotency_keys),)).fetchall()
+    return {r[0] for r in rows}
+
+
 def save_forecast_run(conn: Database, run: Dict[str, Any], evidence: Dict[str, Any],
                       predictions: List[Dict[str, Any]]) -> Tuple[str, bool]:
     """
@@ -590,6 +644,13 @@ def save_delivery(conn: Database, session_date: str, profile: str, mode: str, ru
 def latest_delivery(conn: Database, session_date: str, profile: str, mode: str) -> Optional[Dict[str, Any]]:
     """The newest recorded delivery of a session, profile and mode, or None."""
     return _delivery(conn, session_date, profile, mode, "DESC")
+
+
+def delivery_days(conn: Database, start: str, end: str, profile: str, mode: str) -> set:
+    """The sessions in [start, end] with any recorded delivery (first_delivery is not None), in one query."""
+    return {str(r[0]) for r in conn.execute(
+        "SELECT DISTINCT session_date FROM journal.forecast_deliveries WHERE session_date BETWEEN %s AND %s "
+        "AND profile = %s AND mode = %s;", (start, end, profile, mode)).fetchall()}
 
 
 def first_delivery(conn: Database, session_date: str, profile: str, mode: str) -> Optional[Dict[str, Any]]:

@@ -171,8 +171,9 @@ def _known_as_of(history: Dict[str, List[Dict[str, Any]]], target_snapshot: Dict
 def annotated_records(conn, snaps: List[Dict[str, Any]], protocol: str) -> List[ms.Record]:
     """The matcher's record of every snapshot in ``snaps`` annotated under ``protocol``."""
     records = []
+    latest = store.latest_annotations(conn, [s["snapshot_id"] for s in snaps], protocol)
     for snap in snaps:
-        a = store.latest_annotation(conn, snap["snapshot_id"], protocol)
+        a = latest.get(snap["snapshot_id"])
         if a is None:
             continue
         records.append(ms.Record(snap["snapshot_id"], str(snap["session_date"]), snap["symbol"],
@@ -228,7 +229,7 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
     new - a set changes only with its pool or its analogues' outcome revisions.
     """
     version = defs.PROFILES[profile].snapshot_version
-    snaps = store.list_snapshots(conn, "2000-01-01", "2100-01-01", version)
+    snaps = store.list_snapshots(conn, "2000-01-01", "2100-01-01", version, payload=False)
     for snapshot_id in sorted((only or set()) - {s["snapshot_id"] for s in snaps}):
         extra = store.get_snapshot(conn, snapshot_id)      # a named target that is not its session's newest
         if extra is not None and extra["snapshot_version"] == version:
@@ -237,12 +238,18 @@ def match(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = preopen.RUL
     sessions = [ms.SessionRef(s["snapshot_id"], str(s["session_date"]), s["symbol"]) for s in snaps]
     history = store.outcome_history(conn, defs.LABEL_VERSION)
     records = annotated_records(conn, snaps, protocol)
+    targets = [t for t in records if t.integrity_status == "ok" and (only is None or t.snapshot_id in only)]
+    built = [analogue_set_record(t, records, sessions, history, by_id[t.snapshot_id]) for t in targets]
+    # one query for the sets already stored: only a new identity goes through save_analogue_set (which checks again,
+    # under its lock)
+    stored = store.analogue_set_keys(conn, [t.annotation_id for t in targets], preopen.MATCHER_VERSION,
+                                     defs.LABEL_VERSION)
     created = 0
-    for target in records:
-        if target.integrity_status != "ok" or (only is not None and target.snapshot_id not in only):
+    for rec, members in built:
+        if (rec["target_annotation_id"], rec["matcher_version"], rec["label_version"], rec["pool_hash"],
+                rec["outcome_digest"], rec.get("prior_digest")) in stored:
             continue
-        _, new = store.save_analogue_set(conn, *analogue_set_record(target, records, sessions, history,
-                                                                     by_id[target.snapshot_id]))
+        _, new = store.save_analogue_set(conn, rec, members)
         created += new
     logger.info(f"Analogues ({preopen.MATCHER_VERSION}, {protocol}): {created} new set(s) of {len(records)} "
                 f"annotated session(s).")
@@ -266,7 +273,7 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
     now = now or datetime.now(timezone.utc)
     register(conn)
     version = defs.PROFILES[profile].snapshot_version
-    stored = store.list_snapshots(conn, "2000-01-01", now.date().isoformat(), version)
+    stored = store.list_snapshots(conn, "2000-01-01", now.date().isoformat(), version, payload=False)
     first = str(stored[0]["session_date"]) if stored else store.first_session(conn, defs.SYMBOL)
     if first is None:
         logger.info("Journal: no snapshots yet; start it with nq_journal.py backfill.")
@@ -294,12 +301,20 @@ def catch_up(conn, profile: str = defs.DEFAULT_PROFILE, now: Optional[datetime] 
     # have re-downloaded.
     recheck_from = (now.date() - timedelta(days=REFRESH_TRAILING_DAYS)).isoformat()
     annotated = recorded = 0
-    for snap in store.list_snapshots(conn, "2000-01-01", now.date().isoformat(), version):
-        if store.latest_annotation(conn, snap["snapshot_id"], preopen.RULES_PROTOCOL_VERSION) is None:
+    refs = store.list_snapshots(conn, "2000-01-01", now.date().isoformat(), version, payload=False)
+    have_annotation = set(store.latest_annotations(conn, [r["snapshot_id"] for r in refs],
+                                                   preopen.RULES_PROTOCOL_VERSION))
+    have_outcome = store.outcome_snapshot_ids(conn, defs.LABEL_VERSION)
+    for ref in refs:                     # the full snapshot is read only for one that has something to do
+        needs_annotation = ref["snapshot_id"] not in have_annotation
+        due = (ref["snapshot_id"] in taken or str(ref["session_date"]) >= recheck_from
+               or ref["snapshot_id"] not in have_outcome)
+        if not (needs_annotation or due):
+            continue
+        snap = store.get_snapshot(conn, ref["snapshot_id"])
+        if needs_annotation:
             annotate(conn, snap)
             annotated += 1
-        due = (snap["snapshot_id"] in taken or str(snap["session_date"]) >= recheck_from
-               or store.latest_outcome(conn, snap["snapshot_id"], defs.LABEL_VERSION) is None)
         if due and record_outcome(conn, snap, now) is not None:
             recorded += 1
     logger.info(f"Journal ({version}, {defs.LABEL_VERSION}): {len(taken)} new snapshot(s), {annotated} "

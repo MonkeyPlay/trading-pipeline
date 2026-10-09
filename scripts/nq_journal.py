@@ -29,7 +29,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py ml-dev-eval                                # A, B and the ML models (development)
     python scripts/nq_journal.py ml-train                                   # the model artifacts, offline
     python scripts/nq_journal.py summary --date 2026-10-12                  # a session's forecast summary
-    python scripts/nq_journal.py experiment-register --name p1_ml_forward_v1 --design ml-forward --start ... --end ...
+    python scripts/nq_journal.py experiment-register --name p1_ml_forward_v2 --design ml-forward --start ... --end ...
     python scripts/nq_journal.py rth-issue                                  # RTH analogues of the session in progress
     python scripts/nq_journal.py rth-backfill --start 2025-09-02 --end 2026-10-08  # reconstructions at 15/30/60 min
     python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes      # every window of the first hour
@@ -379,6 +379,10 @@ def cmd_experiment_score(conn, args):
         manifest = ex.load_manifest(conn, args.name)
     except ValueError as e:
         print(e)
+        return 1
+    from contracts import nq_ml
+    if args.name in nq_ml.SUPERSEDED:
+        print(f"Not scored: {args.name} is superseded - {nq_ml.SUPERSEDED[args.name]}.")
         return 1
     ok, why = ex.at_endpoint(conn, manifest, datetime.now(cal.NY_TZ).date().isoformat())
     if not ok:
@@ -823,7 +827,7 @@ def main(argv=None):
     p.add_argument("--purpose", default="development", choices=("development", "test"))
     p.add_argument("--official-run", default="first", choices=("first", "latest", "first_timely"))
     p.add_argument("--design", choices=("ab", "ml-forward"), default="ab",
-                   help="ml-forward: p1_ml_forward_v1 (arms A, B and the ML models; contracts/nq_ml.FORWARD)")
+                   help="ml-forward: p1_ml_forward_v2 (arms A, B and the ML models; contracts/nq_ml.FORWARD)")
     p = sub.add_parser("instrument-inventory", help="What the database holds per instrument, and the ML's choice")
     p.add_argument("--since", default="2025-09-01", help="Sessions from (hours and cutoff checks)")
     p.add_argument("--out", default=None, help="Report path (default docs/reports/instrument_inventory.md)")

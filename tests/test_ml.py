@@ -406,16 +406,21 @@ def test_the_forecast_in_force_falls_back_explicitly(journal, monkeypatch):
 
 
 @needs_db
-def test_the_summary_states_measurements_and_sources_only(journal):
+def test_the_summary_states_measurements_and_sources_only(journal, monkeypatch):
     from forecaster import forecast_summary as fsum
     conn = journal["conn"]
     after = [d for d in journal["pool"] if d > journal["until"]]
-    day = after[0]                                       # its forecast in force was recorded that morning
+    day = after[0]                         # its forecast in force was decided that morning (a simulated now) ...
+    late = fsum.build(conn, day)           # ... but the database stamped it today: after the replay deadline
+    assert late["in_force"] is None and late["late_delivery"]["label"] == "B (analogues)"
+    assert "In force: none recorded by the replay deadline - B (analogues) was recorded after it" in \
+        " ".join(fsum.lines(late))
+    monkeypatch.setattr(ml, "REPLAY_DEADLINE_MINUTES", 10 ** 8)          # as though decided in time
     s = fsum.build(conn, day)
     assert s["in_force"]["label"] == "B (analogues)" and set(s["arms"]) >= {"A", "B", "N", "M", "P"}
-    issued = [e for a, e in s["arms"].items() if a in ("N", "M", "P") and e["status"] == "issued"]
+    issued = [e for a, e in late["arms"].items() if a in ("N", "M", "P") and e["status"] == "issued"]
     assert issued and all(e["reconstruction"] for e in issued)                 # issued long after the deadline
-    assert "[reconstruction: issued after the replay deadline, never in force]" in " ".join(fsum.lines(s))
+    assert "[reconstruction: issued after the replay deadline, never in force]" in " ".join(fsum.lines(late))
     later = " ".join(fsum.lines(fsum.build(conn, after[1])))
     assert "In force: not recorded for this session (none is recorded after its replay deadline)" in later
     m = s["arms"]["M"]
@@ -489,7 +494,11 @@ def test_the_forward_evaluation_pins_its_versions_and_counts_no_reconstruction(j
     assert delivered[after[0]]["detail"] == "the delivery was recorded after the replay deadline"
     assert delivered[after[1]]["detail"] == "no delivery recorded by the replay deadline"
     assert main(["--db", DSN, "experiment-score", "--name", ml.FORWARD["name"]]) == 1
-    assert "Not scored: p1_ml_forward_v1 is scored once, at its endpoint" in capsys.readouterr().out
+    assert "Not scored: p1_ml_forward_v2 is scored once, at its endpoint" in capsys.readouterr().out
+    # v1, registered before the review's rule, is never scored
+    assert ex.register_experiment(conn, ex.experiment_manifest("p1_ml_forward_v1", after[0], "2027-12-31"))
+    assert main(["--db", DSN, "experiment-score", "--name", "p1_ml_forward_v1"]) == 1
+    assert "Not scored: p1_ml_forward_v1 is superseded" in capsys.readouterr().out
     assert conn.execute("SELECT count(*) FROM journal.forecast_runs").fetchone()[0] == before
 
 

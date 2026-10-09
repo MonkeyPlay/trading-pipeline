@@ -194,7 +194,7 @@ def preview_session(conn, day: str, as_of: datetime, profile: str = defs.DEFAULT
 
     annotation = _jsonable({**structure_rules.annotate(snapshot), "annotation_id": PREVIEW_ID,
                             "snapshot_id": PREVIEW_ID, "model": None, "created_at": made_at})
-    stored = store.list_snapshots(conn, "2000-01-01", "2100-01-01", snap.snapshot_version)
+    stored = store.list_snapshots(conn, "2000-01-01", "2100-01-01", snap.snapshot_version, payload=False)
     records = journal.annotated_records(conn, stored, pre.RULES_PROTOCOL_VERSION)
     target = ms.Record(PREVIEW_ID, day, snap.symbol, snap.snapshot_version, PREVIEW_ID,
                        annotation["protocol_version"], annotation["integrity_status"], ms.features(annotation))

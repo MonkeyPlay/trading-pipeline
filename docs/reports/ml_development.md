@@ -1,6 +1,6 @@
 # NQ direction model: development comparison
 
-**Development data, not a test.** Every one of these sessions has been inspected before (hist_dev_v1, p1_pool_tuning_v1, the fan experiments). An improvement here would be a candidate for the forward evaluation (p1_ml_forward_v1), not a result.
+**Development data, not a test.** Every one of these sessions has been inspected before (hist_dev_v1, p1_pool_tuning_v1, the fan experiments). An improvement here would be a candidate for the forward evaluation (p1_ml_forward_v2), not a result.
 
 - **Target:** direction_15m, exactly as labelled (bullish above T, bearish below -T, else the neutral band).
 - **Sessions:** 279 in the research_0929 pool (278 with a label); walk-forward test span 2026-02-24 to 2026-10-09 (159 sessions, 8 folds: train on every earlier session, one-session embargo, test the next 20).
@@ -70,9 +70,9 @@ The family with the lower development Brier score per configuration (a developme
 
 From nothing loaded to probabilities - the session's features as of the cutoff from the database, the artifact loaded and checked, the prediction:
 
-- **nq_ml_nq_p1_v1:** median 5.31 s, slowest 5.55 s (5 issues)
-- **nq_ml_multi_p1_v1:** median 5.28 s, slowest 5.49 s (5 issues)
-- **nq_ml_pooled_p1_v1:** median 5.21 s, slowest 5.48 s (5 issues)
+- **nq_ml_nq_p1_v1:** median 2.06 s, slowest 2.60 s (5 issues)
+- **nq_ml_multi_p1_v1:** median 2.09 s, slowest 2.16 s (5 issues)
+- **nq_ml_pooled_p1_v1:** median 2.03 s, slowest 2.20 s (5 issues)
 
 ## Missing inputs (share of pool sessions, multi-instrument features)
 

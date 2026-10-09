@@ -6,7 +6,9 @@ session's cutoff - each with its source instrument, market timestamp, availabili
 status and data age.
 
   load(conn, symbols, first, last)   every instrument's 1m bars and active contracts
-                                     over the sessions (one query per instrument)
+                                     over the sessions: one query per instrument, run in
+                                     parallel threads on their own connections (the time is
+                                     the database's), times as integer microseconds
   raw_day(...)                       one instrument's raw values on one session as of the
                                      cutoff: the last completed bar ending at or before it
                                      (and received by ``as_of`` when given), the previous
@@ -42,6 +44,7 @@ the training window - fills, beside the instrument's missing indicator.
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -84,30 +87,48 @@ class InstrumentBars:
 
 def load(conn, symbols: Sequence[str], first: str, last: str) -> Dict[str, InstrumentBars]:
     """Every instrument's 1m TRADES bars of the trading days [first, last], on every contract stored for them (the
-    active one and the next one's warm-up days), and the active contract of each day."""
-    out = {}
-    for symbol in symbols:
-        rows = conn.execute(
-            "SELECT b.contract_id, b.trading_day::text AS day, b.timestamp_utc AS start, b.open, b.high, b.low, "
-            "b.close, b.volume, b.first_stored_at AS stored FROM bars b JOIN contracts k USING (contract_id) "
-            "WHERE k.symbol = %s AND b.interval = '1m' AND b.price_type = 'TRADES' AND b.trading_day BETWEEN %s "
-            "AND %s ORDER BY b.contract_id, b.trading_day, b.timestamp_utc;", (symbol, first, last)).fetchall()
-        frame = pd.DataFrame([tuple(r) for r in rows], columns=["contract_id", "day", "start", "open", "high", "low",
-                                                                  "close", "volume", "stored"])
-        ib = InstrumentBars(symbol)
-        if not frame.empty:
-            frame["start"] = pd.to_datetime(frame["start"], utc=True, format="mixed")
-            frame["stored"] = pd.to_datetime(frame["stored"], utc=True, format="mixed")
-            for col in ("open", "high", "low", "close"):
-                frame[col] = frame[col].astype(float)
-            frame["volume"] = frame["volume"].astype(float)
-            for (cid, day), g in frame.groupby(["contract_id", "day"], sort=False):
-                ib.days[(int(cid), str(day))] = g.reset_index(drop=True)
-        for r in conn.execute("SELECT trading_day::text, contract_id FROM active_contracts WHERE symbol = %s AND "
-                              "trading_day BETWEEN %s AND %s;", (symbol, first, last)).fetchall():
-            ib.active[str(r[0])] = int(r[1])
-        out[symbol] = ib
-    return out
+    active one and the next one's warm-up days), and the active contract of each day. The instruments are read in
+    parallel, each on its own connection (committed data; the shared ``conn`` when one cannot be opened)."""
+    symbols = list(symbols)
+    if len(symbols) <= 1:
+        return {s: _load_one(conn, s, first, last) for s in symbols}
+
+    def work(symbol: str) -> InstrumentBars:
+        try:
+            own = conn.reopen()
+        except Exception:                               # not a reopenable connection: the shared one, serialised
+            return _load_one(conn, symbol, first, last)
+        try:
+            return _load_one(own, symbol, first, last)
+        finally:
+            own.close()
+
+    with ThreadPoolExecutor(max_workers=len(symbols)) as pool:
+        return dict(zip(symbols, pool.map(work, symbols)))
+
+
+def _load_one(conn, symbol: str, first: str, last: str) -> InstrumentBars:
+    rows = conn.fetch_tuples(
+        "SELECT b.contract_id, b.trading_day::text AS day, (extract(epoch FROM b.timestamp_utc) * 1000000)::bigint, "
+        "b.open, b.high, b.low, b.close, b.volume, (extract(epoch FROM b.first_stored_at) * 1000000)::bigint "
+        "FROM bars b JOIN contracts k USING (contract_id) WHERE k.symbol = %s AND b.interval = '1m' "
+        "AND b.price_type = 'TRADES' AND b.trading_day BETWEEN %s AND %s "
+        "ORDER BY b.contract_id, b.trading_day, b.timestamp_utc;", (symbol, first, last))
+    frame = pd.DataFrame(rows, columns=["contract_id", "day", "start", "open", "high", "low", "close", "volume",
+                                        "stored"])
+    ib = InstrumentBars(symbol)
+    if not frame.empty:
+        frame["start"] = pd.to_datetime(frame["start"].astype("int64"), unit="us", utc=True)
+        frame["stored"] = pd.to_datetime(frame["stored"].astype("Int64"), unit="us", utc=True)
+        for col in ("open", "high", "low", "close"):
+            frame[col] = frame[col].astype(float)
+        frame["volume"] = frame["volume"].astype(float)
+        for (cid, day), g in frame.groupby(["contract_id", "day"], sort=False):
+            ib.days[(int(cid), str(day))] = g.reset_index(drop=True)
+    for r in conn.execute("SELECT trading_day::text, contract_id FROM active_contracts WHERE symbol = %s AND "
+                          "trading_day BETWEEN %s AND %s;", (symbol, first, last)).fetchall():
+        ib.active[str(r[0])] = int(r[1])
+    return ib
 
 
 # --------------------------------------------------------------------------
@@ -138,12 +159,9 @@ def _limit(symbol: str, closed: bool) -> Optional[int]:
     return inst.closed_max_age_minutes if closed else inst.max_age_minutes
 
 
-def _last_before(frame: pd.DataFrame, before: datetime) -> Optional[pd.Series]:
-    """The last completed bar ending at or before ``before`` (its start at or before ``before`` - 1 minute)."""
-    if frame is None or frame.empty:
-        return None
-    sub = frame[frame["start"] <= pd.Timestamp(before - MINUTE)]
-    return None if sub.empty else sub.iloc[-1]
+def _upto(frame: pd.DataFrame, when: datetime, side: str = "right") -> int:
+    """How many of a day's bars (in time order) start at or before ``when`` (side 'left': before it)."""
+    return int(frame["start"].searchsorted(pd.Timestamp(when), side=side))
 
 
 def raw_day(ib: InstrumentBars, session: cal.Session, prev: Optional[cal.Session], cutoff: datetime,
@@ -157,49 +175,53 @@ def raw_day(ib: InstrumentBars, session: cal.Session, prev: Optional[cal.Session
     frame = ib.days.get((cid, day)) if cid is not None else None
     if frame is None or frame.empty:
         return out
-    market = frame[frame["start"] <= pd.Timestamp(cutoff - MINUTE)]
-    if market.empty:
+    # the day's bars are in time order: positions by binary search, values as arrays (the bars that ended by the
+    # cutoff are the first k; those also received by as_of the positions in ``seen``)
+    k = _upto(frame, cutoff - MINUTE)
+    if k == 0:
         out["status"] = "missing"
         return out
-    seen = market if as_of is None else market[market["stored"] <= pd.Timestamp(as_of)]
+    seen = (np.arange(k) if as_of is None else
+            np.flatnonzero((frame["stored"].iloc[:k] <= pd.Timestamp(as_of)).to_numpy()))
     closed = closed_at(ib.symbol, cutoff - MINUTE)
     limit = _limit(ib.symbol, closed)
-    if seen.empty:
+    if len(seen) == 0:
         out["status"] = "stale"
         return out
-    last = seen.iloc[-1]
-    start = _utc(last["start"])
+    j = int(seen[-1])
+    start = _utc(frame["start"].iat[j])
     age = (cutoff - (start + MINUTE)).total_seconds() / 60
     out.update(market_ts=start.strftime("%Y-%m-%dT%H:%M:%SZ"), age_min=round(age, 2))
     if limit is not None and age > limit:
         out["status"] = "stale"
         return out
-    live = _utc(last["stored"]) is not None and _utc(last["stored"]) - (start + MINUTE) < LIVE_WINDOW
-    newest = _utc(market.iloc[-1]["start"])
+    stored = _utc(frame["stored"].iat[j])
+    live = stored is not None and stored - (start + MINUTE) < LIVE_WINDOW
+    newest = _utc(frame["start"].iat[k - 1])
     out["status"] = ("closed" if closed else "delayed" if newest > start else "observed" if live else "reconstructed")
-    bars = seen
-    p_cut = float(last["close"])
+    close = frame["close"].to_numpy()
+
+    def last_seen_before(when: datetime) -> Optional[float]:
+        n = int(np.searchsorted(seen, _upto(frame, when - MINUTE)))     # the seen bars ending by ``when``
+        return None if n == 0 else float(close[seen[n - 1]])
+
     first_pm = cal.ny_instant(session.session_date, time(8, 0))
-    pm = _last_before(bars, first_pm)
-    m30 = _last_before(bars, cutoff - timedelta(minutes=30))
-    logc = np.log(bars["close"].to_numpy())
-    rets = np.diff(logc)
+    rets = np.diff(np.log(close[seen]))
     out.update(
-        p_cut=p_cut, p_0800=None if pm is None else float(pm["close"]), p_m30=None if m30 is None else float(m30["close"]),
-        on_high=float(bars["high"].max()), on_low=float(bars["low"].min()),
+        p_cut=float(close[j]), p_0800=last_seen_before(first_pm), p_m30=last_seen_before(cutoff - timedelta(minutes=30)),
+        on_high=float(np.nanmax(frame["high"].to_numpy()[seen])), on_low=float(np.nanmin(frame["low"].to_numpy()[seen])),
         rv_on=float(np.std(rets)) if len(rets) >= 30 else None,
-        vol_on=float(bars["volume"].sum()) if ml.INSTRUMENTS.get(ib.symbol) is None or
+        vol_on=float(np.nansum(frame["volume"].to_numpy()[seen])) if ml.INSTRUMENTS.get(ib.symbol) is None or
         ml.INSTRUMENTS[ib.symbol].has_volume else None)
     # the previous session on the same contract: its close at the scheduled close and its RTH high and low
     if prev is not None:
         pframe = ib.days.get((cid, prev.session_date.isoformat()))
         if pframe is not None and not pframe.empty:
-            close = _last_before(pframe, prev.scheduled_close_at)
-            rth = pframe[(pframe["start"] >= pd.Timestamp(prev.rth_open_at))
-                         & (pframe["start"] < pd.Timestamp(prev.scheduled_close_at))]
-            out.update(p_prev_close=None if close is None else float(close["close"]),
-                       prev_rth_high=None if rth.empty else float(rth["high"].max()),
-                       prev_rth_low=None if rth.empty else float(rth["low"].min()))
+            n = _upto(pframe, prev.scheduled_close_at - MINUTE)
+            lo, hi = _upto(pframe, prev.rth_open_at, "left"), _upto(pframe, prev.scheduled_close_at, "left")
+            out.update(p_prev_close=None if n == 0 else float(pframe["close"].iat[n - 1]),
+                       prev_rth_high=None if hi <= lo else float(np.nanmax(pframe["high"].to_numpy()[lo:hi])),
+                       prev_rth_low=None if hi <= lo else float(np.nanmin(pframe["low"].to_numpy()[lo:hi])))
     return out
 
 
@@ -209,9 +231,10 @@ def rth_range(ib: InstrumentBars, session: cal.Session) -> Optional[float]:
     frame = ib.days.get((ib.active.get(day), day))
     if frame is None or frame.empty:
         return None
-    rth = frame[(frame["start"] >= pd.Timestamp(session.rth_open_at))
-                & (frame["start"] < pd.Timestamp(session.scheduled_close_at))]
-    return None if len(rth) < 30 else float(rth["high"].max() - rth["low"].min())
+    lo, hi = _upto(frame, session.rth_open_at, "left"), _upto(frame, session.scheduled_close_at, "left")
+    if hi - lo < 30:
+        return None
+    return float(np.nanmax(frame["high"].to_numpy()[lo:hi]) - np.nanmin(frame["low"].to_numpy()[lo:hi]))
 
 
 # --------------------------------------------------------------------------

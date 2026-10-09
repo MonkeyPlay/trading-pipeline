@@ -265,7 +265,7 @@ POOLED = {
               "the effective sample grows far less than threefold",
 }
 FORWARD = {
-    "name": "p1_ml_forward_v1",
+    "name": "p1_ml_forward_v2",
     "design": "prospective sessions only, from the first session after deployment: the runs Auto issues at each "
               "snapshot by its replay deadline (historical-replay mode, as A and B), scored once at the endpoint",
     "endpoint_sessions": 60,
@@ -276,6 +276,11 @@ FORWARD = {
     "availability": "0.90",                    # the on-time share the user set for a forecast arm (2026-10-09, arm D)
     "seed": 20261012,
 }
+# Registered forward evaluations that are never scored: v1 was registered from 363c818 on 2026-10-09 17:55 UTC,
+# before the review's promotion rule and version pins - v2 replaces it before any forward session.
+SUPERSEDED = {"p1_ml_forward_v1": "registered from 363c818 before the review's promotion rule, version pins and "
+                                  "reconstruction rule; replaced by p1_ml_forward_v2 before any forward session - "
+                                  "never scored"}
 # Experimental until FORWARD's promotion rule is met; delivery_order() then puts the promoted model first.
 STATUS = {ML_MULTI_VERSION: "experimental", ML_NQ_VERSION: "experimental", ML_POOLED_VERSION: "experimental"}
 # Replay forecasts wait for the context instruments' cutoff bars up to this long after the cutoff, then issue with

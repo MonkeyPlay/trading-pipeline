@@ -276,18 +276,38 @@ def forecast_all(conn, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.
     """Historical-replay forecasts of every annotated snapshot of the profile under every algorithm (stage 4's arms
     A and B); returns how many runs are new."""
     history = store.outcome_history(conn, defs.LABEL_VERSION)
+    mode = "historical_replay"
+    # forecast_session's evidence ids for every session at once - its newest snapshot, that snapshot's latest
+    # annotation, the newest set of exactly that annotation - and the official key they give (idempotency_key: ids
+    # only, known before any evidence is loaded); only a session whose key has no run yet goes through run_forecast
+    snaps = store.list_snapshots(conn, "2000-01-01", "2100-01-01", defs.PROFILES[profile].snapshot_version,
+                                 payload=False)
+    ids = [s["snapshot_id"] for s in snaps]
+    annotations = store.latest_annotations(conn, ids, protocol)
+    sets = store.latest_set_refs(conn, ids, pre.MATCHER_VERSION, defs.LABEL_VERSION, protocol)
     created = 0
     for algorithm in algorithms:
+        todo = []
+        for snap in snaps:
+            a = annotations.get(snap["snapshot_id"])
+            if a is None:
+                continue
+            ref = sets.get(snap["snapshot_id"])
+            set_id = ref["set_id"] if ref and ref["target_annotation_id"] == a["annotation_id"] else None
+            key = idempotency_key(snap, _canonical_id(a["annotation_id"]), _canonical_id(set_id), profile, mode,
+                                  algorithm)
+            todo.append((snap, a["annotation_id"], set_id, key))
+        have = store.stored_run_keys(conn, [t[3] for t in todo])
         new_runs = 0
-        for snap in store.list_snapshots(conn, "2000-01-01", "2100-01-01", defs.PROFILES[profile].snapshot_version):
-            result = forecast_session(conn, str(snap["session_date"]), profile, protocol, history=history,
-                                      algorithm=algorithm)
-            if result is not None:
-                run, new = result
-                new_runs += new
-                if new and run["lifecycle_status"] not in ("issued", "unavailable"):
-                    logger.warning(f"Forecast {snap['session_date']} ({algorithm}): {run['lifecycle_status']} - "
-                                   f"{run['failure_reason']}")
+        for snap, annotation_id, set_id, key in todo:
+            if key in have:
+                continue
+            run, new = run_forecast(conn, snap["snapshot_id"], annotation_id, set_id, profile, mode, history,
+                                    algorithm)
+            new_runs += new
+            if new and run["lifecycle_status"] not in ("issued", "unavailable"):
+                logger.warning(f"Forecast {snap['session_date']} ({algorithm}): {run['lifecycle_status']} - "
+                               f"{run['failure_reason']}")
         logger.info(f"Forecasts ({algorithm}, historical replay, {protocol}): {new_runs} new run(s).")
         created += new_runs
     return created
