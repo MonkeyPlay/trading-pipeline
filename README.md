@@ -636,7 +636,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [forecasting audit (2026-10-09)](docs/forecasting_audit.md), [reports](docs/reports/) |
 
 ## Database
 
