@@ -364,12 +364,14 @@ _BAR_COLUMNS = (
 
 # Receipt times (migrations 0022, 0023): first_stored_at - when the bar first reached the store, carried over when a
 # day is rewritten (unknown stays unknown), the database's clock for a bar not held before; version_stored_at - when
-# its current values reached the store, carried over while they stay the same, the clock when they change.
+# its current values reached the store, carried over while they stay the same, the clock when they change. One clock
+# reading per row: a new bar's two times are the same instant (two clock_timestamp() calls differed by microseconds).
 _BARS_INSERT = f"""
+WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
 INSERT INTO bars ({", ".join(_BAR_COLUMNS)}, first_stored_at, version_stored_at)
 VALUES ({", ".join(f"%({c})s" for c in _BAR_COLUMNS)},
-        CASE WHEN %(bar_is_new)s THEN clock_timestamp() ELSE %(first_stored_at)s::timestamptz END,
-        CASE WHEN %(values_are_new)s THEN clock_timestamp() ELSE %(version_stored_at)s::timestamptz END);
+        CASE WHEN %(bar_is_new)s THEN (SELECT now FROM clock) ELSE %(first_stored_at)s::timestamptz END,
+        CASE WHEN %(values_are_new)s THEN (SELECT now FROM clock) ELSE %(version_stored_at)s::timestamptz END);
 """
 _VALUE_COLUMNS = ("open", "high", "low", "close", "volume", "wap", "bar_count")
 
