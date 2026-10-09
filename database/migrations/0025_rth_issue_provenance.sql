@@ -16,11 +16,6 @@
 --   data_mode           live only when issued by auto or manual within 30 minutes of the cutoff, by
 --                       the database clock; a backfill is always a historical reconstruction
 --
---   identity            a set is stored once per input digest and per kind of issue: an issue by
---                       Auto or by hand is recorded even when a backfill of the same inputs came
---                       first (0024 returned the backfill, so the issue left no trace); repeated
---                       issues, or repeated backfills, of unchanged inputs still add nothing
---
 -- The columns are added with their values for the existing rows (no row is updated: the
 -- tables are append-only).
 
@@ -31,11 +26,6 @@ ALTER TABLE journal.rth_analogue_sets
     ADD COLUMN inputs_received_at TIMESTAMPTZ,
     ADD COLUMN pool_received_at TIMESTAMPTZ,
     ADD COLUMN pit_status TEXT CHECK (pit_status IN ('verified', 'unverified'));
-
-ALTER TABLE journal.rth_analogue_sets DROP CONSTRAINT rth_analogue_sets_symbol_session_date_matcher_version_elaps_key;
-CREATE UNIQUE INDEX rth_analogue_sets_identity
-    ON journal.rth_analogue_sets (symbol, session_date, matcher_version, elapsed_minutes, input_digest,
-                                  (issued_by = 'backfill'));
 
 CREATE INDEX idx_rth_analogue_sets_issued
     ON journal.rth_analogue_sets (symbol, session_date, matcher_version, created_at) WHERE data_mode = 'live';

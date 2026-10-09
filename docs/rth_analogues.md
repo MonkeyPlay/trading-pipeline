@@ -35,7 +35,7 @@ history.
   annotation, `nq_match_p1_v2`, its analogue sets and the forecasts built on them are all
   untouched.
 - **Separate storage:** the RTH matcher has its own version, its own definition kind
-  (`rth_matcher`) and its own tables (migrations 0024 and 0025). A pre-open set and an RTH
+  (`rth_matcher`) and its own tables (migrations 0024 to 0027). A pre-open set and an RTH
   set can never be confused, and no pre-open cutoff guard was loosened to make room for it.
 
 ## Timing
@@ -177,7 +177,7 @@ digest covers the target's window bars, context and features, and every scored c
 session, context snapshot and features. Repeated issues, or repeated backfills, of unchanged
 inputs store nothing new. An issue by Auto or by hand is still recorded when a backfill of the
 same inputs came first, so the backfill never stands in for it; a backfill of inputs already
-issued adds nothing.
+issued adds nothing (migration 0027).
 
 **Revised data never overwrites:** a vendor revision of a bar inside a window, or a new
 candidate session, gives a new digest and a new set beside the earlier one. The tables are

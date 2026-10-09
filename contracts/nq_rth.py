@@ -6,7 +6,7 @@ minute of its regular session arrives, over its first hour.
 
 This is a separate matcher from the pre-open one (contracts/nq_preopen.py,
 matching/structural.py), under its own version and its own definition kind
-('rth_matcher'), with its own tables (migrations 0024, 0025). Nothing about the
+('rth_matcher'), with its own tables (migrations 0024 to 0027). Nothing about the
 pre-open snapshot, cutoff, annotation, analogue set or forecast changes.
 
   RTH_MATCHER_VERSION   the version every new RTH set is stored under
