@@ -34,6 +34,12 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py llm-forecast --start 2026-09-21 --end 2026-10-02 --arms C
     python scripts/nq_journal.py annotate-llm --restricted --start 2025-09-01 --end 2026-10-02 --batch  # C's pool
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
+    python scripts/nq_journal.py rth-issue                                  # RTH analogues of the session in progress
+    python scripts/nq_journal.py rth-backfill --start 2025-09-02 --end 2026-10-08  # reconstructions at 15/30/60 min
+    python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes      # every window of the first hour
+    python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15     # reconstructed view at 09:45
+    python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
+    python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the tolerances' calibration
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
 
@@ -621,6 +627,105 @@ def cmd_preview(conn, args):
     return 0
 
 
+def cmd_rth_issue(conn, args):
+    """The RTH analogue sets of the session in progress (forecaster/rth_analogues.issue): its newest completed
+    window from the open and any checkpoint not stored yet - what Auto runs after each collection."""
+    from forecaster import rth_analogues as ra
+    ra.register(conn)
+    result = ra.issue(conn, day=args.date, issued_by=args.by)
+    if result["status"] != "issued":
+        print(f"RTH analogues of {result['session_date']}: {result['status']} - {result['reason']}")
+        return 0                                  # waiting, closed or busy (another issue is storing): not a failure
+    for m, set_id, new in result["stored"]:
+        aset = store.get_rth_set(conn, set_id)
+        print(("new: " if new else "already stored: ") + ra.describe(aset))
+        print("  " + (", ".join(f"#{x['rank']} {x['session_date']} {float(x['similarity']):.1f}%"
+                                for x in aset["members"]) or "no analogue"))
+    if result["stop"]["state"] != "complete":
+        print(f"  the window stops at {result['minutes']} minute(s): {ra.stop_text(result['stop'])}")
+    return 0
+
+
+def cmd_rth_backfill(conn, args):
+    """Historical reconstructions of RTH analogue sets: the checkpoints (15, 30, 60 minutes) or, with
+    --all-minutes, every window of the first hour - stored once, labelled as reconstructions."""
+    from contracts import nq_rth as rth
+    from forecaster import rth_analogues as ra
+    ra.register(conn)
+    days = [s.session_date.isoformat() for s in _sessions(args)]
+    minutes = range(1, rth.MAX_MINUTES + 1) if args.all_minutes else rth.CHECKPOINTS
+    result = ra.reconstruct(conn, days, minutes)
+    print(f"RTH analogues ({rth.RTH_MATCHER_VERSION}): {result['new']} new set(s), {result['already']} already "
+          f"stored, over {len(days)} session(s)")
+    for day, why in sorted(result["skipped"].items()):
+        print(f"  {day}: {why}")
+    return 0
+
+
+def cmd_rth_show(conn, args):
+    """One RTH set of a session, in one of two views: reconstructed (default) - the newest calculation of the
+    longest stored window not past --minute (default 60), live or not; issued - what had been issued live by --at
+    (an ET time of the session's day; default: the end of the day), never a later correction or a backfill."""
+    from datetime import time as dtime
+    from contracts import nq_rth as rth
+    from forecaster import rth_analogues as ra
+    windows = store.rth_windows(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION)
+    if not windows:
+        print(f"No {rth.RTH_MATCHER_VERSION} RTH analogue set of {args.date} is stored.")
+        return 1
+    print("Stored windows: " + ", ".join(f"{w['elapsed_minutes']}" + ("*" if w["checkpoint"] else "")
+                                         + (f" ({w['sets']} sets)" if w["sets"] > 1 else "")
+                                         + (" live" if w["live"] else "") for w in windows)
+          + "   (* checkpoint)")
+    if args.view == "issued":
+        at = (cal.ny_instant(cal.session(args.date).session_date, dtime.fromisoformat(args.at)) if args.at
+              else None)
+        aset = store.rth_set_issued(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION, at=at)
+        if aset is None:
+            print(f"As issued: nothing was issued live for {args.date}" + (f" by {args.at} ET." if args.at else "."))
+            return 1
+        print("As issued" + (f" by {args.at} ET" if args.at else "") + ":")
+    else:
+        aset = store.rth_set_at(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION, args.minute)
+        if aset is None:
+            print(f"No window of {args.minute} minutes or less is stored.")
+            return 1
+        print("Reconstructed (the newest calculation, live or not):")
+    print(ra.describe(aset))
+    print(f"  pool {aset['pool_size']} earlier session(s); excluded: "
+          + (", ".join(f"{k.replace('_', ' ')} {v}" for k, v in aset["excluded"].items()) or "none")
+          + "; similarity is resemblance of the observed openings, not a probability")
+    feats = list(rth.WEIGHTS)
+    print(f"  {'':22s}{'target':>10s}" + "".join(f"{m['session_date']:>13s}" for m in aset["members"]))
+    print(f"  {'similarity':22s}{'':>10s}" + "".join(f"{float(m['similarity']):12.1f}%" for m in aset["members"]))
+    for f in feats:
+        t = aset["target_features"].get(f)
+        row = f"  {rth.LABELS[f] + ' (' + str(rth.WEIGHTS[f]) + ')':22s}" + (f"{'—':>10s}" if t is None
+                                                                           else f"{float(t):10.3f}")
+        for m in aset["members"]:
+            c = m["components"][f]
+            row += (f"{'—':>13s}" if not c["comparable"] else
+                    f"{float(c['analogue']):7.3f} {float(c['score']):.2f}")
+        print(row)
+    return 0
+
+
+def cmd_rth_calibrate(conn, args):
+    """Reproduces the RTH matcher's tolerance calibration (contracts/nq_rth.CALIBRATION) over the sessions to --end:
+    the median pairwise difference of each feature at 30 minutes and twice it - beside the registered values. Stores
+    nothing; a different calibration needs a new matcher version."""
+    from contracts import nq_rth as rth
+    from forecaster import rth_analogues as ra
+    from matching import rth as mr
+    openings, _ = ra.load_openings(conn, args.end)
+    result = mr.calibrate([o for d, o in openings.items() if not args.start or d >= args.start])
+    print(f"{result['sessions']} session(s) {result['first']}..{result['last']} (registered: "
+          f"{rth.CALIBRATION['sessions']} {rth.CALIBRATION['first_session']}..{rth.CALIBRATION['last_session']})")
+    for f, med in result["medians"].items():
+        print(f"  {f:20s} median {med:.4f}  tolerance {result['tolerances'][f]:>5s}  registered {rth.TOLERANCES[f]}")
+    return 0
+
+
 def cmd_live_report(conn, args):
     """Every live capture of a date range with its steps as seconds after the cutoff (database clock)."""
     from forecaster import live_capture as live
@@ -768,6 +873,23 @@ def main(argv=None):
     p = sub.add_parser("preview", help="Forecast now: the next session's forecast from the data stored so far "
                                        "(a preview, never stored in the journal)")
     p.add_argument("--out", default=None, help="Preview file (default: the one the dashboard reads)")
+    p = sub.add_parser("rth-issue", help="RTH analogue sets of the session in progress (newest window, checkpoints)")
+    p.add_argument("--date", help="Session date YYYY-MM-DD (default: today in New York)")
+    p.add_argument("--by", choices=["manual", "auto"], default="manual",
+                   help="Who issues: a person (default) or Auto mode (the dashboard passes it)")
+    p = sub.add_parser("rth-backfill", help="Historical reconstructions of RTH analogue sets")
+    p.add_argument("--date", help="Session date YYYY-MM-DD")
+    p.add_argument("--start", help="First session date (inclusive)")
+    p.add_argument("--end", help="Last session date (inclusive)")
+    p.add_argument("--all-minutes", action="store_true", help="Every window of the first hour, not only 15/30/60")
+    p = sub.add_parser("rth-show", help="The RTH set a review of a session at a minute sees")
+    p.add_argument("--date", help="Session date YYYY-MM-DD")
+    p.add_argument("--minute", type=int, default=60, help="Reconstructed view: minutes after the 09:30 ET open")
+    p.add_argument("--view", choices=["reconstructed", "issued"], default="reconstructed")
+    p.add_argument("--at", help="Issued view: HH:MM ET on the session's day (default: everything issued)")
+    p = sub.add_parser("rth-calibrate", help="Reproduce the RTH matcher's tolerance calibration (stores nothing)")
+    p.add_argument("--start", help="First session date (default: all)")
+    p.add_argument("--end", required=True, help="Last session date")
     p = sub.add_parser("live-report", help="Live captures and their timing")
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
@@ -791,7 +913,9 @@ def main(argv=None):
         parser.error("give --start and --end")
     if args.command == "annotate-llm" and not args.date and not (args.start and args.end):
         parser.error("give --date, or --start and --end")
-    if args.command in ("show", "analogues") and not args.date:
+    if args.command == "rth-backfill" and not args.date and not (args.start and args.end):
+        parser.error("give --date, or --start and --end")
+    if args.command in ("show", "analogues", "rth-show") and not args.date:
         parser.error("give --date")
     if args.command == "forecast" and not (args.date or (args.start and args.end) or
                                            (args.snapshot_id and args.annotation_id)):
@@ -809,7 +933,8 @@ def main(argv=None):
                    "forecast": cmd_forecast, "show-forecast": cmd_show_forecast,
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
                    "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
-                   "preview": cmd_preview, "llm-forecast": cmd_llm_forecast,
+                   "preview": cmd_preview, "llm-forecast": cmd_llm_forecast, "rth-issue": cmd_rth_issue,
+                   "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)
     finally:

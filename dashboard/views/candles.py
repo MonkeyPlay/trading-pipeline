@@ -10,12 +10,21 @@ draws those extra minutes grey on a grey background, with the session VWAP, the
 opening range, the pre-open reference levels and the TradingView indicator's
 three moving averages (features.calculations.calculate_moving_averages).
 
-Beside it, one of the day's structural analogues (dashboard/views/analogues.py;
-NQ, the journal symbol, on the days the journal holds a pre-open snapshot of),
-the most similar first: that session on its own contract, drawn the same way at
-the same timeframe. The two charts are linked by time of day - scrolling or
-zooming either moves the other. Below them, the comparison of the session with
-its analogues; a date there picks the analogue shown. At the bottom, the day's
+Beside it, one of the day's analogues (NQ, the journal symbol), the most similar
+first: that session on its own contract, drawn the same way at the same timeframe.
+The two charts are linked by time of day - scrolling or zooming either moves the
+other. Below them, the comparison of the session with its analogues; a date there
+picks the analogue shown. Two sets, kept apart and switched between:
+
+  Pre-open set   the saved structural analogues of the pre-open snapshot
+                 (dashboard/views/analogues.py), or its preview before then
+  RTH set        the evolving match of the opening itself, a stored set per
+                 minute of the first hour (dashboard/views/rth_analogues.py) - its
+                 chart greys what the analogue did after the matched minutes
+
+Until a session's first RTH set is stored the pre-open set is shown; from then the
+RTH set, unless the other is picked. An update keeps the analogue being compared
+when the new set still holds it, and the charts' zoom. At the bottom, the day's
 NQ forecast (dashboard/views/forecast.py): its stored runs, and the preview
 made by Forecast now.
 
@@ -49,12 +58,14 @@ from nicegui import background_tasks, run, ui
 
 from config import Config
 from contracts import nq_prompt_v2 as defs
+from contracts import nq_rth as rth
 from dashboard.components import fan
 from dashboard.components import projection as proj
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.session_bar import SessionBar, contract_label
 from dashboard.components.spec import build_chart_spec, resample, to_epoch
 from dashboard.views.analogues import AnaloguesPanel
+from dashboard.views.rth_analogues import RthAnaloguesPanel
 from dashboard.jobs import AUTO
 from dashboard.views.forecast import ForecastPanel
 from database import journal_store as store
@@ -68,6 +79,7 @@ from features.calculations import (
     pre_open_levels,
 )
 from forecaster import preview as pv
+from forecaster import rth_analogues as ra
 from forecaster.fan_benchmark import end_slot, slot_at, slot_instant
 
 # The two charts - the session and an analogue - show the same time of day.
@@ -368,6 +380,9 @@ class SessionExplorer:
         self.mirror = SessionPane(conn)           # one of its analogues, beside it
         self.main.decorate = self._decorate_main
         self.analogues = AnaloguesPanel(conn, on_pick=self.pick_analogue)
+        self.rth = RthAnaloguesPanel(conn, on_pick=self.pick_analogue, on_window=self._show_analogues)
+        self.analogue_mode: Optional[str] = None         # 'preopen' or 'rth' as picked; None: RTH once one is stored
+        self.rth_minute: Optional[int] = None            # the minute after the open the RTH set was read at
         self.members: Dict[str, Dict[str, Any]] = {}   # the day's analogues by snapshot id, best first
         self.analogue: Optional[str] = None             # the snapshot id of the one beside the session
         self.forecast = ForecastPanel(conn, panel)
@@ -415,30 +430,90 @@ class SessionExplorer:
             _status_badge(self.conn, self.main)
         self._sync_playback()
 
+    def _review_minute(self) -> int:
+        """The minutes after the open the RTH set is read at: in playback, to the end of the candle played to (never
+        a later window); else the whole first hour - the newest window stored."""
+        if not self.live or self.main.until is None:
+            return rth.MAX_MINUTES
+        tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+        open_ = session_window(self.bar.date)["open"]
+        return max(0, min(rth.MAX_MINUTES, int((self.main.until + tf - open_) / pd.Timedelta(minutes=1))))
+
+    def _replay_instant(self) -> Optional[datetime]:
+        """In playback of the session in progress, the end of the candle played to (UTC) - the time an as-issued
+        view replays; else None."""
+        if not self.live or self.main.until is None:
+            return None
+        tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
+        return (self.main.until + tf).tz_convert("UTC").to_pydatetime()
+
+    def _observed_through(self) -> Optional[datetime]:
+        """How far the session in progress is observed: its newest bar, or in playback the candle played to."""
+        if not self.live or self.bar.symbol != defs.SYMBOL:
+            return None
+        newest, replayed = ra.newest_bar_end(self.conn, self.bar.date), self._replay_instant()
+        return newest if newest is None or replayed is None else min(newest, replayed)
+
     def _show_analogues(self) -> None:
         """
-        The day's analogues: the comparison below the charts, and beside the
-        session the most similar (#1) - after every update too, whichever one was
-        picked before. A day in progress without its snapshot shows its preview.
+        The day's analogues - the pre-open set or the RTH set (see the module docstring) - in the comparison below
+        the charts and beside the session: the analogue compared before when the set still holds it (the charts keep
+        their zoom), else the most similar (#1). A day in progress without its snapshot shows its pre-open preview.
         """
         day, symbol = self.bar.date, self.bar.symbol
         preview, computing = self._preview(day, symbol)
-        members = self.analogues.show(day, symbol, preview=preview, computing=computing)
-        title = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
-        if self.analogues.preview is not None:
-            title += f" · preview as of {self.analogues.preview['as_of_et']}"
-        self.analogue_box.text = title
-        self.members = {m["snapshot_id"]: m for m in members}
-        options = {sid: f"#{m['rank']}  {m['session_date']}  ·  {float(m['similarity']):.1f}%"
-                   for sid, m in self.members.items()}
-        first = next(iter(options), None)              # the best match, #1
+        preopen = self.analogues.show(day, symbol, preview=preview, computing=computing,
+                                      observed_through=self._observed_through())
+        self.rth_minute = self._review_minute()
+        replayed = self._replay_instant()               # in playback: as issued by then; the feed delay is not "now"
+        moving = self.rth.show(day, symbol, self.rth_minute, at=replayed,
+                               now=None if replayed is not None else datetime.now(timezone.utc), live=self.live)
+        mode = self.analogue_mode or ("rth" if self.rth.aset is not None else "preopen")
         self._syncing = True
         try:
-            self.analogue_select.set_options(options, value=first)
+            self.mode_toggle.value = mode
+        finally:
+            self._syncing = False
+        self.preopen_box.set_visibility(mode == "preopen")
+        self.rth_box.set_visibility(mode == "rth")
+        title = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
+        if symbol != defs.SYMBOL:
+            members = preopen
+        elif mode == "rth":
+            members = moving
+            if self.rth.aset is not None:
+                a = self.rth.aset
+                title += (f" · RTH set: first {a['elapsed_minutes']} min, data through "
+                          f"{ra.utc(a['cutoff_at']).astimezone(cal.NY_TZ):%H:%M} ET")
+            else:
+                title += " · RTH set: none yet"
+        else:
+            members = preopen
+            title += " · pre-open set (saved)"
+            if self.analogues.preview is not None:
+                title += f" · preview as of {self.analogues.preview['as_of_et']}"
+        self.analogue_box.text = title
+        before = self.members.get(self.analogue) if self.analogue else None
+        self.members = {m["snapshot_id"]: m for m in members}
+        kept = next((sid for sid, m in self.members.items()
+                     if before is not None and m["session_date"] == before["session_date"]), None)
+        chosen = kept or next(iter(self.members), None)
+        options = {sid: f"#{m['rank']}  {m['session_date']}  ·  {float(m['similarity']):.1f}%"
+                   for sid, m in self.members.items()}
+        self._syncing = True
+        try:
+            self.analogue_select.set_options(options, value=chosen)
         finally:
             self._syncing = False
         self.analogue_select.set_enabled(bool(options))
-        self.show_analogue(first)
+        self.show_analogue(chosen, keep_view=kept is not None)
+
+    def on_mode(self, event) -> None:
+        """The pre-open set or the RTH set picked."""
+        if self._syncing or not event.value:
+            return
+        self.analogue_mode = event.value
+        self._show_analogues()
 
     def show_analogue(self, snapshot_id: Optional[str], keep_view: bool = False) -> None:
         """
@@ -449,15 +524,29 @@ class SessionExplorer:
         self.analogue = snapshot_id
         member = self.members.get(snapshot_id) if snapshot_id else None
         snap = store.get_snapshot(self.conn, snapshot_id) if member is not None else None
-        contract = get_contract(self.conn, snap["contract_id"]) if snap is not None else None
+        contract = (get_contract(self.conn, member.get("contract_id") or snap["contract_id"]) if snap is not None
+                    else None)
         day = member["session_date"] if member is not None else None
+        # An RTH analogue: what it did after the matched minutes drawn grey - shown, never matched.
+        matched = member.get("elapsed_minutes") if member is not None else None
+        if matched:
+            tf = f"{_BAR_MINUTES[self.timeframe]}min"
+            self.mirror.until = (session_window(day)["open"] + pd.Timedelta(minutes=int(matched) - 1)).floor(tf)
+            self.mirror.reveal = True
+        else:
+            self.mirror.until, self.mirror.reveal = None, False
         self.mirror.show(contract, day, self.timeframe, keep_view=keep_view, follow=True)
         self.analogues.mark(snapshot_id)
+        self.rth.mark(snapshot_id)
         self.mirror_status.clear()
         with self.mirror_status:
             if member is not None:
                 ui.label(_caption(day, contract)).classes("text-sm whitespace-nowrap")
                 _status_badge(self.conn, self.mirror)
+                if matched:
+                    end = session_window(day)["open"] + pd.Timedelta(minutes=int(matched))
+                    ui.label(f"matched 09:30–{end:%H:%M} · grey: what followed, never matched").classes(
+                        "text-xs whitespace-nowrap").style(_MUTED)
         self.mirror_note.text = "" if member is not None else (self.analogues.reason or "No analogue to show.")
         self.mirror_note.set_visibility(member is None)
 
@@ -615,6 +704,12 @@ class SessionExplorer:
         self.main.until = None if index >= n - 1 else self.candle_starts[index]
         self._playback_label(index)
         self.main.push()
+        self._follow_rth()
+
+    def _follow_rth(self) -> None:
+        """In playback the analogues follow the candle played to: the RTH set of that minute (never a later one)."""
+        if self.bar.symbol == defs.SYMBOL and self._review_minute() != self.rth_minute:
+            self._show_analogues()
 
     def step(self, candles: int) -> None:
         if self.candle_starts:
@@ -625,6 +720,7 @@ class SessionExplorer:
         self.main.until = None
         self._sync_playback()
         self.main.push(reset_view=True)
+        self._follow_rth()
 
     def on_reveal(self, event) -> None:
         self.main.reveal = bool(event.value)
@@ -717,6 +813,7 @@ class SessionExplorer:
             self._show_analogues()
         elif what == "day":
             self.refresh_session()
+            self.analogue, self.analogue_mode = None, None    # a new day: its #1, and RTH once it has a set
             self._show_analogues()
             self.forecast.show_day(self.bar.date)
         else:
@@ -767,7 +864,12 @@ class SessionExplorer:
             self._build_charts()
             self.analogue_box = ui.expansion("Analogues", icon="compare", value=True).classes("w-full")
             with self.analogue_box:
-                self.analogues.build()
+                self.mode_toggle = ui.toggle({"preopen": "Pre-open set (saved)", "rth": "RTH set (evolving)"},
+                                             value="preopen", on_change=self.on_mode).props("dense no-caps")
+                with ui.column().classes("w-full gap-3") as self.preopen_box:
+                    self.analogues.build()
+                with ui.column().classes("w-full gap-3") as self.rth_box:
+                    self.rth.build()
             self.forecast.build(view)
 
         if self.bar.contract is None:

@@ -20,9 +20,10 @@ from config import Config
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
 from dashboard.jobs import (RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
-                            llm_command, preview_command)
+                            llm_command, preview_command, rth_command)
 from features import calendar as cal
 from forecaster.preview import PreviewUnavailable, preview_target
+from forecaster.rth_analogues import due_window as rth_due
 
 _MUTED = "color:#787b86"
 _PANEL = "#1c212e"
@@ -172,7 +173,11 @@ class PipelinePanel:
         return int(self.days.value or 5)
 
     def collect(self) -> None:
-        self._start("collector", COLLECTOR, [("collector", collector_command(self._days()))])
+        """The collector - then, in the first hour of a session (to 11:00 ET), its RTH analogue sets."""
+        steps = [("collector", collector_command(self._days()))]
+        if rth_due(datetime.now(timezone.utc)):
+            steps.append(("rth", rth_command("manual")))
+        self._start("collector", COLLECTOR, steps)
 
     def forecast(self) -> None:
         self._start("forecaster", FORECASTER, [("forecaster", forecaster_command())])

@@ -1,0 +1,41 @@
+{
+  "definition_hash": "977d4c124a257b14",
+  "version": "rth_continuation_v1",
+  "question": "At 09:45, 10:00 and 10:15 ET, do the RTH analogues' next 15 minutes describe the target session's next 15 minutes better than (a) the frozen pre-open analogue set and (b) a same-clock historical baseline - for the size of the move and for its direction, measured separately?",
+  "matcher": "nq_match_rth_v2 (weights and tolerances frozen; tolerances calibrated on sessions to 2026-10-07 only)",
+  "cutoffs": {
+    "09:45": 15,
+    "10:00": 30,
+    "10:15": 45
+  },
+  "horizon_minutes": 15,
+  "sample": {
+    "sessions": "forward only: NQ sessions after 2026-10-07 with a live RTH set (issued_by auto or manual, data_mode live) of the cutoff's window; a session or cutoff without one is counted as missing and reported, never filled from a reconstruction",
+    "minimum": "results are not looked at before 60 sessions hold all three cutoffs; then scored once",
+    "development": "the scorer is built and checked on synthetic data only; historical reconstructions are not scored before the forward decision (afterwards only as labelled description)"
+  },
+  "outcome": "y = (close at cutoff + 15 min - close at the cutoff) / the target's frozen daily ATR, from the active contract's 1-minute bars ending by cutoff + 15 (the last bar confirmed by a later one); a missing bar leaves the case out (reported)",
+  "forecasts": {
+    "RTH-20": "primary: the 20 highest similarities of the frozen matcher at the cutoff, recomputed from the inputs as stored and accepted only when its input digest equals the live set's (else counted as 'inputs revised' and left out); each member's move over the same clock window in its own daily ATR",
+    "RTH-5": "secondary: the five members of the live set as issued (what was on screen)",
+    "PRE-5": "baseline: the five members of the session's frozen pre-open analogue set (nq_match_p1_v2, rules protocol, the set the session's stored forecast used), their moves over the same clock window",
+    "CLOCK": "baseline: every session in the RTH set's eligible pool (earlier, with context), their moves over the same clock window - the same-clock history"
+  },
+  "scores": {
+    "size": "fair ensemble CRPS (Ferro 2014: no penalty for the number of members) of |y| against the members' |moves|",
+    "direction": "Brier score of p_up = (members up + 1) / (members + 2) against y > 0 (y = 0 counts as not up)",
+    "signed": "secondary: fair ensemble CRPS of y against the members' moves"
+  },
+  "comparisons": {
+    "primary": [
+      "RTH-20 vs CLOCK: size",
+      "RTH-20 vs CLOCK: direction",
+      "RTH-20 vs PRE-5: size",
+      "RTH-20 vs PRE-5: direction"
+    ],
+    "secondary": "RTH-5 vs the same baselines; each cutoff separately; the signed CRPS - reported, not decided on"
+  },
+  "uncertainty": "per session the paired score difference averaged over its available cutoffs (sessions weigh equally); mean and interval by a moving-block bootstrap over sessions (blocks of 5, 10,000 resamples, seed 20261009); each primary interval at 98.75 % (95 % Bonferroni over the four)",
+  "decision": "a primary comparison shows RTH-20 better only when its whole interval lies below zero (a lower score is better); otherwise: no sufficiently reliable improvement was established - never 'ruled out'. Size and direction are concluded separately; five displayed analogues are never treated as the probability model",
+  "display": "none while the evaluation runs: no analogue continuation, frequency or path is aggregated or overlaid on the dashboard"
+}

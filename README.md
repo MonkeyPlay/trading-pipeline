@@ -141,7 +141,7 @@ the command line:
 
 | Button | Runs | What it does |
 |---|---|---|
-| **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection |
+| **Run collector** | `python -m collector.ib_collector --days N` (default 5, as cron) | The missing bars from IB, then the forecaster, as after every full collection; in a session's first hour (to 11:00 ET) then its RTH analogue sets (`nq_journal.py rth-issue --by manual`), when the collection succeeded |
 | **Run forecaster** | `python -m collector.ib_collector --journal-only` | The journal step alone, without IB: event calendar and earnings, then the snapshot, rule-based annotation, analogue set and baseline and prior forecasts (historical replay) of every session past its cutoff - today's too, once its bars were fetched after the 09:29 cutoff - and outcomes once a session is final. No Claude requests |
 | **Run LLM forecast** | `python scripts/nq_journal.py llm-forecast --date D ... --arms CD` | Arms C (restricted LLM) and D (synthesis) for the last N sessions up to today (default 1: today) or for **chosen days** (a calendar of the journal's sessions: single days, or ranges with its switch), arm C or D or both. The Session Explorer forecast's **Run C and D for <day>** does the same for the session day. **Batch API** sends them at half price, answers within 24 h (usually far sooner): the job waits up to 30 minutes and the next run collects a batch still processing. Claude requests: a confirmation first shows each session, the requests and a rough cost, and only its **Send** button lets the job send them (a one-time approval, [forecaster/approvals.py](forecaster/approvals.py)). Evidence already answered is never sent again |
 | **Forecast now** | the collector, then `python scripts/nq_journal.py preview` | The next session's forecast from the data so far, at any time from its Globex open (18:00 ET the evening before) until its official snapshot is due at 09:31 ET: the latest bars, then the evidence as of now, its rule-based annotation, analogues and both arms - in memory, never stored. Shown on the Session Explorer forecast's **Forecast now** tab, which has the same button. The preview step runs even when collecting failed, from the bars already stored |
@@ -236,7 +236,9 @@ Pages:
     **Auto** (beside Fit) collects the session in progress from IB and forecasts once a minute -
     the collector for today's missing and incomplete days only (no refetch of the last complete
     sessions, which the daily run does), four symbols at a time, with its journal step (the
-    calendar and earnings reloaded beside the collection), then the preview while one is
+    calendar and earnings reloaded beside the collection), then - from the first completed RTH
+    minute to 11:00 ET, and only when the collection succeeded - the session's **RTH analogue
+    sets** (`nq_journal.py rth-issue --by auto`), then the preview while one is
     possible ([dashboard/jobs.py](dashboard/jobs.py) `AUTO`) - and moves the explorer to the
     session in progress. Each run's end redraws the chart, the fan and the analogue preview in
     place, the view moving on with the newest candle. It belongs to the dashboard process like
@@ -245,11 +247,29 @@ Pages:
     minutes is killed as hung; a slow one that keeps reporting runs on. A run takes under a
     minute, so the chart trails the market by one to two minutes (plus the feed's own delay).
   - **Analogue beside it:** the charts are split - on the right, one of the selected NQ
-    session's structural analogues, the most similar first (pick another in its **Analogue**
+    session's analogues, the most similar first (pick another in its **Analogue**
     select, or by its date in the comparison below): that session on its own contract and
     prices, drawn the same way - the same window, timeframe and indicators. The two charts are
-    linked by time of day: scrolling or zooming either moves the other.
-  - **Analogues** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
+    linked by time of day: scrolling or zooming either moves the other. An RTH analogue's
+    candles after the matched minutes are drawn grey: what it did next is shown, never matched.
+  - **Analogues** (below the charts): two sets, switched between with **Pre-open set (saved)** /
+    **RTH set (evolving)**. Until the session's first RTH set is stored the pre-open set shows;
+    from then the RTH set. An update keeps the analogue being compared when the new set still
+    holds it, and both charts' zoom.
+  - **RTH set** ([dashboard/views/rth_analogues.py](dashboard/views/rth_analogues.py),
+    [docs/rth_analogues.md](docs/rth_analogues.md)): the earlier sessions whose first n minutes
+    from the 09:30 open most resemble this one's first n - "RTH analogues — first 23 minutes —
+    data through 09:53 ET" - re-scored over every earlier session at each confirmed minute up to
+    10:30, a stored set per minute (`nq_match_rth_v2`). Two views: **As issued** (what was
+    issued live, by Auto or by hand, by the time replayed - never a later correction or a
+    backfill) and **Reconstructed** (the latest calculation of the window, labelled). The header
+    says how and when the set was issued, how long after its cutoff its bars were in the store
+    (the feed is delayed), whether its inputs are verified as of the cutoff, and whether its
+    session was in the tolerances' calibration sample; windows under ten minutes are
+    provisional, the 15/30/60-minute checkpoints marked. **Window** follows the session (in
+    playback, the candle played to - never a later window) or picks any stored window.
+    Similarity is agreement of the observed openings, not a probability.
+  - **Pre-open set** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
     the session and its analogues side by side, feature by feature - their realised labels and
     the outcome frequencies hidden until asked for - with P1's 47-field pre-open record; for the
     days the journal holds a snapshot of. A day in progress has no snapshot until its official
@@ -257,7 +277,10 @@ Pages:
     a **preview** stands in - the same matching on the evidence as of the day's last stored NQ
     bar (the whole pre-open once its 09:29 bar is stored), computed in memory, never stored,
     labelled with its as-of minute ([forecaster/preview.py](forecaster/preview.py)
-    `preview_session`). See [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
+    `preview_session`). For the session in progress, a target whose window has ended (the first
+    move at 09:35, the 15-minute targets at 09:45, the opening bias at 10:00) is marked as
+    observed - here and in the forecast's per-target table - no longer a forecast. See
+    [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#analogues-2b-2d).
   - **Forecast** (at the bottom, [dashboard/views/forecast.py](dashboard/views/forecast.py)): the
     session day's NQ forecast; `/?run=<id>` opens a run on its day, `/?view=preview` Forecast now
     (the old `/forecast` links redirect there). Two tabs. **Stored runs**: the day's runs, one
@@ -601,11 +624,11 @@ name contains `test`; they reset it).
 | [features/](features/) | Trading calendar, session/timezone classification, VWAP, the chart's reference levels, the NQ evidence snapshot |
 | [contracts/](contracts/) | Registered definitions: NQ-v2 labels and conventions, the pre-open structure and matcher, the forecast contract, the benchmark fan |
 | [forecaster/](forecaster/) | The NQ journal: labels, structure annotation, forecasts, experiments, the live capture; the benchmark fan and its scoring (`fan_*.py`) |
-| [matching/](matching/) | The P1 structural analogue matcher |
+| [matching/](matching/) | The P1 structural analogue matcher (pre-open) and the RTH analogue matcher (the first hour) |
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [reports](docs/reports/) |
 
 ## Database
 

@@ -19,6 +19,13 @@ same matching on the evidence as of the day's last stored bar - the whole pre-op
 once its 09:29 bar is stored - computed in memory and never stored, labelled as such. Its realised labels and the frequency table
 stay hidden until "Show outcomes": raw counts over the analogues with a label, the
 denominator, the smoothed baseline and the prior.
+
+For the session in progress the explorer passes how far its bars reach
+(``observed_through``): a P1 target whose window has ended by then - the first move
+at 09:35, the 15-minute targets at 09:45, the opening bias at 10:00 - is marked as
+observed, its analogue frequencies no longer a forecast of anything still to come.
+This is the saved pre-open set; the RTH set beside it (dashboard/views/rth_analogues.py)
+matches the opening as it develops.
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from database import journal_store as store
 from features import calendar as cal
 from forecaster.journal import snapshot_pending
 from forecaster.preopen_display import p1_record
+from forecaster.rth_analogues import windows_over
 from matching.structural import features
 
 _MUTED = "color:#787b86"
@@ -74,6 +82,7 @@ class AnaloguesPanel:
         self.chosen: Optional[str] = None                   # the snapshot id of the analogue charted
         self.date_buttons: Dict[str, Any] = {}
         self.outcomes_shown = False
+        self.over: Dict[str, str] = {}                      # P1 target -> the ET end of its window, once observed
 
     def _snapshot(self, day: str) -> Optional[Dict[str, Any]]:
         if day not in self.snaps:
@@ -123,16 +132,19 @@ class AnaloguesPanel:
     # -- data -----------------------------------------------------------------
 
     def show(self, day: Optional[str], symbol: Optional[str], preview: Optional[Dict[str, Any]] = None,
-             computing: bool = False) -> List[Dict[str, Any]]:
+             computing: bool = False, observed_through: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """
         Shows the analogues of ``day`` - when ``symbol`` is the journal symbol and
         the journal holds the day, or else ``preview`` holds them (a day in
         progress; ``computing``: a newer one is being made) - and returns them,
-        the most similar first; none, ``reason`` says why.
+        the most similar first; none, ``reason`` says why. ``observed_through``:
+        how far a session in progress is observed (its targets' windows that
+        ended by then are marked as observed).
         """
         if not day:
             return []
         self.day, self.aset, self.reason, self.preview = day, None, None, None
+        self.over = windows_over(day, observed_through, pre.OUTCOME_TARGETS)
         snap = self._snapshot(day) if symbol == defs.SYMBOL else None
         if snap is None and symbol == defs.SYMBOL and preview is not None and preview.get("status") == "ok":
             return self._show_preview(day, preview)
@@ -254,8 +266,9 @@ class AnaloguesPanel:
                         ui.label(defs.TARGETS[t]["realised_property"]).classes(_CELL).style(
                             "background:#262b38;color:#ffa726")
                         own = (target_labels or {}).get(t, {}).get("label")
-                        ui.label(defs.display(t, own) if target_labels else "—").classes(_CELL).style(
-                            "background:#262b38")
+                        ui.label(defs.display(t, own) if target_labels else
+                                 f"observed: window over {self.over[t]} ET" if t in self.over else "—").classes(
+                            _CELL).style("background:#262b38")
                         for labels in member_labels:
                             lab = (labels or {}).get(t, {}).get("label")
                             ui.label(defs.display(t, lab) if labels else "no outcome").classes(_CELL).style(
@@ -298,7 +311,10 @@ class AnaloguesPanel:
                 for head in ("Target", "Analogues with a label", "Counts", "Smoothed (prior)"):
                     ui.label(head).classes(_CELL).style(f"background:#1c212e;{_MUTED}")
                 for t, s in summary["targets"].items():
-                    ui.label(defs.TARGETS[t]["predicted_property"]).classes(_CELL).style("background:#1c212e")
+                    over = self.over.get(t)
+                    ui.label(defs.TARGETS[t]["predicted_property"]
+                             + (f" — window over at {over} ET: observed, no longer a forecast" if over else "")
+                             ).classes(_WRAP).style("background:#1c212e" + (f";{_MUTED}" if over else ""))
                     ui.label(f"{s['eligible']} of {summary['analogues']} ({s['status'].replace('_', ' ')})").classes(
                         _CELL).style("background:#1c212e")
                     counts = ", ".join(f"{defs.display(t, c)} {n}" for c, n in s["counts"].items() if n) or "—"

@@ -16,6 +16,11 @@ appends; the database rejects UPDATE, DELETE and TRUNCATE.
                      0012), idempotent on the pool and the outcome revisions
   annotation review  sets of sessions whose annotations a person checks without
                      the outcome, and the verdicts (migration 0012)
+  save_rth_set       an RTH analogue set (migrations 0024, 0025), idempotent on its
+                     session, matcher, window and input digest; two views of a replay:
+                     rth_set_issued - as issued, the live set stored by the time
+                     replayed - and rth_set_at - the latest calculation of the
+                     window replayed; neither ever reads a later window
 """
 
 import hashlib
@@ -793,3 +798,108 @@ def fetched_at(conn: Database, days: List[tuple]) -> Dict[tuple, Optional[Any]]:
                               ([int(c) for c, _ in days], [str(d) for _, d in days])).fetchall():
             out[(int(r[0]), str(r[1]))] = r[2]
     return out
+
+
+# --------------------------------------------------------------------------
+# RTH analogue sets (migration 0024)
+# --------------------------------------------------------------------------
+
+def save_rth_set(conn: Database, rec: Dict[str, Any], members: List[Dict[str, Any]]) -> Tuple[str, bool]:
+    """
+    Stores one RTH analogue set and its members (``rec``: the journal.rth_analogue_sets columns but ``set_id``,
+    ``checkpoint``, ``data_mode`` and ``created_at``, which the database derives and stamps - live only when
+    ``issued_by`` is auto or manual and it is within 30 minutes of the cutoff). Idempotent: the same
+    session, matcher version, window and input digest return the stored set - repeated runs on unchanged inputs add
+    nothing, a revised input adds a set beside the earlier one.
+    """
+    key = (rec["symbol"], rec["session_date"], rec["matcher_version"], rec["elapsed_minutes"], rec["input_digest"])
+    with conn:
+        _lock(conn, "journal.rth_analogue_sets", *key)
+        row = conn.execute(
+            "SELECT set_id FROM journal.rth_analogue_sets WHERE symbol = %s AND session_date = %s "
+            "AND matcher_version = %s AND elapsed_minutes = %s AND input_digest = %s;", key).fetchone()
+        if row is not None:
+            return str(row[0]), False
+        set_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO journal.rth_analogue_sets (set_id, symbol, session_date, contract_id, matcher_version, "
+            "context_snapshot_id, elapsed_minutes, cutoff_at, input_digest, pool_size, pool_hash, excluded, "
+            "mean_similarity, target_features, quality, code_revision, issued_by, inputs_received_at, "
+            "pool_received_at, pit_status, data_mode) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s, %s, 'historical_reconstruction');",
+            (set_id, rec["symbol"], rec["session_date"], rec["contract_id"], rec["matcher_version"],
+             rec["context_snapshot_id"], rec["elapsed_minutes"], rec["cutoff_at"], rec["input_digest"],
+             rec["pool_size"], rec["pool_hash"], canonical_json(rec["excluded"]), rec["mean_similarity"],
+             canonical_json(rec["target_features"]), canonical_json(rec["quality"]), rec["code_revision"],
+             rec["issued_by"], rec.get("inputs_received_at"), rec.get("pool_received_at"), rec.get("pit_status")))
+        conn.executemany(
+            "INSERT INTO journal.rth_analogue_members (set_id, rank, session_date, contract_id, snapshot_id, "
+            "similarity, comparable_weight, components) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
+            [(set_id, m["rank"], m["session_date"], m["contract_id"], m["snapshot_id"], m["similarity"],
+              m["comparable_weight"], canonical_json(m["components"])) for m in members])
+    return set_id, True
+
+
+def _rth_set(conn: Database, row) -> Dict[str, Any]:
+    d = dict(zip(row.keys(), row))
+    for k in ("excluded", "target_features", "quality"):
+        d[k] = _load(d[k])
+    d["set_id"], d["context_snapshot_id"], d["session_date"] = (str(d["set_id"]), str(d["context_snapshot_id"]),
+                                                                str(d["session_date"]))
+    members = conn.execute("SELECT * FROM journal.rth_analogue_members WHERE set_id = %s ORDER BY rank;",
+                           (d["set_id"],)).fetchall()
+    d["members"] = [dict(zip(m.keys(), m), set_id=d["set_id"], snapshot_id=str(m["snapshot_id"]),
+                         session_date=str(m["session_date"]), components=_load(m["components"])) for m in members]
+    return d
+
+
+def get_rth_set(conn: Database, set_id: str) -> Optional[Dict[str, Any]]:
+    """One RTH analogue set by its id, with ``members`` in rank order; None when there is no such set."""
+    if not _is_uuid(set_id):
+        return None
+    row = conn.execute("SELECT * FROM journal.rth_analogue_sets WHERE set_id = %s;", (str(set_id),)).fetchone()
+    return None if row is None else _rth_set(conn, row)
+
+
+def rth_set_at(conn: Database, symbol: str, session_date: str, matcher_version: str, minutes: int,
+               stored_by=None) -> Optional[Dict[str, Any]]:
+    """
+    The reconstructed view of ``session_date`` at ``minutes`` after the open: the set of the longest stored window
+    that is not longer - never a later window - and of that window the newest set, live or not (stored by
+    ``stored_by``, when given). It can be a correction stored hours later: rth_set_issued is what was issued.
+    None when no window that short is stored.
+    """
+    row = conn.execute(
+        "SELECT * FROM journal.rth_analogue_sets WHERE symbol = %s AND session_date = %s AND matcher_version = %s "
+        "AND elapsed_minutes <= %s AND (%s::timestamptz IS NULL OR created_at <= %s::timestamptz) "
+        "ORDER BY elapsed_minutes DESC, created_at DESC LIMIT 1;",
+        (symbol, session_date, matcher_version, int(minutes), stored_by, stored_by)).fetchone()
+    return None if row is None else _rth_set(conn, row)
+
+
+def rth_set_issued(conn: Database, symbol: str, session_date: str, matcher_version: str, at=None,
+                   minutes: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    The as-issued view: of the session's live sets (issued by Auto or by hand within 30 minutes of their cutoff),
+    the newest stored by ``at`` (None: by now) - what was on offer at that moment, never a later correction or a
+    backfill. ``minutes``: of that window only. None when nothing was issued live by then.
+    """
+    row = conn.execute(
+        "SELECT * FROM journal.rth_analogue_sets WHERE symbol = %s AND session_date = %s AND matcher_version = %s "
+        "AND data_mode = 'live' AND (%s::timestamptz IS NULL OR created_at <= %s::timestamptz) "
+        "AND (%s::int IS NULL OR elapsed_minutes = %s::int) ORDER BY created_at DESC, elapsed_minutes DESC LIMIT 1;",
+        (symbol, session_date, matcher_version, at, at, minutes, minutes)).fetchone()
+    return None if row is None else _rth_set(conn, row)
+
+
+def rth_windows(conn: Database, symbol: str, session_date: str, matcher_version: str) -> List[Dict[str, Any]]:
+    """The session's stored RTH windows, shortest first: ``elapsed_minutes``, ``checkpoint``, ``sets`` (how many -
+    more than one when an input was revised), ``live`` (how many were issued live), the first and latest
+    ``created_at``."""
+    rows = conn.execute(
+        "SELECT elapsed_minutes, max(checkpoint) AS checkpoint, count(*) AS sets, min(created_at) AS first_at, "
+        "max(created_at) AS latest_at, count(*) FILTER (WHERE data_mode = 'live') AS live "
+        "FROM journal.rth_analogue_sets "
+        "WHERE symbol = %s AND session_date = %s AND matcher_version = %s GROUP BY elapsed_minutes "
+        "ORDER BY elapsed_minutes;", (symbol, session_date, matcher_version)).fetchall()
+    return [dict(zip(r.keys(), r)) for r in rows]

@@ -22,14 +22,21 @@ dashboard's database connection or its event loop:
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
+  rth          python scripts/nq_journal.py rth-issue --by auto|manual
+               the RTH analogue sets of the session in progress
+               (forecaster/rth_analogues.py): its newest completed window from
+               the 09:30 open and any 15/30/45/60-minute window not stored yet,
+               recorded as issued by Auto or by hand - only after a collection
+               that succeeded (NEEDS_SUCCESS)
   auto         the collector for the session in progress only (--days 0
                --no-trailing-refresh: that session and any missing or
                incomplete day, not the refetch of the last complete sessions,
                which the daily run does; --workers 4: four symbols at a time;
-               with the journal step), then the preview while one is possible -
-               one run a minute while auto mode is on (AUTO, the Session
-               Explorer's Auto button), so the chart, the fan and the analogue
-               preview follow the session; each run also issues any pending mark
+               with the journal step), then the RTH analogue sets from the first
+               completed RTH minute to 11:00 ET, then the preview while one is
+               possible - one run a minute while auto mode is on (AUTO, the
+               Session Explorer's Auto button), so the chart, the fan and the
+               analogues follow the session; each run also issues any pending mark
                of the intermarket fan's forward record (python scripts/fan.py
                forward issue, forecaster/fan_forward.py: every 15 minutes and
                09:29 ET, once the delayed feed has stored the mark's origin bar).
@@ -37,7 +44,8 @@ dashboard's database connection or its event loop:
                one that keeps reporting may run to AUTO_STEP_LIMIT_S
 
 A job is one or more steps, each a process run in turn; Stop ends the running step
-and skips the rest.
+and skips the rest. A step named in NEEDS_SUCCESS is skipped when the step it needs
+failed in the same job (no RTH set is issued from a collection that failed).
 
 A job has no terminal (its stdin is empty), so nothing that asks a person - such as
 the confirmation the Claude API requests need (they are manual only) - can run here.
@@ -70,6 +78,7 @@ from config import Config
 from dashboard.components.fan import current_session
 from features import calendar as cal
 from forecaster.preview import PreviewUnavailable, preview_target
+from forecaster.rth_analogues import due_window as rth_due
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(_PROJECT_ROOT, "logs", "pipeline_run.log")
@@ -85,6 +94,8 @@ AUTO_STEP_LIMIT_S = 900
 AUTO_COLLECT_WORKERS = 4   # symbols an auto run collects at once (collector --workers)
 AUTO_LOCK = os.path.join(_PROJECT_ROOT, "data", "auto_mode.lock")   # held by the one process whose auto mode is on
 AUTO_ERROR_PAUSE_S = 5     # after an unexpected error in the auto loop, seconds before it tries again
+# A step that runs only when the step it names succeeded earlier in the same job.
+NEEDS_SUCCESS = {"rth": "collector"}
 
 
 def collector_command(days: int, trailing_refresh: bool = True, workers: int = 1) -> List[str]:
@@ -107,6 +118,11 @@ def live_command() -> List[str]:
 
 def preview_command() -> List[str]:
     return [sys.executable, os.path.join("scripts", "nq_journal.py"), "preview"]
+
+
+def rth_command(by: str) -> List[str]:
+    """The RTH analogue issue, recorded as made by ``by``: 'auto' (Auto mode) or 'manual' (a job a person started)."""
+    return [sys.executable, os.path.join("scripts", "nq_journal.py"), "rth-issue", "--by", by]
 
 
 def llm_command(days: List[str], arms: str, approval: Optional[str] = None, batch: bool = False) -> List[str]:
@@ -141,6 +157,7 @@ class Step:
     label: str                       # collector, preview, ...
     command: List[str]
     returncode: Optional[int] = None
+    skipped: bool = False            # not run: the step it needs failed (NEEDS_SUCCESS)
 
 
 @dataclass
@@ -241,6 +258,12 @@ class JobRunner:
             for i, step in enumerate(job.steps, 1):
                 if job.stopped:
                     break
+                needed = NEEDS_SUCCESS.get(step.label)
+                if needed and any(s.label == needed and s.returncode for s in job.steps[:i - 1]):
+                    step.skipped = True
+                    self._add(job, f"Dashboard: step {i}/{len(job.steps)}, {step.label} skipped: the {needed} "
+                                   f"failed")
+                    continue
                 if len(job.steps) > 1:
                     self._add(job, f"Dashboard: step {i}/{len(job.steps)}, {step.label}")
                 self._write(f"[{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}] Dashboard: "
@@ -334,9 +357,12 @@ def forward_due(now: datetime) -> bool:
 
 def auto_steps(now: datetime) -> List[Tuple[str, List[str]]]:
     """An auto run's steps at ``now``: the session in progress collected - its missing and incomplete days only, not
-    the trailing refresh, so a run fits in its minute - (and the journal step), then the preview while one is
+    the trailing refresh, so a run fits in its minute - (and the journal step), then its RTH analogue sets in their
+    window (forecaster/rth_analogues.due_window; skipped when the collection failed), the preview while one is
     possible (forecaster/preview.py), and the fan's forward record's pending marks."""
     steps = [("collector", collector_command(0, trailing_refresh=False, workers=AUTO_COLLECT_WORKERS))]
+    if rth_due(now):
+        steps.append(("rth", rth_command("auto")))
     try:
         preview_target(now)
         steps.append(("preview", preview_command()))

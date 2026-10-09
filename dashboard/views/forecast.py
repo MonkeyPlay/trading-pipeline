@@ -21,6 +21,11 @@ so a superseded or late run stays visible.
                  latest outcome revision, beside the run's classes - a view, not a
                  score (stage 4 scores registered runs)
 
+For the session in progress, a target whose window has ended by the newest bar
+stored (the first move at 09:35, the 15-minute targets at 09:45, the opening bias
+at 10:00) is marked as observed: what the run said about it is a record, no longer
+a forecast of something still to come.
+
 Beside the stored runs, the Forecast now tab (``/?view=preview``) shows the latest
 preview (forecaster/preview.py): the next session's forecast from the data so far -
 whatever day the bar shows - made by its own button at any time from the session's
@@ -43,6 +48,7 @@ from nicegui import ui
 
 from contracts import nq_forecast as fc
 from contracts import nq_prompt_v2 as defs
+from dashboard.components.fan import current_session
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import frozen_preopen_spec
 from dashboard.jobs import RUNNER
@@ -53,6 +59,7 @@ from forecaster.forecast_display import target_rows
 from forecaster.grading import BENCHMARK, compare, current_runs, grade
 from forecaster.outcome_display import p2_record
 from forecaster.preopen_display import p1_record
+from forecaster.rth_analogues import newest_bar_end, windows_over
 
 _MUTED = "color:#787b86"
 _CELL = "px-2 py-1 text-xs"
@@ -75,9 +82,11 @@ def _et(value: str, fmt: str = "%H:%M") -> str:
     return f"{t.astimezone(cal.NY_TZ):{fmt}} ET"
 
 
-def _targets_grid(run: Dict[str, Any], title: str) -> None:
-    """A run's per-target view where it is called: class, distribution and denominators."""
+def _targets_grid(run: Dict[str, Any], title: str, over: Optional[Dict[str, str]] = None) -> None:
+    """A run's per-target view where it is called: class, distribution and denominators; ``over`` - target -> the
+    ET end of its window - marks the targets of a session in progress already observed."""
     ui.label(title).classes("text-sm font-medium")
+    over = over or {}
     rows = target_rows(run)
     if not rows:
         ui.label(f"No predictions: {run['failure_reason']}").classes("text-xs").style(_MUTED)
@@ -87,7 +96,9 @@ def _targets_grid(run: Dict[str, Any], title: str) -> None:
         for head in ("P1 property", "class", "distribution", "n / prior"):
             ui.label(head).classes(_CELL).style(_MUTED)
         for r in rows:
-            ui.label(r["property"]).classes(_CELL).style(_MUTED)
+            done = over.get(r["target"])
+            ui.label(r["property"] + (f" — window over at {done} ET: observed, no longer a forecast" if done else "")
+                     ).classes(_CELL + " break-words").style(_MUTED + (";color:#ffa726" if done else ""))
             ui.label(r["class"] if r["status"] == "predicted" else f"{r['class']} - {r['reason']}").classes(
                 _CELL + " break-words")
             ui.label(", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-").classes(
@@ -354,9 +365,12 @@ class ForecastPanel:
 
     def _render_targets(self) -> None:
         self.targets.clear()
+        day = str(self.run["session_date"])
+        over = (windows_over(day, newest_bar_end(self.conn, day), [t for _, t in fc.FORECAST_TARGETS])
+                if day == current_session() else {})
         with self.targets:
             _targets_grid(self.run, f"Per target ({_ARMS.get(self.run['algorithm_version'], self.run['algorithm_version'])}"
-                                    f": distribution and denominators)")
+                                    f": distribution and denominators)", over)
 
     def _render_record(self) -> None:
         self.record.clear()
