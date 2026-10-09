@@ -148,6 +148,27 @@ def test_the_evaluation_is_fixed_before_any_result():
     assert rth_eval.record()["definition"]["max_issue_delay_s"] == 840
 
 
+def test_the_operational_evaluation_is_its_own_definition():
+    import json
+    from contracts import rth_eval, rth_operational as ops
+    doc = json.load(open(os.path.join(os.path.dirname(__file__), "..", "docs", "rth_operational_v1_definition.json")))
+    assert doc == json.loads(json.dumps(ops.document())) and doc["definition_hash"] == "1ad913e1838ef25c"
+    assert rth_eval.definition_hash() == "0308613ba27505d0"          # v2 untouched
+    assert ops.record()["definition"]["max_issue_delay_s"] == 0       # counted only when stored by its start
+    assert ops.VERSION != rth_eval.VERSION and ops.LEAD_MINUTES >= 1
+
+
+def test_a_window_move_needs_every_bar_confirmed():
+    from forecaster.rth_eval import window_move
+    closes = {i: 100.0 + i for i in range(0, 40)}
+    assert window_move(closes, 39, 10, 10.0) == (pytest.approx(1.5), "ok")          # (124 - 109) / 10
+    assert window_move(closes, 24, 10, 10.0) == (None, "pending")                    # bar 24 not confirmed yet
+    assert window_move({i: 1.0 for i in range(0, 20)}, 19, 10, 10.0) == (None, "pending")
+    holed = {i: c for i, c in closes.items() if i != 15}
+    assert window_move(holed, 39, 10, 10.0) == (None, "missing")                     # a gap inside the window
+    assert window_move(holed, 20, 10, 10.0) == (None, "missing")
+
+
 def test_the_scores():
     from forecaster import rth_eval as re_
     assert re_.fair_crps([0.0, 0.0], 1.0) == 1.0
@@ -610,7 +631,8 @@ def test_issue_stores_the_evaluation_forecasts_once_as_issued(journal):
     day = days[-5]                                         # its windows were backfilled by an earlier test: a
                                                            # backfill never stands in for an issue
     first = ra.issue(conn, now=_ny(day, 11, 0), day=day, issued_by="auto")
-    assert [m for m, _, _ in first["forecasts"]] == [15, 30, 45]
+    assert [m for m, v, _, _ in first["forecasts"] if v == ev.VERSION] == [15, 30, 45]
+    assert [m for m, v, _, _ in first["forecasts"] if v != ev.VERSION] == [15, 30, 45]   # and the operational ones
     assert [new for _, _, new in first["stored"]] == [True] * 4                # recorded beside the backfills
     assert all(store.get_rth_set(conn, sid)["issued_by"] == "auto" for _, sid, _ in first["stored"])
     stored = {f["elapsed_minutes"]: f for f in store.rth_eval_forecasts(conn, ev.VERSION) if f["session_date"] == day}
@@ -674,7 +696,7 @@ def test_cases_status_and_the_one_scoring(journal, monkeypatch):
     match(conn)
     ra.register(conn)
     june = [d for d in days if d >= "2026-06-01"]
-    monkeypatch.setattr(re_, "_registered", lambda c: {"registered_at": ra.utc("2026-06-01 00:00:00")})
+    monkeypatch.setattr(re_, "_registered", lambda c, v=None: {"registered_at": ra.utc("2026-06-01 00:00:00")})
     now = _ny(DAY, 16, 0)
     # forecasts issued in time for a few sessions (the database's clock is stamped now, so fake recent cutoffs), and
     # inputs taken as verified - a synthetic store has no real receipt times
@@ -698,6 +720,15 @@ def test_cases_status_and_the_one_scoring(journal, monkeypatch):
     assert {c["reason"] for c in cases if c["reason"]} <= set(ev.REASONS)
     st = re_.status(conn, now)
     assert st["counted_sessions"] == 4 and "scored" in st["by_reason"] and "primary" not in st
+    assert st["label"].startswith("research only - forecast skill from delayed, cutoff-frozen inputs")
+    a = st["availability"]["09:45"]                       # every scheduled opportunity, not only the scored
+    assert a["counts"]["scored"] == 4 and a["opportunities"] == sum(a["counts"].values()) > 4
+    stored_at_0945 = [c for c in re_.cases(conn, now) if c["minutes"] == 15 and c["forecast"] is not None]
+    assert a["rates"]["scored"] == round(4 / a["opportunities"], 4)
+    assert a["delay_minutes"]["n"] == len(stored_at_0945) >= 4                # timing of every stored forecast
+    assert a["window_ahead_minutes"]["max"] == pytest.approx(12, abs=0.2)      # stored 3 minutes into the window
+    assert a["counts"].get("late", 0) == a["window_ahead_minutes"]["n"] - 4   # the late ones: nothing ahead
+    assert st["availability"]["10:00"]["counts"].get("scored", 0) == 0
     with pytest.raises(re_.NotAtEndpoint, match="4 of 60 sessions counted"):
         re_.score(conn, now)
     assert store.rth_eval_result(conn, ev.VERSION) is None
@@ -705,6 +736,54 @@ def test_cases_status_and_the_one_scoring(journal, monkeypatch):
     result = re_.score(conn, now)
     assert result["counted_sessions"] == 4 and result["definition_hash"] == ev.definition_hash()
     assert set(result["primary"]) == {f"{a} vs {b}: {m}" for a, b, m in ev.PRIMARY}
+    assert result["availability"]["09:45"]["counts"]["scored"] == 4 and "research only" in result["label"]
     with pytest.raises(re_.NotAtEndpoint, match="scored already"):
         re_.score(conn, now)
+
+
+@needs_db
+def test_the_operational_forecast_is_for_a_window_after_it(journal):
+    """rth_operational_v1: built with the issue's clock, its window starts at the second full minute after it, every
+    arm's members are measured over those same clock minutes of their own sessions, and the database counts it only
+    when stored by the window's start."""
+    from contracts import rth_eval as ev, rth_operational as ops
+    from database import journal_store as store
+    from database.queries import get_day_bars
+    from forecaster import rth_analogues as ra
+    from forecaster import rth_eval as re_
+    from tests.synthetic import NQ_CID
+    conn, days = journal
+    ra.register(conn)
+    day = days[-12]
+    openings, meta = ra.load_openings(conn, day)
+    pool = [o for d, o in openings.items() if d < day]
+    rec, members, ranked = ra.build_set(openings[day], pool, 15, meta, "auto")
+    set_id, _ = store.save_rth_set(conn, {**rec, "input_digest": "ops-1"}, members)
+    built = _ny(day, 9, 58, 30)                                       # a feed ~13 minutes behind the 09:45 cutoff
+    f = re_.build_operational(conn, openings[day], 15, ranked, openings, set_id, built)
+    assert f["evaluation_version"] == ops.VERSION and f["sources"]["target_start_minute"] == 30
+    assert f["cutoff_at"] == _ny(day, 10, 0) > built                  # the window starts after the forecast
+    assert set(f["forecasts"]) == set(ev.FORECASTS) and len(f["forecasts"]["CLOCK"]["members"]) >= 10
+    member = f["forecasts"]["RTH-20"]["members"][0]
+    bars = {ra.utc(r["timestamp_utc"]): r["close"] for r in get_day_bars(conn, NQ_CID, member["session_date"])}
+    atr = openings[member["session_date"]].context.atr
+    expected = (bars[_ny(member["session_date"], 10, 14)] - bars[_ny(member["session_date"], 9, 59)]) / atr
+    assert float(member["move"]) == pytest.approx(expected, abs=1e-5)  # [10:00, 10:15) of its own session
+    assert re_.build_operational(conn, openings[day], 45, ranked, openings, set_id, built) is None   # before 10:15
+    assert re_.build_operational(conn, openings[day], 15, ranked, openings, set_id, _ny(day, 11, 20)) is None
+    # the database's stamp decides: stored by the window's start, or not counted
+    now = datetime.now(UTC)
+    for i, (start, counted) in enumerate(((now + timedelta(minutes=3), True), (now - timedelta(minutes=1), False))):
+        fid, _ = store.save_rth_eval_forecast(conn, {**f, "session_date": f"2031-01-0{i + 1}", "cutoff_at": start})
+        row = next(x for x in store.rth_eval_forecasts(conn, ops.VERSION) if x["forecast_id"] == fid)
+        assert row["eligible"] is counted
+    # issued with the live sets of the cutoff windows, beside the research forecasts
+    issued = ra.issue(conn, now=_ny(days[-13], 10, 33), day=days[-13], issued_by="auto")
+    by = {}
+    for m, version, _, new in issued["forecasts"]:
+        by.setdefault(version, []).append(m)
+    assert by == {ev.VERSION: [15, 30, 45], ops.VERSION: [15, 30, 45]}
+    starts = {x["elapsed_minutes"]: x["cutoff_at"] for x in store.rth_eval_forecasts(conn, ops.VERSION)
+              if x["session_date"] == days[-13]}
+    assert {ra.utc(v) for v in starts.values()} == {_ny(days[-13], 10, 35)}
 

@@ -10,8 +10,14 @@ most like this one, over the same minutes?**
 
 It is a description of resemblance, not a forecast. Similarity scores are agreement between
 two observed openings and are **never calibrated probabilities**. Whether the analogues'
-continuations say anything about this session's is a separate question, with its own
-[evaluation](#the-evaluation), fixed before its forward sample.
+continuations say anything about this session's is a separate question, with two
+evaluations fixed before their forward sample and collected side by side:
+
+- [`rth_continuation_v2`](#the-research-evaluation-rth_continuation_v2): **research only** -
+  forecast skill from delayed, cutoff-frozen inputs. "Eligible" there means eligible for that
+  experiment, never timely for trading.
+- [`rth_operational_v1`](#the-operational-evaluation-rth_operational_v1): **operational** - a
+  15-minute window that starts after the forecast is stored.
 
 The record is meant to answer, for every set: **what matched, using what information, at what
 time.**
@@ -222,7 +228,7 @@ Reconstructed shows the correction, As issued never does.
   (`dashboard/jobs.NEEDS_SUCCESS`).
 - **What one issue stores:** the newest confirmed window, plus any of 15, 30, 45 and 60 not
   yet issued (a backfill does not count as issued). If two bars arrive at once, the window
-  between them is still saved. For 15, 30 and 45 the run also stores the evaluation's
+  between them is still saved. For 15, 30 and 45 the run also stores both evaluations'
   forecasts.
 - **Collection must be running:** sets are issued only while Auto runs during the first hour.
   Auto belongs to the dashboard process, so it keeps running with the browser tab closed, but
@@ -238,13 +244,16 @@ python scripts/nq_journal.py rth-backfill --date 2026-10-07 --all-minutes       
 python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15      # reconstructed view at 09:45
 python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
 python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the calibration
-python scripts/nq_journal.py rth-eval-status                             # the evaluation's health, never a score
-python scripts/nq_journal.py rth-eval-score                              # its one scoring, at the endpoint only
+python scripts/nq_journal.py rth-eval-status                             # both evaluations' health, never a score
+python scripts/nq_journal.py rth-eval-score --version rth_operational_v1  # one scoring, at its endpoint only
 ```
 
-The first `rth-issue` or `rth-backfill` registers `nq_match_rth_v2` and `rth_continuation_v2`.
-From then on both are frozen: changed weights, tolerances, features, calibration or evaluation
-rules need a new version name.
+The first `rth-issue` or `rth-backfill` registers `nq_match_rth_v2`, `rth_continuation_v2` and
+`rth_operational_v1`. From then on they are frozen: changed weights, tolerances, features,
+calibration or evaluation rules need a new version name.
+
+Production runs a fixed, deployed revision (README, [Database](../README.md#database)): a
+change here reaches the record only through `scripts/deploy.sh`.
 
 ## Dashboard
 
@@ -280,7 +289,13 @@ set (evolving)**.
   pre-open set's outcome rows and frequencies, and in the forecast's per-target table. It is
   no longer a forecast of anything still to come.
 
-## The evaluation
+## The research evaluation (`rth_continuation_v2`)
+
+**Research only: forecast skill from delayed, cutoff-frozen inputs.** Its window is the 15
+minutes after the matching cutoff, which on the delayed feed have mostly passed in the market
+by the time the forecast is stored. "Eligible" means eligible for this experiment, never timely
+for trading. Every status report and result carries that label, and shows each forecast's
+actual issue delay and how much of its window was still ahead when it was stored.
 
 `rth_continuation_v2` is defined in [contracts/rth_eval.py](../contracts/rth_eval.py), with a
 copy in [rth_continuation_v2_definition.json](rth_continuation_v2_definition.json) (hash
@@ -356,8 +371,8 @@ after the cutoff is read. It does **not** measure a tradeable lead time.
 - **Scored once:** `rth-eval-score` refuses before the endpoint and after it has run; the stored
   result stands. Sixty sessions is a checkpoint, not a promise of a conclusive result, and more
   data means a new version.
-- **Before the endpoint:** `rth-eval-status` shows operational health only: cases by reason and
-  cutoff, issue delays and member counts, never a score.
+- **Before the endpoint:** `rth-eval-status` shows operational health only, never a score (see
+  [Availability](#availability-at-every-checkpoint)).
 - **Scores:**
   - **size:** fair ensemble CRPS of the absolute move;
   - **direction:** Brier score of a Laplace-smoothed up-share;
@@ -371,10 +386,58 @@ after the cutoff is read. It does **not** measure a tradeable lead time.
   - Size and direction are concluded separately.
   - The five displayed analogues are never the probability model.
 
+## The operational evaluation (`rth_operational_v1`)
+
+Defined in [contracts/rth_operational.py](../contracts/rth_operational.py), with a copy in
+[rth_operational_v1_definition.json](rth_operational_v1_definition.json) (hash
+`1ad913e1838ef25c`, pinned by a test). It is collected beside v2 from the same issues and does
+not interrupt it.
+
+**Not v2 relabelled:** it has its own forecast construction.
+
+- **The target window:** [*S*, *S* + 15 min), where *S* is the start of the second full minute
+  after the forecast is built, using the issue run's clock. So the window starts at least a
+  minute after the forecast exists. It must end by 11:30 ET; otherwise no forecast is made
+  (`not_issued`). It never starts before the matched minutes end.
+- **Only what is known at issuance:** the forecast reads the set's ranking (bars to its
+  cutoff), the pre-open set, and earlier sessions' bars. It never reads the target's own bars
+  after the cutoff.
+- **All four arms aligned to the target:** RTH-20, RTH-5, PRE-5 and CLOCK as for v2, but every
+  member's move is over the same clock minutes [*S*, *S* + 15) of its own session.
+- **Stored as issued:** in `journal.rth_eval_forecasts`, with *S*, the matching cutoff and the
+  build time. Its `cutoff_at` holds *S*, the start of its target window.
+- **Eligibility:** the database stamps the forecast and counts it only when stored at or before
+  *S*. The registered definition's `max_issue_delay_s` is 0.
+- **Shown with every forecast:** its lead (*S* minus when it was stored) and how old its
+  information was (*S* minus the matching cutoff). On the ~10-minute feed the information is
+  about 15 minutes old when the window starts.
+- **Shared with v2:** cases, scores, aggregation, endpoint, bootstrap and decision rule.
+
+**The other route:** with a real-time feed, v2's cutoff-based forecasts could instead be judged
+under a much tighter delivery limit. That needs a new, predefined version, and the feed is your
+call.
+
+## Availability at every checkpoint
+
+A scored subset must never hide frequent unavailable forecasts. So `rth-eval-status`, and the
+stored result of each scoring, report per checkpoint (09:45, 10:00, 10:15), over every
+scheduled opportunity that is decided:
+
+- **Counts:** the opportunities, scored, and each reason with its rate (not issued, late,
+  unverified inputs, incomplete forecast, outcome missing);
+- **Issue delay** after the matching cutoff: median, 90th percentile and maximum;
+- **Window still ahead** when stored: how much of the 15-minute window had not yet happened;
+- **Lead to the window's start** and the **age of the information** at it.
+
+The 60-session endpoint counts sessions with at least one scored checkpoint. So the three
+checkpoints can end with different sample sizes, and reaching 60 does not by itself make the
+evidence at any one checkpoint adequate. Each per-checkpoint result carries its own *n*, and
+is secondary.
+
 ## What this is not
 
 - **Not a forecast:** no outcome, frequency or path of the analogues is aggregated, overlaid
   or turned into one on the dashboard.
 - **No direction claim:** earlier work found NQ first-hour direction unpredictable from pre-open
   matches, momentum and 15/30-minute matching (2026-09).
-- **Usefulness is untested** until the evaluation reaches its endpoint.
+- **Usefulness is untested** until the evaluations reach their endpoints.

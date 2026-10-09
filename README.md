@@ -90,8 +90,9 @@ docker compose up -d          # local TimescaleDB on 127.0.0.1:5432 (see docker-
 
 The compose file creates both the `trading_pipeline` and `trading_pipeline_dev`
 databases with the credentials `config.py` defaults to. Any PostgreSQL 14+ server with
-the TimescaleDB extension works — point `DATABASE_URL` at it. The schema is created and
-migrated automatically on first use — there is no separate init step.
+the TimescaleDB extension works — point `DATABASE_URL` at it. Create the schema once with
+`python -m database.migrations --db <url>`; after that, schema changes reach a database only
+through an explicit deployment ([Database](#database)).
 
 #### Database server settings
 
@@ -269,10 +270,13 @@ Pages:
     provisional, the 15/30/60-minute checkpoints marked. **Window** follows the session (in
     playback, the candle played to - never a later window) or picks any stored window.
     Similarity is agreement of the observed openings, not a probability. Whether the analogues'
-    next 15 minutes carry information is judged by an evaluation fixed before its forward sample
-    (`rth_continuation_v2`): its forecasts are stored as issued, it counts only those stored
-    within 14 minutes of their cutoff, and it is scored once at its endpoint
-    (`nq_journal.py rth-eval-status` shows its health, never a score).
+    next 15 minutes carry information is judged by two evaluations fixed before their forward
+    sample, both stored as issued and scored once at their endpoints:
+    `rth_continuation_v2` is research only (forecast skill from delayed, cutoff-frozen inputs -
+    its window has mostly passed when the forecast is stored), `rth_operational_v1` is
+    operational (a window that starts after the forecast is stored).
+    `nq_journal.py rth-eval-status` shows their health per checkpoint - every opportunity,
+    each reason a forecast is missing or late, delays and leads - never a score.
   - **Pre-open set** (below the charts, [dashboard/views/analogues.py](dashboard/views/analogues.py)):
     the session and its analogues side by side, feature by feature - their realised labels and
     the outcome frequencies hidden until asked for - with P1's 47-field pre-open record; for the
@@ -636,10 +640,25 @@ name contains `test`; they reset it).
 
 ## Database
 
-PostgreSQL with TimescaleDB, upgraded in place and never regenerated. `init_database()`
-applies any pending migrations on every process start, so simply running the app upgrades
-it. `bars` is a TimescaleDB hypertable chunked monthly (30 days) on `timestamp_utc`; everything else
-is a plain table.
+PostgreSQL with TimescaleDB, upgraded in place and never regenerated - and only by an
+explicit deployment. Routine processes (the dashboard, the collector and its Auto runs, the
+CLIs) only check that the database's schema version is the one their code's migrations end
+at, and stop when it is not (`database/connection.init_database`): a migration file created
+in a checkout can never change a database by itself.
+
+**Production runs one fixed revision** from its own checkout, `~/trading_pipeline_prod` (a
+git worktree of this repository, `PROD_DIR` to change it):
+
+```bash
+scripts/deploy.sh <revision>     # check the revision out there, link the shared runtime state
+                                 # (.env, .venv, logs/, data caches, the Auto lock), apply its
+                                 # migrations, check the schema, log to logs/deployments.log
+cd ~/trading_pipeline_prod && .venv/bin/python -m dashboard.app    # then run production there
+```
+
+Development happens in the main checkout against the development database; its code reaches
+production only through a deployment. `bars` is a TimescaleDB hypertable chunked monthly (30
+days) on `timestamp_utc`; everything else is a plain table.
 
 Tables: `contracts`, `session_days` (the ledger of which days are held), `bars`,
 `collection_runs`, `active_contracts` (the contract that stood for each symbol per day),
@@ -663,7 +682,8 @@ per month of 1-minute bars.
 
 ```bash
 python -m database.migrations                      # show current + pending versions
-python -m database.migrations --db postgresql://...  # apply pending migrations
+python -m database.migrations --db postgresql://...  # apply pending migrations (setup, development databases)
+scripts/deploy.sh <revision>                       # production: a fixed revision, then its migrations
 python -m database.migrations --snapshot           # regenerate database/schema.sql
 python -m database.backfill                        # recompute session_days from bars
 python -m database.migrate_from_sqlite --sqlite data/x.db  # one-time import of a SQLite store
@@ -671,7 +691,7 @@ python -m database.migrate_from_sqlite --sqlite data/x.db  # one-time import of 
 ```
 
 Never edit an applied migration or the generated `database/schema.sql` — add a new
-migration file in `database/migrations/`. Read
+migration file in `database/migrations/`, and deploy it. Read
 [docs/data_store.md](docs/data_store.md) before changing anything about how days are stored.
 
 ## Charting

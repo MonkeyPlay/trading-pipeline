@@ -1,0 +1,58 @@
+{
+  "definition_hash": "1ad913e1838ef25c",
+  "version": "rth_operational_v1",
+  "purpose": "operational: skill over a genuinely future window - one that starts after the forecast is stored",
+  "question": "When the RTH set of the 15, 30 or 45 minute window is issued, do the RTH analogues' moves over the next 15 minutes from then - starting after the forecast is stored - describe the target session's move over the same window better than (a) the frozen pre-open analogue set and (b) a same-clock historical baseline - for size and for direction, separately?",
+  "matcher": "nq_match_rth_v2 (as for rth_continuation_v2: weights and tolerances frozen, calibrated on sessions to 2026-10-07 only)",
+  "issue": "built by the run that issues the live RTH set of a 15, 30 or 45 minute window (the first issue of that window), from that set's ranking - inputs to its cutoff - and what the store holds then",
+  "target_window": "[S, S + 15 min), S = the start of the 2nd full minute after the forecast is built (so at least a minute after it); S + 15 must be by 120 minutes after the open (11:30 ET), else no forecast (not_issued)",
+  "only_at_issuance": "the forecast reads only what is stored when it is built: the set's ranking (bars to its cutoff), the pre-open set, and the earlier sessions' bars; the target's own bars after the cutoff are never read for the forecast",
+  "move": "(close of the bar ending at S + 15 min - close of the bar ending at S) / that session's frozen daily ATR, from its bars of [S - 1 min, S + 15 min) on its active contract, all stored and confirmed",
+  "forecasts": {
+    "stored": "with the forecast: every arm's members with session, context snapshot, contract, similarity, weight and move over the same clock window [S, S + 15) of their own session, the versions, the pre-open set used, S and the matching cutoff - never rebuilt",
+    "weights": "equal: 1 / n over the members with a move",
+    "RTH-20": "primary: the 20 highest similarities of the set's ranking",
+    "RTH-5": "secondary: the set's five members",
+    "PRE-5": "baseline: the target's pre-open analogue set (nq_match_p1_v2, rules protocol), the newest stored when the forecast is built",
+    "CLOCK": "baseline: every session of the set's scored pool"
+  },
+  "eligibility": {
+    "rule": "eligible only when the database stamps the forecast at or before S - the start of its window",
+    "provenance_apart": "the set's provenance (issued_by, receipt times, pit_status) is recorded on the set; eligibility is only this rule",
+    "shown": "with every forecast its lead (S minus when it was stored) and how old its information was (S minus the matching cutoff)"
+  },
+  "cases": "as rth_continuation_v2: every scheduled NQ session from registration, at each of the three issues, under the first reason that keeps it out - not_issued, late, unverified_inputs, forecast_incomplete (minimum members {\"RTH-20\": 10, \"RTH-5\": 3, \"PRE-5\": 3, \"CLOCK\": 30}), outcome_pending, outcome_missing - else scored",
+  "scores": {
+    "size": "fair ensemble CRPS (Ferro 2014: no penalty for the number of members) of |y| against the members' |moves|",
+    "direction": "Brier score of p_up = (members up + 1) / (members + 2) against y > 0 (y = 0 counts as not up)",
+    "signed": "secondary: fair ensemble CRPS of y against the members' moves"
+  },
+  "comparisons": {
+    "primary": [
+      "RTH-20 vs CLOCK: size",
+      "RTH-20 vs CLOCK: direction",
+      "RTH-20 vs PRE-5: size",
+      "RTH-20 vs PRE-5: direction"
+    ],
+    "secondary": [
+      "RTH-5 vs CLOCK: size",
+      "RTH-5 vs CLOCK: direction",
+      "RTH-5 vs PRE-5: size",
+      "RTH-5 vs PRE-5: direction",
+      "RTH-20 vs CLOCK: signed",
+      "RTH-20 vs PRE-5: signed",
+      "each cutoff separately"
+    ]
+  },
+  "aggregation": "per session, the difference of the two scores averaged over its scored cutoffs (sessions weigh equally); each cutoff also reported alone (secondary)",
+  "availability": "reported for every scheduled opportunity at each issue: scored, each reason and its rate, the lead and information-age distributions - a scored subset never stands for the whole",
+  "endpoint": {
+    "counts": "a session counts when at least one of its cutoffs is scored",
+    "when": "the first scoring at or after 60 counted sessions - or on 2027-06-30, whichever comes first, then only with at least 30 counted sessions (else reported as insufficient, no comparison)",
+    "once": "scored once; the stored result stands. Sixty sessions is a checkpoint, not a promise of a conclusive result - more data means a new version",
+    "before": "until then only operational health is looked at (rth-eval-status: cases by reason, issue delays, member counts) - never a score"
+  },
+  "uncertainty": "the mean of the session differences; an interval from a circular moving-block bootstrap over sessions in date order (blocks of 5, 10,000 resamples, seed 20261009), percentile, each primary at 98.75 % (95 % Bonferroni over the four)",
+  "decision": "a primary comparison shows RTH-20 better only when its whole interval lies below zero (a lower score is better); otherwise: no sufficiently reliable improvement was established - never 'ruled out'. Size and direction are concluded separately; the five displayed analogues are never the probability model",
+  "display": "none while the evaluation runs: no analogue continuation, frequency or path is aggregated or overlaid on the dashboard"
+}

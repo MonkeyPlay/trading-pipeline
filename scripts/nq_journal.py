@@ -40,8 +40,8 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15     # reconstructed view at 09:45
     python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
     python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the tolerances' calibration
-    python scripts/nq_journal.py rth-eval-status                            # the evaluation's health - never a score
-    python scripts/nq_journal.py rth-eval-score                             # its one scoring, at the endpoint only
+    python scripts/nq_journal.py rth-eval-status                            # both evaluations' health - never a score
+    python scripts/nq_journal.py rth-eval-score --version rth_operational_v1   # one scoring, at the endpoint only
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
     python scripts/nq_journal.py review-report --name stage1_review_v1       # the reviewer's verdicts, per field
 
@@ -643,8 +643,8 @@ def cmd_rth_issue(conn, args):
         print(("new: " if new else "already stored: ") + ra.describe(aset))
         print("  " + (", ".join(f"#{x['rank']} {x['session_date']} {float(x['similarity']):.1f}%"
                                 for x in aset["members"]) or "no analogue"))
-    for m, forecast_id, new in result["forecasts"]:
-        print(f"  evaluation forecasts of the {m}-minute cutoff: {'stored' if new else 'already stored'} "
+    for m, version, forecast_id, new in result["forecasts"]:
+        print(f"  {version} forecasts of the {m}-minute window: {'stored' if new else 'already stored'} "
               f"({forecast_id[:8]})")
     if result["stop"]["state"] != "complete":
         print(f"  the window stops at {result['minutes']} minute(s): {ra.stop_text(result['stop'])}")
@@ -712,6 +712,73 @@ def cmd_rth_show(conn, args):
             row += (f"{'—':>13s}" if not c["comparable"] else
                     f"{float(c['analogue']):7.3f} {float(c['score']):.2f}")
         print(row)
+    return 0
+
+
+def cmd_rth_calibrate(conn, args):
+    """Reproduces the RTH matcher's tolerance calibration (contracts/nq_rth.CALIBRATION) over the sessions to --end:
+    the median pairwise difference of each feature at 30 minutes and twice it - beside the registered values. Stores
+    nothing; a different calibration needs a new matcher version."""
+    from contracts import nq_rth as rth
+    from forecaster import rth_analogues as ra
+    from matching import rth as mr
+    openings, _ = ra.load_openings(conn, args.end)
+    result = mr.calibrate([o for d, o in openings.items() if not args.start or d >= args.start])
+    print(f"{result['sessions']} session(s) {result['first']}..{result['last']} (registered: "
+          f"{rth.CALIBRATION['sessions']} {rth.CALIBRATION['first_session']}..{rth.CALIBRATION['last_session']})")
+    for f, med in result["medians"].items():
+        print(f"  {f:20s} median {med:.4f}  tolerance {result['tolerances'][f]:>5s}  registered {rth.TOLERANCES[f]}")
+    return 0
+
+
+def cmd_rth_eval_status(conn, args):
+    """The RTH evaluations' operational health (forecaster/rth_eval.status), each under what it measures: per
+    checkpoint every scheduled opportunity - scored and each reason with its rate - the issue delay, how much of the
+    window was still ahead when stored, the lead to the window's start; counted sessions, member counts. Never a
+    score."""
+    from contracts import rth_eval as ev
+    from forecaster import rth_eval
+
+    def q(d, unit="min"):
+        return "-" if not d else f"median {d['median']:.1f}, p90 {d['p90']:.1f}, max {d['max']:.1f} {unit}"
+    for version in ([args.version] if args.version else rth_eval.VERSIONS):
+        st = rth_eval.status(conn, version=version)
+        print(f"{version} - {st['label']}")
+        if not st["registered"]:
+            print("  not registered yet: the first RTH issue (Auto, or rth-issue) registers it.")
+            continue
+        print(f"  {st['counted_sessions']} of {st['endpoint_sessions']} sessions counted (end date {st['end_date']}); "
+              "a count reached says nothing about any one checkpoint's evidence")
+        for at, a in st["availability"].items():
+            n = a["opportunities"]
+            rates = ", ".join(f"{k.replace('_', ' ')} {v} ({a['rates'][k]:.0%})" for k, v in sorted(a["counts"].items()))
+            print(f"  {at}: {n} scheduled opportunit{'y' if n == 1 else 'ies'} decided - {rates or 'none'}")
+            if a["delay_minutes"]:
+                print(f"     stored after the matching cutoff: {q(a['delay_minutes'])}; window still ahead when "
+                      f"stored: {q(a['window_ahead_minutes'])}; lead to the window's start: {q(a['lead_minutes'])}")
+        for k, m in st["members"].items():
+            if m:
+                print(f"  {k} members: min {m['min']}, median {m['median']} (needs {ev.MIN_MEMBERS[k]})")
+    print("No score is shown before the endpoint.")
+    return 0
+
+
+def cmd_rth_eval_score(conn, args):
+    """An RTH evaluation's one scoring (forecaster/rth_eval.score): refused before the endpoint and after it was
+    done; --show prints the stored result."""
+    import json
+    from forecaster import rth_eval
+    version = args.version or rth_eval.VERSIONS[0]
+    if args.show:
+        stored = store.rth_eval_result(conn, version)
+        print(json.dumps(stored["results"], indent=2) if stored else f"{version} has not been scored.")
+        return 0 if stored else 1
+    try:
+        results = rth_eval.score(conn, version=version)
+    except rth_eval.NotAtEndpoint as e:
+        print(f"Not scored: {e}")
+        return 1
+    print(json.dumps(results, indent=2))
     return 0
 
 
@@ -937,8 +1004,11 @@ def main(argv=None):
     p.add_argument("--minute", type=int, default=60, help="Reconstructed view: minutes after the 09:30 ET open")
     p.add_argument("--view", choices=["reconstructed", "issued"], default="reconstructed")
     p.add_argument("--at", help="Issued view: HH:MM ET on the session's day (default: everything issued)")
-    sub.add_parser("rth-eval-status", help="The RTH evaluation's operational health (never a score)")
-    p = sub.add_parser("rth-eval-score", help="The RTH evaluation's one scoring, at its endpoint only")
+    p = sub.add_parser("rth-eval-status", help="The RTH evaluations' operational health (never a score)")
+    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1"])
+    p = sub.add_parser("rth-eval-score", help="An RTH evaluation's one scoring, at its endpoint only")
+    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1"],
+                   help="Default rth_continuation_v2 (research only)")
     p.add_argument("--show", action="store_true", help="Print the stored result")
     p = sub.add_parser("rth-calibrate", help="Reproduce the RTH matcher's tolerance calibration (stores nothing)")
     p.add_argument("--start", help="First session date (default: all)")

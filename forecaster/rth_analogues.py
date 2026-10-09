@@ -284,9 +284,10 @@ def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta
 def register(conn) -> None:
     """Registers the RTH matcher's definition and its evaluation's (contracts/rth_eval.py) - before any set or
     evaluation forecast of the run is stored; a changed definition under a registered version name stops the run."""
-    from contracts import rth_eval
+    from contracts import rth_eval, rth_operational
     store.register_version(conn, rth.matcher_record())
     store.register_version(conn, rth_eval.record())
+    store.register_version(conn, rth_operational.record())
 
 
 def _target_snapshot_ok(openings: Dict[str, mr.Opening], day: str) -> Optional[str]:
@@ -308,10 +309,10 @@ def issue(conn, now: Optional[datetime] = None, day: Optional[str] = None, issue
     """
     The session in progress (``day``, else the one the New York date of ``now`` names): its newest confirmed
     window and any of the always-issued windows (15, 30, 45, 60) not stored yet, issued by ``issued_by`` ('auto':
-    Auto mode, 'manual': a person) - and, for the evaluation's cutoff windows (15, 30, 45), its forecasts
-    (forecaster/rth_eval.py), stored once per session and cutoff. Returns ``{'status': 'issued' | 'waiting' | 'busy'
-    | 'closed', 'session_date', 'minutes', 'stored': [(minutes, set_id, new)], 'forecasts': [(minutes, forecast_id,
-    new)], 'stop', 'reason'}``. Takes a database-wide lock:
+    Auto mode, 'manual': a person) - and, for the evaluations' cutoff windows (15, 30, 45), the forecasts of both
+    (forecaster/rth_eval.py: research and operational), stored once per evaluation, session and cutoff. Returns ``{'status': 'issued' | 'waiting' | 'busy'
+    | 'closed', 'session_date', 'minutes', 'stored': [(minutes, set_id, new)], 'forecasts': [(minutes, evaluation,
+    forecast_id, new)], 'stop', 'reason'}``. Takes a database-wide lock:
     a second issue running at the same time (another process) returns 'busy' and stores nothing.
     """
     if issued_by not in rth.LIVE_ISSUERS:
@@ -348,10 +349,9 @@ def issue(conn, now: Optional[datetime] = None, day: Optional[str] = None, issue
             rec, members, ranked = build_set(target, pool, m, meta, issued_by)
             set_id, new = store.save_rth_set(conn, rec, members)
             stored.append((m, set_id, new))
-            # the evaluation's forecasts of a cutoff window, from this ranking - stored once, when issued
-            made = rth_eval.issue_forecasts(conn, target, m, ranked, openings, set_id)
-            if made is not None:
-                forecasts.append((m, *made))
+            # both evaluations' forecasts of a cutoff window, from this ranking - stored once, when issued
+            forecasts.extend((m, *made) for made in rth_eval.issue_forecasts(conn, target, m, ranked, openings,
+                                                                              set_id, built_at=now))
         return {"status": "issued", "session_date": day, "minutes": newest, "stored": stored, "reason": None,
                 "forecasts": forecasts, "stop": meta[day]["stop"], "newest_bar_end": meta[day]["newest_bar_end"]}
     finally:
