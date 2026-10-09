@@ -122,8 +122,11 @@ def test_direction_needs_its_closing_bar():
 def test_opening_bias_30m_uses_the_0959_close_and_t():
     out = run(session(bars={29: (100, 106, 100, 106)}))
     assert label(out, "opening_bias_30m") == ("bullish", None)
-    assert defs.display("opening_bias_30m", "neutral_band", "predicted") == "Neutral"
-    assert defs.display("opening_bias_30m", "neutral_band") == "Two-sided"
+    # shown for what the class is - the net change within the band, not a path (the registered names unchanged)
+    assert defs.display("opening_bias_30m", "neutral_band", "predicted") == "Flat (net within +-T)"
+    assert defs.display("opening_bias_30m", "neutral_band") == "Flat (net within +-T)"
+    assert defs.display("first_move_5m", "neither") == "Neither (no +-T touch)"
+    assert defs.TARGETS["opening_bias_30m"]["display_realised"]["neutral_band"] == "Two-sided"     # as registered
 
 
 # --------------------------------------------------------------------------
@@ -642,7 +645,7 @@ def test_p2_record_has_the_prompts_40_properties_in_order():
     values = dict(record)
     assert values["Realised Opening Type"] == "Opening drive up" and values["Opening Drive Strength"] == "Strong"
     assert values["First 15-Minute Pattern"] == "Drive continuation" and values["Realised Outcome Confidence"] == "5"
-    assert values["Realised First Move"] == "Up" and values["First 30-Minute Direction"] == "Two-sided"
+    assert values["Realised First Move"] == "Up" and values["First 30-Minute Direction"] == "Flat (net within +-T)"
     assert defs.LABEL_VERSION in values["Outcome Data Notes"]
 
 

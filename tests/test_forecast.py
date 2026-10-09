@@ -191,3 +191,18 @@ def test_check_inputs_rejects_evidence_that_does_not_belong_together(change, mes
     else:
         with pytest.raises(ForecastInputError, match=message):
             check_inputs(s, a, x, defs.DEFAULT_PROFILE, "historical_replay")
+
+
+def test_a_runs_issue_time_says_whether_it_was_a_forecast():
+    """The per-target view states when a run was issued against its cutoff and the open, and marks the targets whose
+    window had ended by then - a record, not a forecast (2026-10-06: issued 09:40 ET, after the first move)."""
+    from dashboard.views.forecast import issue_timing
+    run = {"session_date": "2026-10-06", "issued_at": "2026-10-06 13:40:25", "input_cutoff_at": "2026-10-06 13:29:00",
+           "mode": "historical_replay"}
+    line, over = issue_timing(run)
+    assert "11 min after its 09:29 ET cutoff and 10 min after the open" in line and over == {"first_move_5m": "09:35"}
+    late = issue_timing({**run, "session_date": "2025-12-11", "issued_at": "2026-10-04 14:36:00",
+                         "input_cutoff_at": "2025-12-11 14:29:00"})[0]
+    assert "297 days after" in late and "a record rather than a forecast" in late
+    early = issue_timing({**run, "issued_at": "2026-10-06 13:29:40", "mode": "live"})
+    assert "before the open - issued live" in early[0] and early[1] == {}

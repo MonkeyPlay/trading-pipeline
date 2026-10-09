@@ -34,6 +34,7 @@ import hashlib
 import json
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
@@ -207,7 +208,12 @@ def synthesis_bundle(snapshot: Dict[str, Any], annotation: Dict[str, Any], aset:
         f"baseline:{t}": {k: summary[t].get(k) for k in ("status", "eligible", "without_label", "raw", "prior",
                                                           "prior_sessions", "prior_without_label", "smoothed")}
         | {"predicted_class": base["predictions"][t]["predicted_label"]} for t in targets}
-    eligibility = {t: _eligibility(t, evidence) for t in targets}
+    # the frozen thresholds in index points (v5): T, B and A - a target needing one that is unavailable is ineligible
+    th = evidence.get("thresholds") or {}
+    a_points = None if th.get("A") is None else round(float(Fraction(str(th["A"]))), 2)
+    bundle["session"] = {**bundle["session"], "B": th.get("B"), "A": a_points,
+                         "threshold_units": "T, B and A are distances in index points, not prices"}
+    eligibility = {t: _eligibility(t, evidence) or _threshold_missing(t, th) for t in targets}
     bundle["eligibility"] = {t: why or "eligible" for t, why in eligibility.items()}
     bundle["targets"] = {t: list(defs.TARGETS[t]["labels"]) for t in targets}
     bundle["candidates"] = {
@@ -219,6 +225,13 @@ def synthesis_bundle(snapshot: Dict[str, Any], annotation: Dict[str, Any], aset:
            | set(bundle["baseline"]) | set(bundle["candidates"]))
     return {"bundle": bundle, "ids": ids, "id_map": blind["id_map"], "eligibility": eligibility,
             "baseline_class": {t: base["predictions"][t]["predicted_label"] for t in targets}}
+
+
+def _threshold_missing(target: str, thresholds: Dict[str, Any]) -> Optional[str]:
+    """Why ``target`` is ineligible for want of a frozen threshold (synthesis v5), or None."""
+    missing = [n for n in fc.SYNTHESIS_THRESHOLDS.get(target, ()) if thresholds.get(n) is None]
+    return (f"threshold {' and '.join(missing)} unavailable at the cutoff (no frozen daily ATR; the realised label "
+            f"would be missing_threshold)") if missing else None
 
 
 def _synthesis_prompt() -> str:
@@ -786,8 +799,8 @@ def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profi
         wait_minutes: float = 30, sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     """
     Arms C and D over the last ``sessions`` sessions - or the chosen ``days`` - oldest first: first the recorded
-    batches of earlier runs that have ended are collected; then the restricted annotations still missing, sent
-    live or as one batch; then arm D's syntheses, likewise; a batch is waited for at most ``wait_minutes`` (one
+    batches of earlier runs that have ended are collected; then the restricted annotations still missing and arm
+    D's syntheses, sent live side by side (D never reads C's answers) or each as one batch; a batch is waited for at most ``wait_minutes`` (one
     still processing is collected by a later run); then arm C's analogue sets and runs. At most ``max_requests``
     requests in all; a request recorded but not answered is never sent again. Requests need
     structure_llm.manual_requests (every sending and collecting function checks it).
@@ -811,60 +824,92 @@ def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profi
                 else:
                     log(f"  arm {arm}'s batch {batch_id} from an earlier run is still processing")
     submitted = []
+    todo_c: List[Dict[str, Any]] = []
     if "C" in arms:
         waiting = pending_snapshots(conn, "C")
-        todo = [s for s in (store.list_snapshots(conn, d, d, version)[0] for d in days)
-                if s["snapshot_id"] not in waiting
-                and store.latest_annotation(conn, s["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is None]
-        if len(todo) > budget():
-            log(f"  C: {len(todo) - budget()} session(s) not sent - the approved request(s) are used")
-            todo = todo[:budget()]
-        if batch and todo:
-            batch_id = sl.submit_batch(conn, client, todo, RESTRICTED)
-            sent += len(todo)
-            tally("C requests in a batch", len(todo))
-            log(f"  C: {len(todo)} annotation request(s) in batch {batch_id}")
+        todo_c = [s for s in (store.list_snapshots(conn, d, d, version)[0] for d in days)
+                  if s["snapshot_id"] not in waiting
+                  and store.latest_annotation(conn, s["snapshot_id"], pre.RESTRICTED_PROTOCOL_VERSION) is None]
+        if len(todo_c) > budget():
+            log(f"  C: {len(todo_c) - budget()} session(s) not sent - the approved request(s) are used")
+            todo_c = todo_c[:budget()]
+        if batch and todo_c:
+            batch_id = sl.submit_batch(conn, client, todo_c, RESTRICTED)
+            sent += len(todo_c)
+            tally("C requests in a batch", len(todo_c))
+            log(f"  C: {len(todo_c)} annotation request(s) in batch {batch_id}")
             if batch_id:
                 submitted.append(("C", batch_id))
-        for snap in ([] if batch else todo):
+    c_live = [] if batch else todo_c
+    budget_d = budget() - len(c_live)                    # C's requests are counted before D's, as when in turn
+
+    def run_c() -> Tuple[int, Dict[str, int]]:
+        """Arm C's live annotation requests - beside arm D's, which do not read them."""
+        n, tallies = 0, {}
+        for snap in c_live:
             attempt = sl.annotate_live(conn, client, snap, RESTRICTED)
-            sent += attempt["status"] != "contaminated"
-            tally(f"C annotation {attempt['status']}")
+            n += attempt["status"] != "contaminated"
+            key = f"C annotation {attempt['status']}"
+            tallies[key] = tallies.get(key, 0) + 1
             log(f"  {snap['session_date']} C annotation: {attempt['status']}"
                 + (f" - {attempt['error']}" if attempt.get("error") else ""))
-    if "D" in arms:
+        return n, tallies
+
+    def run_d() -> Tuple[int, Dict[str, int]]:
+        n, tallies = 0, {}
+
+        def mark(key):
+            tallies[key] = tallies.get(key, 0) + 1
         if batch:
-            batch_id, n = (submit_synthesis_batch(conn, client, days, profile, budget()) if budget() else (None, 0))
-            sent += n
-            if n:
-                tally("D requests in a batch", n)
-                log(f"  D: {n} synthesis request(s) in batch {batch_id}")
+            batch_id, k = (submit_synthesis_batch(conn, client, days, profile, budget_d) if budget_d else (None, 0))
+            n += k
+            if k:
+                tallies["D requests in a batch"] = k
+                log(f"  D: {k} synthesis request(s) in batch {batch_id}")
             if batch_id:
                 submitted.append(("D", batch_id))
-        else:
-            waiting = pending_snapshots(conn, "D")
-            history = store.outcome_history(conn, defs.LABEL_VERSION)
-            for day in days:
-                prep = _ready(conn, day, profile, history)
-                if prep["status"] == "stored":
-                    log(f"  {day} D: already issued on this evidence")
-                    continue
-                if prep["status"] == "skipped":
-                    log(f"  {day} D: skipped - {prep['reason']}")
-                    continue
-                if prep["snapshot"]["snapshot_id"] in waiting:
-                    log(f"  {day} D: a request is pending - not sent again")
-                    continue
-                if not budget():
-                    log(f"  {day} D: not sent - the approved request(s) are used")
-                    tally("D not sent")
-                    continue
-                out = synthesize(conn, client, day, profile)
-                sent += out["status"] == "sent"
-                r = out["run"]
-                tally(f"D run {r['lifecycle_status']}")
-                log(f"  {day} D run {r['run_id'][:8]}: {r['lifecycle_status']}"
-                    + (f" - {r['failure_reason']}" if r["failure_reason"] else ""))
+            return n, tallies
+        waiting = pending_snapshots(conn, "D")
+        history = store.outcome_history(conn, defs.LABEL_VERSION)
+        for day in days:
+            prep = _ready(conn, day, profile, history)
+            if prep["status"] == "stored":
+                log(f"  {day} D: already issued on this evidence")
+                continue
+            if prep["status"] == "skipped":
+                log(f"  {day} D: skipped - {prep['reason']}")
+                continue
+            if prep["snapshot"]["snapshot_id"] in waiting:
+                log(f"  {day} D: a request is pending - not sent again")
+                continue
+            if n >= budget_d:
+                log(f"  {day} D: not sent - the approved request(s) are used")
+                mark("D not sent")
+                continue
+            out = synthesize(conn, client, day, profile)
+            n += out["status"] == "sent"
+            r = out["run"]
+            mark(f"D run {r['lifecycle_status']}")
+            log(f"  {day} D run {r['run_id'][:8]}: {r['lifecycle_status']}"
+                + (f" - {r['failure_reason']}" if r["failure_reason"] else ""))
+        return n, tallies
+
+    # Arms C and D are independent requests (D reads arm B's evidence, never C's): live, they run side by side.
+    results = []
+    if c_live and "D" in arms:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            c_future = pool.submit(run_c)
+            results.append(run_d())
+            results.append(c_future.result())
+    else:
+        if c_live:
+            results.append(run_c())
+        if "D" in arms:
+            results.append(run_d())
+    for n, tallies in results:
+        sent += n
+        for key, k in tallies.items():
+            tally(key, k)
     for arm, batch_id in submitted:
         if _wait(client, batch_id, until, sleep, log):
             _collect(conn, client, arm, batch_id, profile, log)

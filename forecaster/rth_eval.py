@@ -187,6 +187,13 @@ def build_forecasts(conn, target: mr.Opening, minutes: int, ranked: Dict[str, An
                    _sources(ranked, set_id, pre_set), set_id)
 
 
+def operational_start(rth_open_at: datetime, built_at: datetime) -> int:
+    """The first minute (after the open) of the operational window for a forecast built at ``built_at``: the second
+    full minute after it - so the window starts 60 to 120 seconds after the build, never inside it, and a forecast
+    stored late is stamped ineligible rather than given a later window."""
+    return int((built_at - rth_open_at) // MINUTE) + ops.LEAD_MINUTES
+
+
 def build_operational(conn, target: mr.Opening, minutes: int, ranked: Dict[str, Any],
                       openings: Dict[str, mr.Opening], set_id: str,
                       built_at: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
@@ -196,7 +203,7 @@ def build_operational(conn, target: mr.Opening, minutes: int, ranked: Dict[str, 
     minutes [S, S + 15) of its own session, from the bars stored now. None when S + 15 lies past 11:30 ET.
     """
     built_at = built_at or datetime.now(timezone.utc)
-    k = int((built_at - target.rth_open_at) // MINUTE) + ops.LEAD_MINUTES
+    k = operational_start(target.rth_open_at, built_at)
     if k + H > ops.LAST_MINUTE or k < minutes:          # never a window that starts before the matched minutes end
         return None
     start = target.rth_open_at + k * MINUTE

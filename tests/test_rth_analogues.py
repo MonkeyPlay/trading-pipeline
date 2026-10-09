@@ -158,6 +158,19 @@ def test_the_operational_evaluation_is_its_own_definition():
     assert ops.VERSION != rth_eval.VERSION and ops.LEAD_MINUTES >= 1
 
 
+def test_the_operational_window_is_fixed_from_the_build_time():
+    """S is the second full minute after the build - 60 to 120 s ahead, at every second of a minute - and is fixed
+    before any member is measured: a slow store does not move it (the database stamps the forecast late)."""
+    from forecaster.rth_eval import operational_start
+    open_at = cal.session(DAY).rth_open_at
+    for second, micro in ((0, 0), (30, 0), (59, 999999)):
+        built = _ny(DAY, 9, 58, second).replace(microsecond=micro)
+        k = operational_start(open_at, built)
+        start = open_at + k * MIN
+        assert k == 30 and timedelta(seconds=60) < start - built <= timedelta(seconds=120)
+    assert operational_start(open_at, _ny(DAY, 9, 59)) == 31                 # the next minute's build: the next S
+
+
 def test_a_window_move_needs_every_bar_confirmed():
     from forecaster.rth_eval import window_move
     closes = {i: 100.0 + i for i in range(0, 40)}

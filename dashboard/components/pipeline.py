@@ -19,8 +19,8 @@ from nicegui import run, ui
 from config import Config
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
-from dashboard.jobs import (RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
-                            llm_command, preview_command, rth_command)
+from dashboard.jobs import (LLM_RUNNER, RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
+                            llm_command, preview_command, rth_command, runner_for)
 from features import calendar as cal
 from forecaster.preview import PreviewUnavailable, preview_target
 from forecaster.rth_analogues import due_window as rth_due
@@ -60,7 +60,7 @@ class PipelinePanel:
         self.on_update: List[Callable[[], Any]] = []     # called when a job this page saw running has ended
         self.job: Optional[Job] = None                   # the job the log shows
         self.seen = 0                                    # its lines already pushed to the log
-        self.watching = False                            # it was running while this page was open
+        self.running: set = set()                        # ids of the jobs (either runner) seen running on this page
         self.preview_possible = False                    # Forecast now has a session to forecast
         self.preview_why = ""                            # which, or why not
         # Shows the preview (the Session Explorer's Forecast now tab): set by the page.
@@ -152,7 +152,7 @@ class PipelinePanel:
             self.log = ui.log(max_lines=_LOG_LINES).classes("w-full h-96 text-xs").style(
                 "background:#131722;font-family:ui-monospace,monospace")
             ui.label("Every run's output is also appended to logs/pipeline_run.log.").classes("text-xs").style(_MUTED)
-        self._follow(RUNNER.job)
+        self._follow(self._latest())
         self._render()
         ui.timer(1.0, self.poll)
 
@@ -164,7 +164,7 @@ class PipelinePanel:
 
     def _start(self, key: str, title: str, steps: List[tuple]) -> None:
         try:
-            self._follow(RUNNER.start(key, title, steps))
+            self._follow(runner_for(key).start(key, title, steps))
         except RuntimeError as e:
             ui.notify(str(e), type="warning")
         self._render()
@@ -328,14 +328,24 @@ class PipelinePanel:
         self._start("live", LIVE, [("live", live_command())])
 
     def stop(self) -> None:
-        if RUNNER.stop():
-            ui.notify(f"Stopping {RUNNER.job.title.lower()}...")
+        runner = runner_for(self.job.key) if self.job is not None else RUNNER
+        if runner.stop():
+            ui.notify(f"Stopping {runner.job.title.lower()}...")
+
+    @staticmethod
+    def _latest() -> Optional[Job]:
+        """The job to show: the more recently started of the two runners' (a running LLM job stays in view while
+        Auto starts its runs beside it - see poll)."""
+        jobs = [j for j in (RUNNER.job, LLM_RUNNER.job) if j is not None]
+        return max(jobs, key=lambda j: j.started_at) if jobs else None
 
     # -- polling ----------------------------------------------------------------
 
     def _follow(self, job: Optional[Job]) -> None:
-        """Shows ``job`` in the log from its first kept line; its end reloads the page when it is running now."""
-        self.job, self.seen, self.watching = job, 0, job is not None and job.running
+        """Shows ``job`` in the log from its first kept line."""
+        self.job, self.seen = job, 0
+        if job is not None and job.running:
+            self.running.add(id(job))
         self.log.clear()
         self._push()
 
@@ -346,31 +356,37 @@ class PipelinePanel:
             self.seen = self.job.line_count
 
     def poll(self) -> None:
-        if RUNNER.job is not self.job:          # started on another page
-            self._follow(RUNNER.job)
+        latest = self._latest()
+        llm_in_view = self.job is not None and self.job.running and runner_for(self.job.key) is LLM_RUNNER
+        if latest is not self.job and not (llm_in_view and latest is not None and latest.key == "auto"):
+            self._follow(latest)                # started on another page (Auto's runs never hide a running LLM job)
         self._push()
         self._render()
-        job = self.job
-        if self.watching and job is not None and not job.running:
-            self.watching = False
-            if job.key != "auto" or job.returncode != 0:      # auto mode runs once a minute: its failures only
-                ui.notify(f"{job.title} {job.outcome} - the page shows the stored data now.",
-                          type="positive" if job.returncode == 0 else "negative", multi_line=True)
-            for callback in self.on_update:
-                try:
-                    callback()
-                except Exception as e:          # one view failing to reload leaves the others
-                    ui.notify(f"Could not reload the page's data: {e}", type="negative")
+        # Any job this page saw running - on either runner, in view or not - reloads the page's data when it ends.
+        for job in [j for j in (RUNNER.job, LLM_RUNNER.job) if j is not None]:
+            if job.running:
+                self.running.add(id(job))
+            elif id(job) in self.running:
+                self.running.discard(id(job))
+                if job.key != "auto" or job.returncode != 0:      # auto mode runs once a minute: its failures only
+                    ui.notify(f"{job.title} {job.outcome} - the page shows the stored data now.",
+                              type="positive" if job.returncode == 0 else "negative", multi_line=True)
+                for callback in self.on_update:
+                    try:
+                        callback()
+                    except Exception as e:          # one view failing to reload leaves the others
+                        ui.notify(f"Could not reload the page's data: {e}", type="negative")
 
     def _render(self) -> None:
         job, busy = self.job, RUNNER.busy
+        llm_busy = LLM_RUNNER.busy
         now = datetime.now(timezone.utc)
         allowed, why = live_window(now)
         self.preview_possible, preview_why = preview_note(now)
         self.preview_why = preview_why
         self.collect_button.set_enabled(not busy)
         self.forecast_button.set_enabled(not busy)
-        self.llm_button.set_enabled(not busy)
+        self.llm_button.set_enabled(not llm_busy)
         self.preview_button.set_enabled(not busy and self.preview_possible)
         self.live_button.set_enabled(not busy and allowed)
         note = ("Possible " if self.preview_possible else "Not possible now: ") + preview_why
@@ -381,9 +397,10 @@ class PipelinePanel:
         if note != self.live_note.text:
             self.live_note.set_text(note)
             self.live_note.style(f"color:{'#26a69a' if allowed else '#787b86'}")
-        self.stop_button.set_visibility(busy)
-        self.spinner.set_visibility(busy)
-        self.button.set_text(f"{job.title} · {_elapsed(job)}" if busy else "Update data")
+        shown_running = job is not None and job.running
+        self.stop_button.set_visibility(shown_running)
+        self.spinner.set_visibility(busy or llm_busy)
+        self.button.set_text(f"{job.title} · {_elapsed(job)}" if shown_running else "Update data")
         if job is None:
             self.status.set_content(f"<span style='{_MUTED}'>Nothing run from the dashboard since it started.</span>")
             return

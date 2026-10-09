@@ -50,11 +50,15 @@ PRIOR_VERSION = "nq_prior_p1_v1"
 # 15m bars and the final 2m bars with the moving averages beside the frozen annotation, analogues and baseline).
 SYNTHESIS_EVIDENCE = ("bars_15m", "bars_2m_final")
 RESTRICTED_VERSION = "nq_restricted_p1_v3"       # arm C: the baseline over the restricted Claude annotation
-SYNTHESIS_VERSION = "nq_synthesis_p1_v4"         # arm D: Claude's forecast synthesis (Appendix A, A2)
+# Synthesis v5 (2026-10-09, an audit): v4's bundle carried only the threshold T, though its prompt named B and the
+# RTH close direction (B) and session type (A, B) targets need them - v5 adds B and A to the session block and makes
+# those targets ineligible when they are unavailable (no frozen daily ATR). Everything else is v4's.
+SYNTHESIS_VERSION = "nq_synthesis_p1_v5"         # arm D: Claude's forecast synthesis (Appendix A, A2)
+SYNTHESIS_THRESHOLDS = {"close_direction_rth": ("B",), "session_type_rth": ("A", "B")}
 SYNTHESIS_SCHEMA_VERSION = "nq_forecast_schema_v2"
 SYNTHESIS_MAX_TOKENS = 64000                     # thinking included; the request is streamed
 SYNTHESIS_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
-                                "forecast_synthesis_v4.md")
+                                "forecast_synthesis_v5.md")
 # nq_issue_live_v1 (registered 2026-10-04) never issued a run; v2 adds the capture rules of 3D.
 ISSUE_POLICIES = {"historical_replay": "nq_issue_replay_v1", "live": "nq_issue_live_v2"}
 LIVE_DEADLINE_ET = time(9, 29, 50)
@@ -248,7 +252,7 @@ ARMS = {"A": PRIOR_VERSION, "B": BASELINE_VERSION, "C": RESTRICTED_VERSION, "D":
 ARM_NAMES = {"A": "prior", "B": "baseline", "C": "restricted LLM", "D": "synthesis"}
 # Earlier versions of an arm: their runs stay that arm's on the Forecast page.
 ARM_HISTORY = {"C": ("nq_restricted_p1_v1", "nq_restricted_p1_v2"),
-               "D": ("nq_synthesis_p1_v1", "nq_synthesis_p1_v2", "nq_synthesis_p1_v3")}
+               "D": ("nq_synthesis_p1_v1", "nq_synthesis_p1_v2", "nq_synthesis_p1_v3", "nq_synthesis_p1_v4")}
 
 
 def arm_of(algorithm: str) -> Optional[str]:
@@ -295,14 +299,15 @@ def synthesis_definition() -> Dict[str, Any]:
     return {
         "name": "arm D (guideline revision 2, 4B): Claude's forecast synthesis (Appendix A, A2)",
         "model": pre.LLM_MODEL, "effort": pre.ARMS_EFFORT, "max_tokens": SYNTHESIS_MAX_TOKENS,
-        "prompt": {"path": "prompts/runtime/forecast_synthesis_v4.md", "sha256": prompt_sha256,
+        "prompt": {"path": "prompts/runtime/forecast_synthesis_v5.md", "sha256": prompt_sha256,
                    "sources": ["A (A2)", f"{defs.LABEL_VERSION} target rules"]},
         "output_schema": synthesis_output_schema(),
         "inputs": f"arm B's explicit evidence: the snapshot (its references, 15m bars and final 2m bars with the "
                   f"moving averages), its {pre.RULES_PROTOCOL_VERSION} annotation and that annotation's analogue "
                   f"set with the analogues' frozen outcome labels, the prior and the smoothed baseline per target, "
-                  f"each target's eligibility and vocabulary - date-blinded ({pre.BLINDING}); analogues are named "
-                  f"analogue:<rank>",
+                  f"each target's eligibility and vocabulary, and the frozen thresholds T, B and A (index points) - "
+                  f"date-blinded ({pre.BLINDING}); analogues are named analogue:<rank>; a target needing B or A "
+                  f"(RTH close direction, session type) is ineligible when it is unavailable",
         "schema_version": SYNTHESIS_SCHEMA_VERSION,
         "request": "live, streamed (thinking counts against max_tokens; the SDK streams a request this long) with "
                    "the server-side refusal fallback - or through the Batch API (half price, no fallback there); a "
@@ -327,7 +332,8 @@ def synthesis_definition() -> Dict[str, Any]:
         "confidence": "P1 field 36: the synthesis' integer 1-5 for evidence and conviction (A2), not calibration",
         "reference_targets": "the application's, from the frozen candidates (as the baseline), never the model's",
         "issue": "only by a run started by hand; the same evidence is never sent twice once a run is issued",
-        "supersedes": "nq_synthesis_p1_v3: effort xhigh (its first answer used 6,568 tokens) and the 5m bars and "
+        "supersedes": "nq_synthesis_p1_v4: its bundle carried only T, though its prompt named B and two targets need B "
+                      "or A; v3: effort xhigh (its first answer used 6,568 tokens) and the 5m bars and "
                       "swing points besides; v2: one "
                       "object per target with named probability fields - the API refused its compiled grammar as "
                       "too large; v1: 29 nullable fields and 20,000 tokens",

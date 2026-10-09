@@ -50,7 +50,10 @@ failed in the same job (no RTH set is issued from a collection that failed).
 A job has no terminal (its stdin is empty), so nothing that asks a person - such as
 the confirmation the Claude API requests need (they are manual only) - can run here.
 
-One job runs at a time. It belongs to the dashboard process, not to a browser
+One job runs at a time on a runner: RUNNER for collection, the journal, previews and
+the live capture (and Auto), LLM_RUNNER for the Claude arms (runner_for) - so a long
+LLM job, which can wait half an hour for a batch, never stops Auto from collecting
+and recording the session. A job belongs to the dashboard process, not to a browser
 tab: every page shows the same job and its output, a page opened while it runs
 picks it up, and closing the tab does not stop it. Its output is appended to
 logs/pipeline_run.log, beside the scheduled runs'. Auto mode belongs to the process
@@ -495,6 +498,14 @@ class AutoMode:
             pass
 
 
-# The dashboard's one runner, shared by every page, and its auto mode.
+# The dashboard's runners, shared by every page, and its auto mode: LLM jobs on their own runner, so Auto (which waits
+# while RUNNER is busy) keeps collecting during them. Both write the same log.
 RUNNER = JobRunner()
+LLM_RUNNER = JobRunner()
 AUTO = AutoMode(RUNNER)
+LLM_JOBS = ("llm",)
+
+
+def runner_for(key: str) -> JobRunner:
+    """The runner a job of ``key`` runs on: LLM_RUNNER for the Claude arms, RUNNER for everything else."""
+    return LLM_RUNNER if key in LLM_JOBS else RUNNER

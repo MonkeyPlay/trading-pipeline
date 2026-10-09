@@ -42,7 +42,7 @@ stored. ``reload`` reads the preview again; a Forecast now job switches to its t
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from nicegui import ui
 
@@ -51,7 +51,7 @@ from contracts import nq_prompt_v2 as defs
 from dashboard.components.fan import current_session
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import frozen_preopen_spec
-from dashboard.jobs import RUNNER
+from dashboard.jobs import LLM_RUNNER, RUNNER
 from database import journal_store as store
 from features import calendar as cal
 from forecaster import preview as pv
@@ -82,11 +82,46 @@ def _et(value: str, fmt: str = "%H:%M") -> str:
     return f"{t.astimezone(cal.NY_TZ):{fmt}} ET"
 
 
+def _span(minutes: float) -> str:
+    """A duration as read: minutes, hours or days."""
+    m = abs(minutes)
+    return f"{m:.0f} min" if m < 120 else f"{m / 60:.1f} h" if m < 48 * 60 else f"{m / 1440:.0f} days"
+
+
+def issue_timing(run: Dict[str, Any]) -> Tuple[str, Dict[str, str]]:
+    """``(line, over)``: when a stored run was issued against its session's cutoff and open - a forecast, or a record
+    made after the fact - and the targets whose window had already ended by then (target -> its ET end)."""
+    issued = run.get("issued_at") or run.get("created_at")
+    if not issued:
+        return "", {}
+    at = datetime.fromisoformat(str(issued).replace("Z", "").replace(" ", "T")).replace(tzinfo=timezone.utc)
+    day = str(run["session_date"])
+    try:
+        s = cal.session(day)
+    except cal.CalendarCoverageError:
+        return "", {}
+    cutoff = datetime.fromisoformat(str(run["input_cutoff_at"]).replace("Z", "").replace(" ", "T")).replace(
+        tzinfo=timezone.utc)
+    after_open = (at - s.rth_open_at).total_seconds() / 60
+    kind = ("issued live" if run.get("mode") == "live" else
+            "a historical replay - built after the fact, a record rather than a forecast" if after_open > 24 * 60 else
+            "a historical replay on the session's day")
+    line = (f"Issued {at.astimezone(cal.NY_TZ):%Y-%m-%d %H:%M} ET, {_span((at - cutoff).total_seconds() / 60)} after "
+            f"its {cutoff.astimezone(cal.NY_TZ):%H:%M} ET cutoff"
+            + (f" and {_span(after_open)} after the open" if after_open > 0 else
+               f", {_span(after_open)} before the open") + f" - {kind}.")
+    return line, windows_over(day, at, [t for _, t in fc.FORECAST_TARGETS])
+
+
 def _targets_grid(run: Dict[str, Any], title: str, over: Optional[Dict[str, str]] = None) -> None:
     """A run's per-target view where it is called: class, distribution and denominators; ``over`` - target -> the
-    ET end of its window - marks the targets of a session in progress already observed."""
+    ET end of its window - marks the targets of a session in progress already observed; a target whose window had
+    ended when the run was issued is marked as such (issue_timing)."""
     ui.label(title).classes("text-sm font-medium")
     over = over or {}
+    timing, at_issue = issue_timing(run)
+    if timing:
+        ui.label(timing).classes("text-xs").style(_MUTED)
     rows = target_rows(run)
     if not rows:
         ui.label(f"No predictions: {run['failure_reason']}").classes("text-xs").style(_MUTED)
@@ -96,9 +131,11 @@ def _targets_grid(run: Dict[str, Any], title: str, over: Optional[Dict[str, str]
         for head in ("P1 property", "class", "distribution", "n / prior"):
             ui.label(head).classes(_CELL).style(_MUTED)
         for r in rows:
-            done = over.get(r["target"])
-            ui.label(r["property"] + (f" — window over at {done} ET: observed, no longer a forecast" if done else "")
-                     ).classes(_CELL + " break-words").style(_MUTED + (";color:#ffa726" if done else ""))
+            done, before = over.get(r["target"]), at_issue.get(r["target"])
+            note = (f" — its window had ended ({before} ET) when this run was issued: a record, not a forecast"
+                    if before else f" — window over at {done} ET: observed, no longer a forecast" if done else "")
+            ui.label(r["property"] + note
+                     ).classes(_CELL + " break-words").style(_MUTED + (";color:#ffa726" if done or before else ""))
             ui.label(r["class"] if r["status"] == "predicted" else f"{r['class']} - {r['reason']}").classes(
                 _CELL + " break-words")
             ui.label(", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-").classes(
@@ -146,7 +183,7 @@ class ForecastPanel:
         self._render_preview()
         if RUNNER.job is not None and RUNNER.job.key == "preview":
             self.tabs.set_value("preview")
-        elif RUNNER.job is not None and RUNNER.job.key == "llm":
+        elif LLM_RUNNER.job is not None and LLM_RUNNER.job.key == "llm" and not LLM_RUNNER.busy:
             self.tabs.set_value("stored")
 
     def show_preview(self) -> None:

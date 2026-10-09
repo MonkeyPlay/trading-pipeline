@@ -321,3 +321,53 @@ def test_a_section_of_the_bundle_can_be_cited():
     assert la.validate_synthesis(json.loads(json.dumps(answer)), {f"baseline:{t}" for t in TARGETS} | ids,
                                  {t: None for t in TARGETS},
                                  {t: b["baseline"][f"baseline:{t}"]["predicted_class"] for t in TARGETS}) is None
+
+
+def test_the_synthesis_gets_the_thresholds_its_targets_need():
+    """v4's bundle carried only T although its prompt named B and two targets need B or A: v5 adds them, and a
+    target whose threshold is unavailable (no frozen daily ATR) is ineligible, not predicted from nothing."""
+    assert fc.SYNTHESIS_VERSION == "nq_synthesis_p1_v5" and "nq_synthesis_p1_v4" in fc.ARM_HISTORY["D"]
+    assert fc.SYNTHESIS_THRESHOLDS == {"close_direction_rth": ("B",), "session_type_rth": ("A", "B")}
+    for t in fc.SYNTHESIS_THRESHOLDS:                     # the rule text names the thresholds the bundle now carries
+        assert set(fc.SYNTHESIS_THRESHOLDS[t]) <= set(re.findall(r"\b[AB]\b", defs.TARGETS[t]["rule"] + " "
+                                                                   + str(defs.TARGETS[t].get("threshold"))))
+    full = {"T": 7, "B": 20, "A": "1903/5"}
+    assert la._threshold_missing("close_direction_rth", full) is None
+    assert "threshold B unavailable" in la._threshold_missing("close_direction_rth", {"T": 7, "B": None, "A": None})
+    assert "threshold A and B unavailable" in la._threshold_missing("session_type_rth", {"T": 7})
+    assert la._threshold_missing("direction_15m", {"T": 7}) is None                  # needs T only
+    with open(fc.SYNTHESIS_PROMPT, encoding="utf-8") as f:
+        assert "T, B and A are the thresholds in the bundle's session block" in f.read()
+
+
+def test_arms_c_and_d_run_side_by_side(monkeypatch):
+    """D never reads C's answers: live, their requests overlap instead of waiting for each other."""
+    import time as _time
+    seen = {}
+
+    def slow(name):
+        def call(*args, **kwargs):
+            seen[name] = [_time.monotonic()]
+            _time.sleep(0.4)
+            seen[name].append(_time.monotonic())
+            return ({"status": "ok"} if name == "C" else
+                    {"status": "sent", "run": {"run_id": "r" * 36, "lifecycle_status": "issued", "failure_reason": None}})
+        return call
+    day = "2026-10-01"
+    monkeypatch.setattr(la.store, "list_snapshots", lambda *a, **k: [{"snapshot_id": "s1", "session_date": day}])
+    monkeypatch.setattr(la.store, "latest_annotation", lambda *a, **k: None)
+    monkeypatch.setattr(la.store, "outcome_history", lambda *a, **k: {})
+    monkeypatch.setattr(la, "pending_snapshots", lambda conn, arm: set())
+    monkeypatch.setattr(la, "pending_batches", lambda conn: {})
+    monkeypatch.setattr(la, "_ready", lambda *a, **k: {"status": "ready", "snapshot": {"snapshot_id": "s1"}})
+    monkeypatch.setattr(la.sl, "annotate_live", slow("C"))
+    monkeypatch.setattr(la, "synthesize", slow("D"))
+    monkeypatch.setattr(la.journal, "match", lambda *a, **k: 0)
+    monkeypatch.setattr(la, "forecast_session", lambda *a, **k: None)
+    started = _time.monotonic()
+    out = la.run(None, object(), days=[day], arms=("C", "D"), log=lambda line: None)
+    assert seen["C"][0] < seen["D"][1] and seen["D"][0] < seen["C"][1]                 # they overlapped
+    assert _time.monotonic() - started < 0.75                                           # not 0.8 s in turn
+    assert out["requests_sent"] == 2 and out["counts"] == {"C annotation ok": 1, "D run issued": 1}
+    one = la.run(None, object(), days=[day], arms=("C", "D"), max_requests=1, log=lambda line: None)
+    assert one["requests_sent"] == 1                                                    # C first, as before

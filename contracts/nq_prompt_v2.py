@@ -549,11 +549,26 @@ def threshold_b(daily_atr: Optional[Exact]) -> Optional[int]:
     return max(1, math.ceil(Fraction(daily_atr) / 20))
 
 
+# The registered display names (TARGETS, part of the label definitions) call a net-change neutral class "Two-sided"
+# and P1 calls it "Choppy" - both describe a path, while the class is only the net change ending within the band (a
+# quiet session qualifies; a whipsaw ending beyond it does not). And the first move's "neither" (no +-T touch in five
+# minutes) is shown "Two-sided", the opposite of what happened. Shown instead (2026-10-09 audit); the definitions,
+# their hashes and every stored label are unchanged.
+DISPLAY_CLARIFIED = {
+    ("direction_15m", "neutral_band"): "Flat (net within +-T)",
+    ("opening_bias_30m", "neutral_band"): "Flat (net within +-T)",
+    ("close_direction_rth", "neutral_band"): "Flat (net within +-B)",
+    ("ib_direction", "neutral_band"): "Flat (net within the band)",
+    ("first_move_5m", "neither"): "Neither (no +-T touch)",
+}
+
+
 def display(target: str, label: Optional[str], side: str = "realised") -> str:
-    """The prompt's display string for a canonical label (``side``: realised | predicted)."""
+    """The display string for a canonical label (``side``: realised | predicted): the prompt's, except where it would
+    describe a path the class does not (DISPLAY_CLARIFIED)."""
     if label is None:
         return UNAVAILABLE_DISPLAY
-    return TARGETS[target][f"display_{side}"][label]
+    return DISPLAY_CLARIFIED.get((target, label)) or TARGETS[target][f"display_{side}"][label]
 
 
 # --------------------------------------------------------------------------
