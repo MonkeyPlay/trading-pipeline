@@ -90,7 +90,8 @@ def experiment_manifest(name: str, start: str, end: str, profile: str = defs.DEF
         raise ValueError("first_timely applies to live runs only")
     if purpose not in ("development", "test"):
         raise ValueError("purpose must be development or test")
-    unknown = [a for a in arms.values() if a not in fc.ALGORITHMS]
+    # the arms computed from the evidence (fc.ALGORITHMS) and the synthesis, which Claude issues on it
+    unknown = [a for a in arms.values() if a not in fc.ALGORITHMS and a != fc.SYNTHESIS_VERSION]
     if unknown:
         raise ValueError(f"unknown forecast algorithm(s): {', '.join(unknown)}")
     targets = [t for _, t in fc.FORECAST_TARGETS]
@@ -391,8 +392,9 @@ def score_experiment(conn, name: str) -> Dict[str, Any]:
             by_arm[arm] = scores
             entry["arms"][arm] = arm_summary(list(scores.values()), [runs[arm][d] for d in scores],
                                              manifest["arms"][arm]["algorithm"] == fc.BASELINE_VERSION)
-        for arm in arms[1:]:
-            entry["paired"][f"{arm}-{arms[0]}"] = paired(by_arm[arms[0]], by_arm[arm], days, manifest["uncertainty"])
+        # the manifest's own pairs (arm minus base), else each arm against the first - as every earlier manifest
+        for arm, base in manifest.get("pairs") or [(a, arms[0]) for a in arms[1:]]:
+            entry["paired"][f"{arm}-{base}"] = paired(by_arm[base], by_arm[arm], days, manifest["uncertainty"])
         vocab = list(defs.TARGETS[target]["labels"])
         common = [d for d in days if all(by_arm[a].get(d, {}).get("status") == "scored" for a in arms)]
         entry["classes"] = []

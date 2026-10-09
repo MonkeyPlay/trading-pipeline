@@ -40,6 +40,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py rth-show --date 2026-10-07 --minute 15     # reconstructed view at 09:45
     python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 10:05   # as issued by 10:05 ET
     python scripts/nq_journal.py rth-calibrate --end 2026-10-07              # reproduce the tolerances' calibration
+    python scripts/nq_journal.py timeliness --start 2026-10-05 --end 2026-10-16   # pre-open cutoffs vs the open
     python scripts/nq_journal.py rth-eval-status                            # both evaluations' health - never a score
     python scripts/nq_journal.py rth-eval-score --version rth_operational_v1   # one scoring, at the endpoint only
     python scripts/nq_journal.py review-set --name stage1_review_v1          # choose the 25-session review set
@@ -320,6 +321,7 @@ def cmd_llm_forecast(conn, args):
             print(f"Claude API unavailable ({type(e).__name__}: {e}). Set ANTHROPIC_API_KEY in .env.")
             return 1
         summary = la.run(conn, client, args.sessions, arms, args.profile, max_requests=cap, days=days,
+                         connect=lambda: get_db_connection(args.db),
                          batch=args.batch, wait_minutes=args.wait_minutes)
     print(f"{summary['requests_sent']} request(s) sent; " + ", ".join(f"{k}: {v}" for k, v in summary["counts"].items()))
     bad = [k for k in summary["counts"] if any(w in k for w in ("failed", "invalid", "error", "refused"))]
@@ -531,8 +533,14 @@ def cmd_experiment_register(conn, args):
     """Registers an experiment's manifest (forecaster/experiments.py) - before any score exists."""
     from forecaster import experiments as ex
     try:
-        manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
-                                          args.official_run)
+        if args.design == "d-research":
+            from contracts import p1_d_research
+            if args.name != p1_d_research.NAME:
+                raise ValueError(f"the d-research design is named {p1_d_research.NAME}")
+            manifest = p1_d_research.manifest(args.start, args.end)
+        else:
+            manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
+                                              args.official_run)
         new = ex.register_experiment(conn, manifest)
     except (ValueError, store.VersionConflict) as e:
         print(f"Not registered: {e}")
@@ -843,6 +851,20 @@ def cmd_rth_eval_score(conn, args):
     return 0
 
 
+def cmd_timeliness(conn, args):
+    """When a pre-open forecast at each candidate cutoff could actually have been issued on this feed, measured from
+    the bars' receipt times and the Auto runs' recorded ends (forecaster/timeliness.py) - nothing forecast, scored
+    or sent. Writes docs/reports/preopen_timeliness.md."""
+    from forecaster import timeliness as tl
+    days = [s.session_date.isoformat() for s in _sessions(args)]
+    text = tl.report(tl.measure(conn, days))
+    path = os.path.join(_PROJECT_ROOT, "docs", "reports", "preopen_timeliness.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(text + f"\nWritten to {path}")
+    return 0
+
+
 def cmd_live_report(conn, args):
     """Every live capture of a date range with its steps as seconds after the cutoff (database clock)."""
     from forecaster import live_capture as live
@@ -980,6 +1002,9 @@ def main(argv=None):
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))
     p.add_argument("--purpose", default="development", choices=("development", "test"))
     p.add_argument("--official-run", default="first", choices=("first", "latest", "first_timely"))
+    p.add_argument("--design", choices=("ab", "d-research"), default="ab",
+                   help="d-research: p1_d_research_v1 (arms A, B, D; contracts/p1_d_research.py) - registering sends "
+                        "no request and schedules nothing")
     p = sub.add_parser("experiment-score", help="Freeze, score and report a registered experiment")
     p.add_argument("--name", required=True)
     p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
@@ -1013,6 +1038,10 @@ def main(argv=None):
     p = sub.add_parser("rth-calibrate", help="Reproduce the RTH matcher's tolerance calibration (stores nothing)")
     p.add_argument("--start", help="First session date (default: all)")
     p.add_argument("--end", required=True, help="Last session date")
+    p = sub.add_parser("timeliness", help="When pre-open forecasts at candidate cutoffs could have been issued")
+    p.add_argument("--date", help="Session date YYYY-MM-DD")
+    p.add_argument("--start", help="First session date (inclusive)")
+    p.add_argument("--end", help="Last session date (inclusive)")
     p = sub.add_parser("live-report", help="Live captures and their timing")
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
@@ -1036,7 +1065,7 @@ def main(argv=None):
         parser.error("give --start and --end")
     if args.command == "annotate-llm" and not args.date and not (args.start and args.end):
         parser.error("give --date, or --start and --end")
-    if args.command == "rth-backfill" and not args.date and not (args.start and args.end):
+    if args.command in ("rth-backfill", "timeliness") and not args.date and not (args.start and args.end):
         parser.error("give --date, or --start and --end")
     if args.command in ("show", "analogues", "rth-show") and not args.date:
         parser.error("give --date")
@@ -1057,7 +1086,7 @@ def main(argv=None):
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
                    "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
                    "preview": cmd_preview, "llm-forecast": cmd_llm_forecast, "rth-issue": cmd_rth_issue,
-                   "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate,
+                   "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate, "timeliness": cmd_timeliness,
                    "rth-eval-status": cmd_rth_eval_status, "rth-eval-score": cmd_rth_eval_score,
                    "review-report": cmd_review_report}[args.command]
         return handler(conn, args)

@@ -800,3 +800,29 @@ def test_the_operational_forecast_is_for_a_window_after_it(journal):
               if x["session_date"] == days[-13]}
     assert {ra.utc(v) for v in starts.values()} == {_ny(days[-13], 10, 35)}
 
+
+@needs_db
+def test_timeliness_is_measured_from_receipts_and_run_ends(journal):
+    """A cutoff's forecast could be issued at the end of the Auto run that stored the bar confirming its cutoff bar;
+    D adds its measured generation time; the open is the deadline. A morning nothing collected is a miss."""
+    from forecaster import timeliness as tl
+    from tests.synthetic import NQ_CID
+    conn, days = journal
+    day, other = days[-15], days[-16]
+    stored = lambda hh, mm, ss=0: _ny(day, hh, mm, ss)
+    with conn:
+        conn.execute("UPDATE bars SET first_stored_at = timestamp_utc + interval '10 minutes 12 seconds' "
+                     "WHERE contract_id = %s AND trading_day = %s;", (NQ_CID, day))
+        conn.execute("UPDATE bars SET first_stored_at = timestamp_utc + interval '1 day' "
+                     "WHERE contract_id = %s AND trading_day = %s;", (NQ_CID, other))
+    ends = [stored(9, 26, 32), stored(9, 31, 31), stored(9, 35, 30), stored(9, 40, 29), _ny(other, 23, 59)]
+    res = tl.measure(conn, [other, day], ends=ends, d_seconds=[25.0, 27.0, 30.0])
+    c15 = res["candidates"]["09:15"]
+    row = next(r for r in c15["sessions"] if r["session_date"] == day)
+    assert row["ready"] == stored(9, 25, 12)                   # the 09:15 bar (confirms 09:14) stored 10:12 after it began
+    assert row["ab"] == stored(9, 26, 32) and row["ab_slack_s"] == 208
+    assert row["d_slack_median_s"] == 208 - 27 and row["d_slack_worst_s"] == 208 - 30
+    assert c15["ab_hits"] == (1, 2) and c15["missed"] == 1    # the other morning: stored a day later - a miss
+    assert res["candidates"]["09:29"]["ab_hits"] == (0, 2)
+    assert "a morning nothing was collected counts as a miss" in tl.report(res)
+

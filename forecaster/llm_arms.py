@@ -796,14 +796,17 @@ def _collect(conn, client, arm: str, batch_id: str, profile: str, log) -> None:
 def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profile: str = defs.DEFAULT_PROFILE,
         max_requests: Optional[int] = None, log: Callable[[str], None] = print,
         now: Optional[datetime] = None, days: Optional[Sequence[str]] = None, batch: bool = False,
-        wait_minutes: float = 30, sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
+        wait_minutes: float = 30, sleep: Callable[[float], None] = time.sleep,
+        connect: Optional[Callable[[], Any]] = None) -> Dict[str, Any]:
     """
     Arms C and D over the last ``sessions`` sessions - or the chosen ``days`` - oldest first: first the recorded
     batches of earlier runs that have ended are collected; then the restricted annotations still missing and arm
     D's syntheses, sent live side by side (D never reads C's answers) or each as one batch; a batch is waited for at most ``wait_minutes`` (one
     still processing is collected by a later run); then arm C's analogue sets and runs. At most ``max_requests``
-    requests in all; a request recorded but not answered is never sent again. Requests need
-    structure_llm.manual_requests (every sending and collecting function checks it).
+    requests in all - C's live requests are counted before D's, so the two side by side never exceed it; a request
+    recorded but not answered is never sent again. Requests need structure_llm.manual_requests (every sending and
+    collecting function checks it). ``connect`` opens a database connection of its own for C's side when the two run
+    side by side (the CLI passes it); without it they share ``conn``, whose statements are serialised.
     """
     version = defs.PROFILES[profile].snapshot_version
     days = [d for d in target_sessions(sessions, now, days) if store.list_snapshots(conn, d, d, version)]
@@ -843,11 +846,11 @@ def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profi
     c_live = [] if batch else todo_c
     budget_d = budget() - len(c_live)                    # C's requests are counted before D's, as when in turn
 
-    def run_c() -> Tuple[int, Dict[str, int]]:
+    def run_c(c_conn) -> Tuple[int, Dict[str, int]]:
         """Arm C's live annotation requests - beside arm D's, which do not read them."""
         n, tallies = 0, {}
         for snap in c_live:
-            attempt = sl.annotate_live(conn, client, snap, RESTRICTED)
+            attempt = sl.annotate_live(c_conn, client, snap, RESTRICTED)
             n += attempt["status"] != "contaminated"
             key = f"C annotation {attempt['status']}"
             tallies[key] = tallies.get(key, 0) + 1
@@ -897,13 +900,18 @@ def run(conn, client, sessions: int = 1, arms: Sequence[str] = ("C", "D"), profi
     # Arms C and D are independent requests (D reads arm B's evidence, never C's): live, they run side by side.
     results = []
     if c_live and "D" in arms:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            c_future = pool.submit(run_c)
-            results.append(run_d())
-            results.append(c_future.result())
+        c_conn = connect() if connect is not None else conn       # its own connection: nothing shared with D's side
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                c_future = pool.submit(run_c, c_conn)
+                results.append(run_d())
+                results.append(c_future.result())
+        finally:
+            if c_conn is not conn:
+                c_conn.close()
     else:
         if c_live:
-            results.append(run_c())
+            results.append(run_c(conn))
         if "D" in arms:
             results.append(run_d())
     for n, tallies in results:

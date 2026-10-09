@@ -341,33 +341,53 @@ def test_the_synthesis_gets_the_thresholds_its_targets_need():
 
 
 def test_arms_c_and_d_run_side_by_side(monkeypatch):
-    """D never reads C's answers: live, their requests overlap instead of waiting for each other."""
+    """D never reads C's answers: live, their requests overlap instead of waiting for each other - C on a database
+    connection of its own, closed after - and the two together never exceed the approved request budget."""
     import time as _time
-    seen = {}
+    seen, conns = {}, {}
+
+    class Conn:
+        def __init__(self, name):
+            self.name, self.closed = name, False
+
+        def close(self):
+            self.closed = True
 
     def slow(name):
-        def call(*args, **kwargs):
-            seen[name] = [_time.monotonic()]
-            _time.sleep(0.4)
-            seen[name].append(_time.monotonic())
+        def call(c, *args, **kwargs):
+            seen.setdefault(name, []).append((_time.monotonic(), None))
+            conns.setdefault(name, set()).add(c.name)
+            _time.sleep(0.3)
+            seen[name][-1] = (seen[name][-1][0], _time.monotonic())
             return ({"status": "ok"} if name == "C" else
                     {"status": "sent", "run": {"run_id": "r" * 36, "lifecycle_status": "issued", "failure_reason": None}})
         return call
-    day = "2026-10-01"
-    monkeypatch.setattr(la.store, "list_snapshots", lambda *a, **k: [{"snapshot_id": "s1", "session_date": day}])
+    days = ["2026-10-01", "2026-10-02", "2026-10-05"]
+    monkeypatch.setattr(la.store, "list_snapshots", lambda conn, d, *a, **k: [{"snapshot_id": f"s-{d}", "session_date": d}])
     monkeypatch.setattr(la.store, "latest_annotation", lambda *a, **k: None)
     monkeypatch.setattr(la.store, "outcome_history", lambda *a, **k: {})
     monkeypatch.setattr(la, "pending_snapshots", lambda conn, arm: set())
     monkeypatch.setattr(la, "pending_batches", lambda conn: {})
-    monkeypatch.setattr(la, "_ready", lambda *a, **k: {"status": "ready", "snapshot": {"snapshot_id": "s1"}})
+    monkeypatch.setattr(la, "_ready", lambda conn, day, *a, **k: {"status": "ready", "snapshot": {"snapshot_id": day}})
     monkeypatch.setattr(la.sl, "annotate_live", slow("C"))
-    monkeypatch.setattr(la, "synthesize", slow("D"))
+    monkeypatch.setattr(la, "synthesize", lambda c, client, day, profile: slow("D")(c))
     monkeypatch.setattr(la.journal, "match", lambda *a, **k: 0)
     monkeypatch.setattr(la, "forecast_session", lambda *a, **k: None)
+    opened = []
+
+    def connect():
+        opened.append(Conn("c-side"))
+        return opened[-1]
     started = _time.monotonic()
-    out = la.run(None, object(), days=[day], arms=("C", "D"), log=lambda line: None)
-    assert seen["C"][0] < seen["D"][1] and seen["D"][0] < seen["C"][1]                 # they overlapped
-    assert _time.monotonic() - started < 0.75                                           # not 0.8 s in turn
+    out = la.run(Conn("main"), object(), days=days[:1], arms=("C", "D"), log=lambda line: None, connect=connect)
+    (c0, c1), (d0, d1) = seen["C"][0], seen["D"][0]
+    assert c0 < d1 and d0 < c1                                                         # they overlapped
+    assert _time.monotonic() - started < 0.55                                           # not 0.6 s in turn
+    assert conns == {"C": {"c-side"}, "D": {"main"}} and opened[0].closed               # independent, then closed
     assert out["requests_sent"] == 2 and out["counts"] == {"C annotation ok": 1, "D run issued": 1}
-    one = la.run(None, object(), days=[day], arms=("C", "D"), max_requests=1, log=lambda line: None)
-    assert one["requests_sent"] == 1                                                    # C first, as before
+    for cap, c_n, d_n in ((4, 3, 1), (2, 2, 0), (6, 3, 3)):                             # C counted first, as before
+        seen.clear()
+        res = la.run(Conn("main"), object(), days=days, arms=("C", "D"), max_requests=cap, log=lambda line: None,
+                     connect=connect)
+        assert res["requests_sent"] == c_n + d_n <= cap
+        assert len(seen.get("C", [])) == c_n and len(seen.get("D", [])) == d_n

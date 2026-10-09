@@ -706,6 +706,42 @@ def test_a_registered_experiment_is_frozen_scored_and_immutable(market, tmp_path
             conn.execute(sql)
 
 
+@needs_db
+def test_the_d_only_design_registers_without_a_request_and_pairs_d_with_b(market, monkeypatch, capsys):
+    """p1_d_research_v1: registering writes one definition and sends nothing (a Claude client cannot even be built);
+    its explicit pairs are scored - D minus B, D minus A, B minus A - and a session D was not run for is a counted
+    case without a run, never dropped."""
+    import anthropic
+    from contracts import nq_forecast as fc
+    from contracts import p1_d_research
+    from database import journal_store as store
+    from forecaster import experiments as ex
+    from forecaster.forecast_service import forecast_all
+    from scripts.nq_journal import main
+
+    def no_client(*args, **kwargs):
+        raise AssertionError("registering must not build a Claude client")
+    monkeypatch.setattr(anthropic, "Anthropic", no_client)
+    conn = market[0]
+    forecast_all(conn)
+    assert main(["--db", DSN, "experiment-register", "--name", p1_d_research.NAME, "--design", "d-research",
+                 "--start", "2026-06-01", "--end", DAY]) == 0
+    assert "No score has been computed" in capsys.readouterr().out
+    manifest = ex.load_manifest(conn, p1_d_research.NAME)
+    assert {k: v["algorithm"] for k, v in manifest["arms"].items()} == {
+        "A": fc.PRIOR_VERSION, "B": fc.BASELINE_VERSION, "D": fc.SYNTHESIS_VERSION}
+    assert manifest["pairs"] == [["D", "B"], ["D", "A"], ["B", "A"]] and "never a timeliness" in manifest["research_only"]
+    assert "sends nothing" in manifest["controls"]
+    results = ex.score_experiment(conn, p1_d_research.NAME)
+    assert set(results["primary"]["paired"]) == {"D-B", "D-A", "B-A"}
+    assert results["primary"]["paired"]["B-A"]["common"] > 0 and results["primary"]["paired"]["D-B"]["common"] == 0
+    cases = store.experiment_cases(conn, p1_d_research.NAME)
+    assert {c["status"] for c in cases if c["arm"] == "D"} == {"no_run"}                # counted, not dropped
+    assert main(["--db", DSN, "experiment-register", "--name", "other", "--design", "d-research", "--start",
+                 "2026-06-01", "--end", DAY]) == 1
+    assert "named p1_d_research_v1" in capsys.readouterr().out
+
+
 class _Usage:
     def to_json(self):
         return '{"input_tokens": 1000, "output_tokens": 500}'

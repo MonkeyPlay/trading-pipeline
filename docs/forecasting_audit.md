@@ -49,7 +49,7 @@ your call.
 | Item | State |
 |---|---|
 | Deployed revision | `d588004`, through `scripts/deploy.sh` to `~/trading_pipeline_prod` (logged in `logs/deployments.log`) |
-| Main checkout | `fan-freeze` at `d588004` too. Your dashboard's Auto ran from it at 11:41 UTC, as shown by the catch-up message only that code prints, so restart the dashboard from `~/trading_pipeline_prod` to make the production checkout the one in use |
+| Production process | **switched 13:03 UTC, verified from /proc:** dashboard pid 295083 (`.venv/bin/python -m dashboard.app`) has its working directory in `~/trading_pipeline_prod`, listens on 127.0.0.1:8080 and holds the one Auto lock. Its Auto collector runs there. The checkout is at `d588004` with no local changes. The main checkout is development again: merging into it no longer deploys anything |
 | Schema | v27 in production. Routine processes only check it; the production checkout's check passes |
 | Shared state | the Auto lock, `.env`, `.venv`, logs and caches are linked, so only one dashboard can run Auto |
 | Tests | 453 pass on `d588004` in a clean worktree |
@@ -146,6 +146,57 @@ identical targets, horizons and cutoffs; no single combined score.
 | **Directional research** | fan_direction_v1, fan_cond_ema_v1 and fan_im_dir_v1: no sufficiently reliable directional improvement was established. Archived; reopen only for a new, specific hypothesis with a bounded test |
 
 ## 5. Isolating the LLM's contribution
+
+### Start with D only: `p1_d_research_v1` (defined, not registered)
+
+Second review, same day. D answers the cleanest question: does Claude's synthesis improve the
+numerical forecast it is handed? C adds annotation coverage and pool composition, which makes
+attribution harder, so C and its pool backfill are deferred.
+
+- **Arms:** A, B and D v5, all on the session's official 09:29 snapshot. That gives identical
+  evidence cutoffs and target windows; D's only extra numbers are the thresholds B's rules
+  already use.
+- **Pairs:** D − B (the question), D − A and B − A, using the manifest's own `pairs` (new;
+  manifests without one, such as `hist_dev_v1`, score as before).
+- **Practical improvement:** 0.01 Brier per target. Every scheduled session is a case, so a
+  session D wasn't run for is counted.
+- **Research only:** the 09:29 snapshot exists only after the open on this feed, and D runs when
+  approved. It measures skill from cutoff-frozen evidence, never timeliness.
+- **Planning cost:** at about $0.12 a request, 60 sessions are about $7, before retries.
+- **Three controls, kept separate:**
+  - **Definition:** `nq_journal.py experiment-register --name p1_d_research_v1 --design
+    d-research --start <day> --end <day>` writes one definition row. It sends nothing,
+    schedules nothing and holds no budget; a test proves no Claude client is even built.
+  - **Activation:** none exists. D runs only from a run a person starts and confirms.
+  - **Budget:** each approval's own `max_requests`.
+
+Registering it is your call; nothing collects D until you approve runs.
+
+### A live pre-open experiment waits for timeliness
+
+`nq_journal.py timeliness` measures, from the bars' receipt times and the Auto runs' recorded
+ends, when a forecast at each candidate cutoff could actually have been issued. It includes D's
+measured generation time and uses the open as the deadline; every scheduled opportunity is
+listed, and a morning nothing collected counts as a miss. So far one session is measurable
+(2026-10-07):
+
+| Cutoff | A/B vs the open | With D |
+|---|---|---|
+| 09:15 | 3.5 min early | still early |
+| 09:20 | 1.6 min late | late |
+| 09:29 | 10.5 min late | late |
+
+One session is not a rate. Before any live pre-open test, freeze in its own definition:
+
+- the cutoff, from ≥ 10 measured sessions;
+- the deadline;
+- the model and prompt version;
+- the late-result policy. A D result after the deadline is recorded late; the delivered
+  system falls back to B for that session; late cases stay in the availability report;
+- D issued inside the live path, which does not exist yet.
+
+Then compare A, B and D at that same cutoff.
+
 
 | Arm | What it is | State |
 |---|---|---|
@@ -314,3 +365,16 @@ your rule keeps manual. The offline request sizes above are the starting point.
 | Confirmed cutoff bar; missed-session catch-up | `d588004` | **yes, the running revision** |
 | p1_pool_tuning_v1 (definition, then scorer and report) | `35b629f`, `0afae63` | no (research) |
 | Synthesis v5, separate LLM runner, parallel C/D, honest labels, issue timing | `f300143` | **no.** Deploy after today's session: v5 registers on the first Auto journal step after deployment |
+| C's own database connection when parallel; D-only research design; experiment pairs; timeliness measurement | this commit | **no**, with the above |
+
+**The combined revision, rechecked before deployment:**
+
+- **Every definition the code registers** (19) hashes the same as at `d588004`, except the
+  intended `nq_synthesis_p1_v4` → `v5`. The RTH matcher, both RTH evaluations and the label
+  definitions are unchanged.
+- **Determinism:** on real data (2026-10-07, read-only), the RTH sets' input digests, members,
+  `pit_status`, and both evaluations' forecast digests (operational at a fixed build time) are
+  identical at both revisions.
+- **Parallel C/D:** C's requests use a database connection of their own, closed after. C's
+  requests are counted before D's, so together they never exceed the approval's
+  `max_requests` (tested at three budgets). They run on the LLM runner, apart from Auto.
