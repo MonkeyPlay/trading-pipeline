@@ -90,8 +90,9 @@ def experiment_manifest(name: str, start: str, end: str, profile: str = defs.DEF
         raise ValueError("first_timely applies to live runs only")
     if purpose not in ("development", "test"):
         raise ValueError("purpose must be development or test")
-    # the arms computed from the evidence (fc.ALGORITHMS) and the synthesis, which Claude issues on it
-    unknown = [a for a in arms.values() if a not in fc.ALGORITHMS and a != fc.SYNTHESIS_VERSION]
+    # the arms computed from the evidence (fc.ALGORITHMS) and the ML forecasts (contracts/nq_ml.py)
+    from contracts import nq_ml
+    unknown = [a for a in arms.values() if a not in fc.ALGORITHMS and a not in nq_ml.ALGORITHMS]
     if unknown:
         raise ValueError(f"unknown forecast algorithm(s): {', '.join(unknown)}")
     targets = [t for _, t in fc.FORECAST_TARGETS]
@@ -162,6 +163,27 @@ def official_run(runs: Sequence[Dict[str, Any]], rule: str) -> Optional[Dict[str
     if not runs:
         return None
     return runs[-1] if rule == "latest" else runs[0]
+
+
+def exact_interval(k: int, n: int, level: float = 0.95) -> Optional[Tuple[float, float]]:
+    """The Clopper-Pearson interval of ``k`` successes in ``n`` (None for n = 0)."""
+    if n == 0:
+        return None
+    from scipy.stats import beta
+    a = (1 - level) / 2
+    return (0.0 if k == 0 else float(beta.ppf(a, k, n - k + 1)),
+            1.0 if k == n else float(beta.ppf(1 - a, k + 1, n - k)))
+
+
+def availability(status: Dict[str, Counter], sessions: int) -> Dict[str, Dict[str, Any]]:
+    """Per arm, the scheduled sessions with an issued run (a case, or one awaiting its outcome) out of all of them -
+    every missing, late, failed or invalid run counts against it."""
+    out = {}
+    for arm, counts in status.items():
+        issued = counts.get("case", 0) + counts.get("no_outcome", 0)
+        out[arm] = {"issued": issued, "sessions": sessions, "rate": issued / sessions if sessions else None,
+                    "interval": exact_interval(issued, sessions)}
+    return out
 
 
 def delivered_run(runs: Sequence[Dict[str, Any]], order: Sequence[str]) -> Optional[Dict[str, Any]]:
@@ -448,11 +470,7 @@ def score_experiment(conn, name: str) -> Dict[str, Any]:
     results["volatility"] = breakdown(scored, _groups(days, tercile))
     results["reliability"] = {arm: reliability(scored[arm], days, list(defs.TARGETS[primary]["labels"]))
                               for arm in arms}
-    if isinstance(manifest.get("availability"), dict):                  # a live comparison's requirement
-        from forecaster.live_availability import availability
-        results["availability"] = availability(conn, manifest["sessions"]["from"], manifest["sessions"]["to"],
-                                               manifest["profile"], manifest["availability"]["requirement"],
-                                               (manifest.get("excluded_sessions") or {}).get("sessions") or ())
+    results["availability"] = availability(status, len(days))
     results["_case_scores"] = {t: {a: s for a, s in v.items()} for t, v in per_target_scores.items()}
     return results
 
@@ -518,8 +536,11 @@ def write_report(manifest: Dict[str, Any], results: Dict[str, Any], directory: s
     lines += _table(["arm"] + ["case", "no_run", "no_outcome"],
                     [[a] + [results["cases"][a].get(k, 0) for k in ("case", "no_run", "no_outcome")] for a in arms])
     if results.get("availability"):
-        from forecaster.live_availability import report as availability_report
-        lines += ["", availability_report(results["availability"]).rstrip()]
+        lines += ["", "Availability over every scheduled session (an issued run, whether or not its outcome is "
+                      "recorded yet), with an exact 95 % interval:", ""]
+        lines += _table(["arm", "issued", "sessions", "rate", "95 % interval"],
+                        [[a, v["issued"], v["sessions"], _f(v["rate"], 3), _ci(v["interval"])]
+                         for a, v in results["availability"].items()])
     primary = results["primary"]
     lines += ["", f"## Primary: {primary['target']}", ""]
     for key, p in primary["paired"].items():

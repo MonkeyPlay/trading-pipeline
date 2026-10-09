@@ -31,10 +31,9 @@ after-the-fact catch-up.
      earlier sessions (outcomes known as of its cutoff), and issues both arms in mode
      live: the database stamps the issue time and marks a run after 09:29:50 ET late;
      an issued run is acknowledged after its commit
-  6. with arm D (``synthesis``, forecaster/live_synthesis.py; approved by hand): its
-     request from the same live evidence, awaited until the deadline; then the forecast
-     in force is recorded (delivered: D when timely, else B, else A, else none), and a
-     late answer is still stored as late
+  6. records the forecast in force at the deadline (forecaster/delivery.py): the first
+     timely run in the delivery order (contracts/nq_ml.delivery_order), with the reason
+     any earlier one was passed over
 
 The IB connection (``app``) is passed in, so a test can stand a fake in its place;
 ``clock`` and ``sleep`` likewise. Nothing here has run against IB on a trading day
@@ -122,25 +121,19 @@ def fresh_bars(app, contract_info: Dict[str, Any], session: cal.Session, cutoff:
         sleep(min(pause, (give_up - now).total_seconds()))
 
 
-def reserve_s(with_d: bool) -> int:
-    """The time a capture keeps before the deadline for issuing (contracts/nq_forecast.LIVE_RESERVE_S)."""
-    return fc.LIVE_RESERVE_S["D" if with_d else "AB"]
-
-
-def check_wait(day: str, profile: str, wait_s: float, with_d: bool) -> None:
+def check_wait(day: str, profile: str, wait_s: float) -> None:
     """Raises LiveCaptureError when the data wait and the reserve for issuing would end after the deadline."""
     p = defs.PROFILES[profile]
     d = date.fromisoformat(day)
     cutoff, deadline = cal.ny_instant(d, p.cutoff), cal.ny_instant(d, fc.LIVE_DEADLINE_ET)
-    ends = cutoff + timedelta(seconds=wait_s + reserve_s(with_d))
+    ends = cutoff + timedelta(seconds=wait_s + fc.LIVE_RESERVE_S)
     if wait_s <= 0 or ends > deadline:
-        latest = (deadline - cutoff).total_seconds() - reserve_s(with_d)
+        latest = (deadline - cutoff).total_seconds() - fc.LIVE_RESERVE_S
         raise LiveCaptureError(
-            f"a {wait_s / 60:.1f}-minute data wait after the {p.cutoff:%H:%M} cutoff and {reserve_s(with_d)} s for "
-            f"issuing {'A, B and D' if with_d else 'A and B'} end at {ends.astimezone(cal.NY_TZ):%H:%M:%S} ET, after "
-            f"the {fc.LIVE_DEADLINE_ET:%H:%M:%S} deadline - "
-            + (f"at most {latest / 60:.1f} minutes fit" if latest > 0 else f"no wait fits after a {p.cutoff:%H:%M} "
-                                                                             f"cutoff"))
+            f"a {wait_s / 60:.1f}-minute data wait after the {p.cutoff:%H:%M} cutoff and {fc.LIVE_RESERVE_S} s for "
+            f"issuing end at {ends.astimezone(cal.NY_TZ):%H:%M:%S} ET, after the {fc.LIVE_DEADLINE_ET:%H:%M:%S} "
+            f"deadline - " + (f"at most {latest / 60:.1f} minutes fit" if latest > 0 else
+                              f"no wait fits after a {p.cutoff:%H:%M} cutoff"))
 
 
 def _store_bars(conn, capture_id: str, row, day: str, bars: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
@@ -164,10 +157,9 @@ def _store_bars(conn, capture_id: str, row, day: str, bars: List[Dict[str, Any]]
 
 def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: str = pre.RULES_PROTOCOL_VERSION,
             clock: Callable[[], datetime] = _utc_now, sleep: Callable[[float], None] = _time.sleep,
-            synthesis=None, wait_s: float = fc.LIVE_DEFAULT_WAIT_S) -> Dict[str, Any]:
-    """Captures, freezes and issues one session live (see the module docstring); returns a summary. ``synthesis``
-    (a live_synthesis.LiveSynthesis) adds arm D; without it nothing is sent to Claude. ``wait_s``: the data-wait
-    limit after the cutoff - with the reserve for issuing it must end by the deadline (check_wait), or
+            wait_s: float = fc.LIVE_DEFAULT_WAIT_S) -> Dict[str, Any]:
+    """Captures, freezes and issues one session live (see the module docstring); returns a summary. ``wait_s``: the
+    data-wait limit after the cutoff - with the reserve for issuing it must end by the deadline (check_wait), or
     LiveCaptureError is raised before anything is recorded."""
     from collector.ib_collector import _contract_info, _instrument_for
     from forecaster.forecast_service import run_forecast, timely
@@ -175,11 +167,10 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
     p = defs.PROFILES[profile]
     session = cal.session(day)
     cutoff = cal.ny_instant(session.session_date, p.cutoff)
-    check_wait(day, profile, wait_s, synthesis is not None)
+    check_wait(day, profile, wait_s)
     row = active_contract(conn, day)
     capture_id = store.start_live_capture(conn, day, profile, int(row["contract_id"]), code_revision(),
-                                          fc.ISSUE_POLICIES["live"], int(round(wait_s)),
-                                          reserve_s(synthesis is not None), synthesis is not None)
+                                          fc.ISSUE_POLICIES["live"], int(round(wait_s)), fc.LIVE_RESERVE_S)
     summary: Dict[str, Any] = {"capture_id": capture_id, "session_date": day, "profile": profile, "runs": []}
 
     def event(name, **detail):
@@ -237,41 +228,18 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
                                 "timely": timely(run)})
     summary["status"] = "issued" if all(r["timely"] for r in summary["runs"]) else "not timely"
     runs = [store.get_forecast_run(conn, r["run_id"]) for r in summary["runs"]]
-    if synthesis is not None:
-        from forecaster import live_synthesis as ls
-        attempt = synthesis.request(conn, snapshot, store.get_annotation(conn, annotation_id), aset, profile, clock,
-                                    event)
-        if attempt.status == "sent":
-            attempt.wait(conn, (ls.deadline(day) - clock()).total_seconds())
-        summary["synthesis"] = attempt.status if attempt.run is None else attempt.run["lifecycle_status"]
-        if attempt.run is not None:
-            runs.append(_synthesis_run(attempt.run, attempt.status == "sent", event, summary))
     _deliver(runs, event, summary)
-    if synthesis is not None and attempt.status == "sent" and attempt.run is None:   # late: stored, never delivered
-        run = attempt.wait(conn, synthesis.late_wait_s) or attempt.abandon(conn, synthesis.late_wait_s)
-        summary["synthesis"] = run["lifecycle_status"]
-        _synthesis_run(run, True, event, summary)
     return summary
 
 
-def _synthesis_run(run, new: bool, event, summary) -> Dict[str, Any]:
-    from forecaster.forecast_service import timely
-    event("forecast", run_id=run["run_id"], algorithm=run["algorithm_version"], status=run["lifecycle_status"],
-          issued_at=None if run["issued_at"] is None else str(run["issued_at"]), timely=timely(run), new=new,
-          request_id=run["request_id"], reason=run["failure_reason"])
-    summary["runs"].append({"run_id": run["run_id"], "algorithm": run["algorithm_version"],
-                            "status": run["lifecycle_status"], "timely": timely(run)})
-    return run
-
-
 def _deliver(runs, event, summary) -> None:
-    """Records the forecast in force at the deadline (live_synthesis.delivered)."""
-    from forecaster.live_synthesis import ARM, delivered
-    run, why = delivered(runs)
-    event("delivered", run_id=None if run is None else run["run_id"],
-          arm=None if run is None else ARM[run["algorithm_version"]], reason=why)
-    summary["delivered"] = {"run_id": None if run is None else run["run_id"],
-                            "arm": None if run is None else ARM[run["algorithm_version"]], "reason": why}
+    """Records the forecast in force at the deadline (forecaster/delivery.py)."""
+    from contracts import nq_ml
+    from forecaster.delivery import delivered
+    run, why = delivered(runs, nq_ml.delivery_order(), lambda v: nq_ml.ARM_LABELS.get(v, v))
+    name = None if run is None else nq_ml.ARM_LABELS.get(run["algorithm_version"], run["algorithm_version"])
+    event("delivered", run_id=None if run is None else run["run_id"], arm=name, reason=why)
+    summary["delivered"] = {"run_id": None if run is None else run["run_id"], "arm": name, "reason": why}
 
 
 def connect_ib(host: str, port: int, client_id: int, timeout: float = 10.0):

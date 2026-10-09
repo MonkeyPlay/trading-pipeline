@@ -156,18 +156,8 @@ def test_a_silent_step_is_killed_and_a_slow_one_that_keeps_reporting_is_not(tmp_
     assert capped.returncode != 0 and "Dashboard: step ran 1 s - killed" in capped.lines
 
 
-def test_an_llm_job_runs_beside_auto(tmp_path):
-    """LLM jobs have their own runner: one waiting half an hour for a batch never stops Auto from collecting."""
-    from dashboard.jobs import LLM_RUNNER, RUNNER, AutoMode, runner_for
-    assert runner_for("llm") is LLM_RUNNER and runner_for("auto") is runner_for("collector") is RUNNER
-
-    async def run():
-        llm, main = JobRunner(cwd=str(tmp_path), log_file=None), JobRunner(cwd=str(tmp_path), log_file=None)
-        llm.start("llm", "LLM forecast", [("llm-forecast", _python("import time; time.sleep(30)"))])
-        auto = AutoMode(main, lock_path=None)
-        due = auto.due(_ny("2026-10-06", "10:03").replace(second=10))
-        llm.stop()
-        await _finished(llm)
-        return due
-
-    assert asyncio.run(run()) == "2026-10-06"
+def test_there_is_one_runner_and_no_llm_job():
+    """The LLM forecasts were removed: one runner, no LLM job or command."""
+    import dashboard.jobs as jobs
+    assert not any(hasattr(jobs, n) for n in ("LLM_RUNNER", "llm_command", "runner_for"))
+    assert jobs.AUTO.runner is jobs.RUNNER

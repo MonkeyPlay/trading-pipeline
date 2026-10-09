@@ -1,5 +1,6 @@
 # tests/test_prompt_manifest.py
-"""The sources in prompts/source/ (P1, P2 and the guideline's Appendices A and B) are the files prompts/manifest.json hashed."""
+"""The sources in prompts/source/ (P1, P2 and the guideline's Appendix B) are the files prompts/manifest.json hashed;
+no LLM prompt is left (removed with the LLM forecasts, 2026-10-09)."""
 
 import hashlib
 import json
@@ -10,15 +11,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def test_source_prompts_match_their_manifest_hashes():
     manifest = json.load(open(os.path.join(ROOT, "prompts", "manifest.json")))
-    assert {s["id"] for s in manifest["sources"]} == {"P1", "P2", "A", "B"}
-    for s in manifest["sources"] + manifest.get("runtime", []):
+    assert {s["id"] for s in manifest["sources"]} == {"P1", "P2", "B"}
+    for s in manifest["sources"]:
         data = open(os.path.join(ROOT, s["path"]), "rb").read()
         assert hashlib.sha256(data).hexdigest() == s["sha256"], f"{s['path']} changed since it was hashed"
         assert len(data) == s["bytes"]
 
 
-def test_the_runtime_prompt_is_the_one_the_claude_protocol_registers():
-    from contracts import nq_preopen as pre
+def test_no_runtime_prompt_remains():
     manifest = json.load(open(os.path.join(ROOT, "prompts", "manifest.json")))
-    runtime = {r["id"]: r for r in manifest["runtime"]}[pre.LLM_PROTOCOL_VERSION]
-    assert pre.llm_record()["definition"]["prompt"]["sha256"] == runtime["sha256"]
+    assert "runtime" not in manifest
+    assert not os.path.exists(os.path.join(ROOT, "prompts", "runtime")) or not os.listdir(
+        os.path.join(ROOT, "prompts", "runtime"))

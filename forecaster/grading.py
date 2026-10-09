@@ -27,6 +27,7 @@ from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
 from contracts import nq_forecast as fc
+from contracts import nq_ml as ml
 from contracts import nq_prompt_v2 as defs
 
 BENCHMARK = "A"
@@ -36,7 +37,7 @@ def current_runs(runs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Per arm letter the newest issued run of ``runs`` (one session's, newest first)."""
     out: Dict[str, Dict[str, Any]] = {}
     for r in runs:
-        arm = fc.arm_of(r["algorithm_version"])
+        arm = ml.arm_of(r["algorithm_version"])
         if arm and arm not in out and r["lifecycle_status"] == "issued":
             out[arm] = r
     return out

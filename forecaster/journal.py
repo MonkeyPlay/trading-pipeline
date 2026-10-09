@@ -8,7 +8,7 @@ once the session is final.
                   changed definition under an existing version name stops the run)
   take_snapshot   builds and stores one session's snapshot
   annotate        the rule-based structure annotation of a stored snapshot
-                  (forecaster/structure_rules.py; Claude takes this over later)
+                  (forecaster/structure_rules.py)
   record_outcome  labels a stored snapshot once its session is final
   match           the structural analogues of every annotated snapshot and their
                   outcomes (matching/structural.py), stored when new
@@ -101,8 +101,8 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
 
 def register(conn) -> None:
     from contracts import nq_forecast
-    for rec in (defs.all_records() + [preopen.rules_record(), preopen.llm_record(), preopen.restricted_record(),
-                                      preopen.matcher_record()] + nq_forecast.all_records()):
+    for rec in (defs.all_records() + [preopen.rules_record(), preopen.matcher_record()]
+                + nq_forecast.all_records()):
         store.register_version(conn, rec)
 
 

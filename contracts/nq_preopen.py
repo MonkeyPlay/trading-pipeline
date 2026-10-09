@@ -1,9 +1,7 @@
 # contracts/nq_preopen.py
 """
 Pre-open structure definitions for guideline stage 2: the P1 fields a structure
-annotation fills, the Event Risk policy, and the rule-based annotation protocol
-that stands in for the Claude structure annotation (Appendix A, A1) until the
-API is in place.
+annotation fills, the Event Risk policy, and the rule-based annotation protocol.
 
   FIELDS              the P1 properties an annotation fills, with their allowed
                       values: P1's own lists where it gives one (ON-v1, Premarket
@@ -15,9 +13,8 @@ API is in place.
   RULES               every threshold of the rule-based annotator
                       (forecaster/structure_rules.py), registered as
                       RULES_PROTOCOL_VERSION
-  ANNOTATION_SCHEMA   the output both annotators produce - the rules now, Claude
-                      (A1) later under its own protocol version - so the matcher and
-                      the store take either
+  ANNOTATION_SCHEMA   the output the annotator produces, which the matcher and the
+                      store take
   MATCH_WEIGHTS       P1 section 7's analogue rubric (MATCHER_VERSION), used by
                       matching/structural.py
 
@@ -26,9 +23,7 @@ Moving averages are the user's TradingView indicator "TEMA & Session Levels" on
 SMA(3) (the faster line) and EMA(14) then SMA(3) (the slower one).
 
 The rule-based protocol is a trial convention, not P1's text: P1 leaves dominant
-trend, meaningful reversal, flat, frequent and the like unquantified. It is named
-separately and is never compared with a Claude annotation as if the two were the
-same protocol.
+trend, meaningful reversal, flat, frequent and the like unquantified.
 """
 
 import hashlib
@@ -239,6 +234,8 @@ def rules_record() -> Dict[str, Any]:
         "supersedes": "nq_structure_rules_v3: the same rules over complete windows only (v3 classified the "
                       "overnight from 90% of its minutes and the trends and MA fields from most of their bars); "
                       "v3 superseded v2's HTB-v1 wording, v2 added HTB-v1 to v1",
+        # registered text of nq_structure_rules_v4 (2026-10-04), kept byte-identical: a changed definition under a
+        # registered version name stops the run
         "replaced_by": "a Claude structure annotation (Appendix A, A1) under its own "
                                                  "protocol version, producing the same ANNOTATION_SCHEMA",
     })
@@ -246,7 +243,7 @@ def rules_record() -> Dict[str, Any]:
 
 ANNOTATION_SCHEMA = {
     "protocol_version": "the registered annotation protocol",
-    "annotator": "rules | llm",
+    "annotator": "rules",
     "integrity_status": list(INTEGRITY_STATUSES),
     "fields": {"<P1 property>": {"value": "one allowed value, or null", "status": list(FIELD_STATUSES),
                                  "reason": "why null", "evidence_ids": "ids resolving inside the snapshot",
@@ -337,141 +334,3 @@ MATCHER = {
 
 def matcher_record() -> Dict[str, Any]:
     return _record(MATCHER_VERSION, "matcher", MATCHER)
-
-
-# --------------------------------------------------------------------------
-# Claude structure annotation (Appendix A, A1)
-# --------------------------------------------------------------------------
-
-# nq_structure_llm_v1 (registered 2026-10-04, never run) had Claude judge Higher-Timeframe
-# Bias from the overnight bars; v2 takes it from HTB-v1 like the rule-based protocol. v3
-# (guideline revision 2, the same prompt and schema) validates the answer locally against
-# the full JSON schema and stricter field rules, and accounts for every request in the
-# ledger (migration 0013); v2 was registered, never run. v4 (2026-10-05, the user's choice)
-# is v3 at effort xhigh instead of high; v3 was registered, never run.
-LLM_PROTOCOL_VERSION = "nq_structure_llm_v4"
-LLM_MODEL = "claude-opus-5-5"
-LLM_EFFORT = "xhigh"
-LLM_MAX_TOKENS = 16000
-LLM_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "runtime",
-                          "structure_annotation_v2.md")
-# The fields Claude annotates; Event Risk, Event Notes, Higher-Timeframe Bias and the price
-# location come from the application's own rules (EV-v1, HTB-v1, P1 section 7), so both
-# protocols carry them identically.
-LLM_FIELDS = ["Overnight Structure", "Premarket Pattern", "Short-Term Structure", "5-Minute Trend",
-              "15-Minute Trend", "Price vs Long MA", "Long MA Slope", "Fast MA Alignment", "Chop Score"]
-
-
-def llm_output_schema() -> Dict[str, Any]:
-    """The structure_annotation JSON schema Claude must return (structured outputs)."""
-    def field_schema(name):
-        values = FIELDS[name]["values"]
-        value = {"type": "integer", "enum": values} if name == "Chop Score" else {"type": "string", "enum": values}
-        return {"type": "object", "additionalProperties": False,
-                "required": ["value", "status", "reason", "evidence_ids", "basis"],
-                "properties": {"value": {"anyOf": [value, {"type": "null"}]},
-                               "status": {"type": "string", "enum": ["classified", "unavailable"]},
-                               "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                               "evidence_ids": {"type": "array", "items": {"type": "string"}},
-                               "basis": {"type": "string"}}}
-    return {"type": "object", "additionalProperties": False,
-            "required": ["integrity_status", "contradictions", "fields"],
-            "properties": {"integrity_status": {"type": "string", "enum": list(INTEGRITY_STATUSES)},
-                           "contradictions": {"type": "array", "items": {"type": "string"}},
-                           "fields": {"type": "object", "additionalProperties": False, "required": LLM_FIELDS,
-                                      "properties": {f: field_schema(f) for f in LLM_FIELDS}}}}
-
-
-def llm_record() -> Dict[str, Any]:
-    with open(LLM_PROMPT, "rb") as f:
-        prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
-    return _record(LLM_PROTOCOL_VERSION, "annotation", {
-        "annotator": "llm", "model": LLM_MODEL, "effort": LLM_EFFORT, "max_tokens": LLM_MAX_TOKENS,
-        "prompt": {"path": "prompts/runtime/structure_annotation_v2.md", "sha256": prompt_sha256,
-                   "sources": ["A (A1)", "P1 section 4", "P1 section 3 (trend timeframes)"]},
-        "output_schema": llm_output_schema(), "fields": LLM_FIELDS,
-        "from_the_application": {"Event Risk": EVENT_RISK_VERSION, "Event Notes": EVENT_RISK_VERSION,
-                                 "Higher-Timeframe Bias": HTB_VERSION,
-                                 "price_location": "P1 section 7, At within one point"},
-        "evidence": "the snapshot's references, 5m and 15m bars of the overnight window, the last 45 2m bars with "
-                    "the three moving averages, and the confirmed 2/2 swing points on 5m bars (ids inside the "
-                    "bundle); from v3 each reference with its status (an unavailable one with its reason and no "
-                    "value), each bar with its complete flag, and the snapshot's completeness (overnight minutes, "
-                    "ATRs, Long MA history)",
-        "validation": "locally, before anything is stored: the whole answer against output_schema (JSON Schema "
-                      "2020-12: types, enums, required and unknown keys; a boolean is not a Chop Score), then "
-                      "status classified exactly when there is a value; classified: reason null, at least one "
-                      "evidence id, a non-empty basis; unavailable: a non-empty reason; every evidence id inside "
-                      "the bundle. An answer from any other model than LLM_MODEL (a server-side fallback) is kept "
-                      "as an attempt, not as an annotation of this protocol",
-        "accounting": "every request is recorded in journal.inference_requests before it is sent - the exact "
-                      "canonical request, its prompt, schema and evidence hashes and the code revision - and every "
-                      "batch id as soon as it is known (the request id is the batch custom_id); an answer is "
-                      "validated against the archived request, never a rebuilt one; a request without an attempt "
-                      "is unresolved - a recorded batch is collected later, never sent again; a lost live request "
-                      "is closed by hand as an error attempt; at most one attempt per request; an annotation and "
-                      "its attempt are stored in one transaction; an answer that is not JSON keeps its raw text",
-        "supersedes": "nq_structure_llm_v3: the same request at effort high (never run); v3 superseded "
-                      "nq_structure_llm_v2: the same prompt and schema, the evidence without completeness "
-                      "metadata, validated less strictly and without the request ledger",
-    })
-
-
-# --------------------------------------------------------------------------
-# Arm C: the restricted Claude annotation (guideline revision 2, sequence item 6, 4B)
-# --------------------------------------------------------------------------
-
-# Claude owns only Overnight Structure and Premarket Pattern; every other field and the price location are the
-# rule-based protocol's of the same snapshot. The request is date-blinded (forecaster/llm_arms.blinded_bundle).
-# v1 (registered 2026-10-05) capped the answer at 16,000 tokens: at effort xhigh its one request spent all of them
-# thinking and returned nothing. v2 is v1 with a 64,000-token cap, the request streamed (its first answer used
-# 23,239 tokens, 22,319 of them thinking). v3 (the user's choices, 2026-10-05): effort medium, and less evidence -
-# the 5m bars and their swing points only (the 15m bars repeat the 5m ones; the final 2m bars with the moving
-# averages were context only for these two fields) - and the requests live or through the Batch API.
-RESTRICTED_PROTOCOL_VERSION = "nq_structure_restricted_v3"
-RESTRICTED_EVIDENCE = ("bars_5m", "swings_5m")
-RESTRICTED_MAX_TOKENS = 64000
-# The effort of the Claude requests of stage 4's arms C and D (the full nine-field protocol keeps LLM_EFFORT).
-ARMS_EFFORT = "medium"
-RESTRICTED_FIELDS = ["Overnight Structure", "Premarket Pattern"]
-RESTRICTED_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts",
-                                 "runtime", "structure_annotation_restricted_v3.md")
-BLINDING = ("no session date, weekday, contract or absolute price: times are the New York clock (HH:MM, the "
-            "overnight runs from 18:00 to the cutoff, so 18:00-23:59 precede 00:00), bar ids name the bar by "
-            "that clock (bar:<tf>:<HH:MM>), prices are index points relative to the previous RTH close (the "
-            "overnight open when that is unavailable); evidence ids in an answer are mapped back to the "
-            "snapshot's own ids before anything is stored")
-
-
-def restricted_output_schema() -> Dict[str, Any]:
-    """The structure_annotation schema reduced to the restricted protocol's two fields."""
-    schema = llm_output_schema()
-    fields = schema["properties"]["fields"]
-    fields["required"] = list(RESTRICTED_FIELDS)
-    fields["properties"] = {f: fields["properties"][f] for f in RESTRICTED_FIELDS}
-    return schema
-
-
-def restricted_record() -> Dict[str, Any]:
-    with open(RESTRICTED_PROMPT, "rb") as f:
-        prompt_sha256 = hashlib.sha256(f.read()).hexdigest()
-    return _record(RESTRICTED_PROTOCOL_VERSION, "annotation", {
-        "annotator": "llm", "model": LLM_MODEL, "effort": ARMS_EFFORT, "max_tokens": RESTRICTED_MAX_TOKENS,
-        "request": "live, streamed (thinking counts against max_tokens; the SDK streams a request this long) with "
-                   "the server-side refusal fallback - or through the Batch API (half price, no fallback there)",
-        "supersedes": "nq_structure_restricted_v2: effort xhigh, and the 15m bars and the final 2m bars with the "
-                      "moving averages besides; v1 also capped the answer at 16,000 tokens - too few for xhigh, "
-                      "which spent them all thinking",
-        "prompt": {"path": "prompts/runtime/structure_annotation_restricted_v3.md", "sha256": prompt_sha256,
-                   "sources": ["A (A1)", "P1 section 4 (Overnight Structure, Premarket Pattern)"]},
-        "output_schema": restricted_output_schema(), "fields": list(RESTRICTED_FIELDS),
-        "from_the_rules": f"every other field and the price location: {RULES_PROTOCOL_VERSION} of the same snapshot",
-        "blinding": BLINDING,
-        "evidence": "the snapshot's references, the 5m bars of the overnight window and the confirmed 2/2 swing "
-                    "points on them, date-blinded",
-        "validation": f"as {LLM_PROTOCOL_VERSION}, over the two fields",
-        "accounting": f"as {LLM_PROTOCOL_VERSION}: the request ledger, one attempt per request",
-        "matching": f"{MATCHER_VERSION} among the earlier sessions annotated under this protocol only",
-        "question": "guideline 4B arm C: does Claude's reading of the overnight and premarket structure improve "
-                    "the analogue forecast over the rules alone (arm B)?",
-    })

@@ -91,11 +91,18 @@ def latest_version():
     return disc[-1][0] if disc else 0
 
 
-def apply_migrations(conn):
-    """Applies every migration newer than the database's version. Returns new version."""
+def apply_migrations(conn, upto=None):
+    """Applies every migration newer than the database's version - up to ``upto`` when given (a test of one
+    migration builds the schema before it). Returns new version."""
     applied = 0
+    # a migration's NOTICEs (e.g. 0029's deletion counts) go to the log
+    raw = getattr(conn, "raw", conn)
+    handler = lambda diag: logger.info(f"  {diag.message_primary}")      # noqa: E731
+    raw.add_notice_handler(handler)
 
     for num, path in discover_migrations():
+        if upto is not None and num > upto:
+            break
         with open(path, "r") as f:
             body = f.read().strip()
 
@@ -134,6 +141,7 @@ def apply_migrations(conn):
                 raise
         applied += 1
 
+    raw.remove_notice_handler(handler)
     new_version = get_user_version(conn)
     if applied:
         logger.info(f"Applied {applied} migration(s); schema now at v{new_version:04d}.")

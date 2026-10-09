@@ -196,11 +196,11 @@ def init_database(dsn: Optional[str] = None, schema_path=None, apply: bool = Fal
         conn.close()
 
 
-def reset_database(dsn: Optional[str] = None):
+def reset_database(dsn: Optional[str] = None, upto: Optional[int] = None):
     """
     DEV ONLY. Drops every table in the current schema (including the migration
-    ledger) and re-migrates from scratch. Never call this against a database
-    holding real collected data.
+    ledger) and re-migrates from scratch - to migration ``upto`` when given (the test
+    of one migration). Never call this against a database holding real collected data.
     """
     conn = get_db_connection(dsn)
     try:
@@ -219,9 +219,12 @@ def reset_database(dsn: Optional[str] = None):
             conn.execute("DROP SCHEMA IF EXISTS journal CASCADE;")
             conn.execute("DROP FUNCTION IF EXISTS reject_bar_receipt_mutation() CASCADE;")
         logger.info(f"Dropped {len(names)} table(s); schema version reset to 0.")
+        if upto is not None:
+            apply_migrations(conn, upto)
     finally:
         conn.close()
-    init_database(dsn, apply=True)
+    if upto is None:
+        init_database(dsn, apply=True)
 
 
 def describe_dsn(dsn: Optional[str] = None) -> str:

@@ -1,10 +1,8 @@
 # forecaster/structure_rules.py
 """
 Rule-based pre-open structure annotation (protocol nq_structure_rules_v4,
-contracts/nq_preopen.py): the stand-in for the Claude structure annotation of
-Appendix A (A1) until the API is in place. It reads one frozen snapshot only and
-returns contracts.nq_preopen.ANNOTATION_SCHEMA, the shape the Claude annotator
-will return under its own protocol version.
+contracts/nq_preopen.py). It reads one frozen snapshot only and returns
+contracts.nq_preopen.ANNOTATION_SCHEMA.
 
 ``annotate(snapshot)`` is pure and deterministic. Every field carries its value
 (or None with a reason), a status, the evidence ids it used - ``bar:<tf>:<start>``,

@@ -382,91 +382,14 @@ def get_analogue_set(conn: Database, set_id: str) -> Optional[Dict[str, Any]]:
 
 def latest_analogue_set(conn: Database, target_snapshot_id: str, matcher_version: str, label_version: str,
                         protocol_version: str) -> Optional[Dict[str, Any]]:
-    """The newest analogue set of a target whose annotation is under ``protocol_version`` (a rules set and a Claude
-    set of one snapshot are different sets), with ``members`` in rank order."""
+    """The newest analogue set of a target whose annotation is under ``protocol_version`` (sets over two protocols'
+    annotations of one snapshot are different sets), with ``members`` in rank order."""
     row = conn.execute(
         "SELECT s.*, a.protocol_version FROM journal.analogue_sets s JOIN journal.structure_annotations a "
         "ON a.annotation_id = s.target_annotation_id WHERE s.target_snapshot_id = %s AND s.matcher_version = %s "
         "AND s.label_version = %s AND a.protocol_version = %s ORDER BY s.created_at DESC LIMIT 1;",
         (target_snapshot_id, matcher_version, label_version, protocol_version)).fetchone()
     return None if row is None else _analogue_set(conn, row)
-
-
-# --------------------------------------------------------------------------
-# LLM annotation attempts (migration 0012)
-# --------------------------------------------------------------------------
-
-def save_annotation_attempt(conn: Database, rec: Dict[str, Any]) -> str:
-    """Appends one LLM annotation attempt (journal.annotation_attempts columns but ``attempt_id``); ``request_id``
-    names the ledger request it answers (migration 0013), at most one attempt per request."""
-    attempt_id = str(uuid.uuid4())
-    with conn:
-        conn.execute(
-            "INSERT INTO journal.annotation_attempts (attempt_id, snapshot_id, protocol_version, model, request_hash, "
-            "status, error, response, usage, annotation_id, started_at, finished_at, request_id, raw_text) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-            (attempt_id, rec["snapshot_id"], rec["protocol_version"], rec["model"], rec["request_hash"],
-             rec["status"], rec.get("error"), None if rec.get("response") is None else canonical_json(rec["response"]),
-             None if rec.get("usage") is None else canonical_json(rec["usage"]), rec.get("annotation_id"),
-             rec["started_at"], rec["finished_at"], rec.get("request_id"), rec.get("raw_text")))
-    return attempt_id
-
-
-# --------------------------------------------------------------------------
-# Inference request ledger (migration 0013)
-# --------------------------------------------------------------------------
-
-def save_inference_request(conn: Database, rec: Dict[str, Any]) -> str:
-    """Records one LLM request before it is sent - the exact canonical request (``request``) with its hashes, the
-    code revision and ``mode`` (live | batch); returns its id, which a batch uses as the custom_id."""
-    request_id = str(uuid.uuid4())
-    with conn:
-        conn.execute(
-            "INSERT INTO journal.inference_requests (request_id, snapshot_id, protocol_version, model, request, "
-            "request_hash, prompt_sha256, schema_sha256, evidence_sha256, code_revision, mode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-            (request_id, rec["snapshot_id"], rec["protocol_version"], rec["model"], canonical_json(rec["request"]),
-             rec["request_hash"], rec["prompt_sha256"], rec["schema_sha256"], rec["evidence_sha256"],
-             rec["code_revision"], rec["mode"]))
-    return request_id
-
-
-def save_inference_batch(conn: Database, batch_id: str, request_ids: List[str], submitted_at) -> None:
-    """Records a submitted batch and its requests, as soon as the batch id is known."""
-    with conn:
-        conn.execute("INSERT INTO journal.inference_batches (batch_id, submitted_at, request_count) "
-                     "VALUES (%s, %s, %s);", (batch_id, submitted_at, len(request_ids)))
-        conn.executemany("INSERT INTO journal.inference_batch_requests (batch_id, request_id) VALUES (%s, %s);",
-                         [(batch_id, r) for r in request_ids])
-
-
-def _request_rows(rows) -> List[Dict[str, Any]]:
-    return [dict(zip(r.keys(), r), request_id=str(r["request_id"]), snapshot_id=str(r["snapshot_id"]),
-                 request=_load(r["request"])) for r in rows]
-
-
-def inference_batch_requests(conn: Database, batch_id: str) -> List[Dict[str, Any]]:
-    """The requests of one recorded batch, as sent, each with ``answered`` (an annotation attempt, or the forecast
-    run of a synthesis request, exists) and its batch's ``submitted_at``."""
-    return _request_rows(conn.execute(
-        "SELECT r.*, b.submitted_at, (EXISTS (SELECT 1 FROM journal.annotation_attempts t "
-        "WHERE t.request_id = r.request_id) OR EXISTS (SELECT 1 FROM journal.forecast_runs f "
-        "WHERE f.request_id = r.request_id)) AS answered FROM journal.inference_batch_requests m "
-        "JOIN journal.inference_requests r ON r.request_id = m.request_id JOIN journal.inference_batches b "
-        "ON b.batch_id = m.batch_id WHERE m.batch_id = %s ORDER BY r.created_at;", (batch_id,)).fetchall())
-
-
-def unresolved_inference_requests(conn: Database, protocol_version: str) -> List[Dict[str, Any]]:
-    """Requests of the protocol without an attempt - an annotation attempt, or the forecast run a synthesis request
-    produced (migration 0017) - in flight, in an unfinished batch, or lost when a run ended mid-request - with their
-    ``batch_id`` (None: a live request, or a batch whose id was never recorded) and session date, oldest first."""
-    return _request_rows(conn.execute(
-        "SELECT r.*, m.batch_id, s.session_date FROM journal.inference_requests r "
-        "JOIN journal.snapshots s ON s.snapshot_id = r.snapshot_id "
-        "LEFT JOIN journal.inference_batch_requests m ON m.request_id = r.request_id "
-        "WHERE r.protocol_version = %s AND NOT EXISTS (SELECT 1 FROM journal.annotation_attempts t "
-        "WHERE t.request_id = r.request_id) AND NOT EXISTS (SELECT 1 FROM journal.forecast_runs f "
-        "WHERE f.request_id = r.request_id) ORDER BY r.created_at;", (protocol_version,)).fetchall())
 
 
 # --------------------------------------------------------------------------
@@ -556,7 +479,7 @@ _RUN_COLUMNS = ("run_id", "idempotency_key", "symbol", "session_date", "contract
                 "annotation_id", "analogue_set_id", "label_version", "algorithm_version", "schema_version",
                 "issue_policy", "code_revision", "mode", "input_cutoff_at", "deadline_at", "generation_started_at",
                 "generation_completed_at", "lifecycle_status", "supersedes_run_id", "failure_reason",
-                "evidence_digest", "outputs", "request_id")
+                "evidence_digest", "outputs")
 _PREDICTION_COLUMNS = ("target", "status", "predicted_label", "estimation_status", "distribution", "eligible",
                        "without_label", "prior_sessions", "prior_without_label", "reason")
 
@@ -602,7 +525,7 @@ def add_forecast_event(conn: Database, run_id: str, event: str, detail: Optional
 
 def _run(row) -> Dict[str, Any]:
     d = dict(zip(row.keys(), row))
-    for k in ("run_id", "snapshot_id", "annotation_id", "analogue_set_id", "supersedes_run_id", "request_id"):
+    for k in ("run_id", "snapshot_id", "annotation_id", "analogue_set_id", "supersedes_run_id"):
         d[k] = None if d.get(k) is None else str(d[k])
     d["session_date"], d["outputs"] = str(d["session_date"]), _load(d["outputs"])
     return d
@@ -728,14 +651,14 @@ def experiment_results(conn: Database, experiment: str) -> List[Dict[str, Any]]:
 
 def start_live_capture(conn: Database, session_date: str, profile: str, contract_id: Optional[int],
                        code_revision: str, issue_policy: Optional[str] = None, wait_limit_s: Optional[int] = None,
-                       reserve_s: Optional[int] = None, with_d: Optional[bool] = None) -> str:
+                       reserve_s: Optional[int] = None) -> str:
     """Records a capture as it starts, with its settings (migration 0028); returns its id."""
     capture_id = str(uuid.uuid4())
     with conn:
         conn.execute("INSERT INTO journal.live_captures (capture_id, session_date, profile, contract_id, code_revision, "
-                     "issue_policy, wait_limit_s, reserve_s, with_d) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
+                     "issue_policy, wait_limit_s, reserve_s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
                      (capture_id, session_date, profile, contract_id, code_revision, issue_policy, wait_limit_s,
-                      reserve_s, with_d))
+                      reserve_s))
     return capture_id
 
 

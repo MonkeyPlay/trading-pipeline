@@ -47,11 +47,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from nicegui import ui
 
 from contracts import nq_forecast as fc
+from contracts import nq_ml as ml
 from contracts import nq_prompt_v2 as defs
 from dashboard.components.fan import current_session
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import frozen_preopen_spec
-from dashboard.jobs import LLM_RUNNER, RUNNER
+from dashboard.jobs import RUNNER
 from database import journal_store as store
 from features import calendar as cal
 from forecaster import preview as pv
@@ -66,10 +67,10 @@ _CELL = "px-2 py-1 text-xs"
 _STATUS_COLOR = {"issued": "#26a69a", "unavailable": "#787b86", "late": "#ffa726", "failed": "#ef5350",
                  "invalid": "#ef5350"}
 _FORECAST_FIELDS = set(range(25, 37)) | set(range(42, 46))
-_ARMS = {v: f"{fc.ARM_NAMES[a]} (arm {a})" for a, v in fc.ARMS.items()}
-# The arms on the grading radar: A, the benchmark, a dashed neutral grey; B-D the first three categorical slots of
-# the dark palette (validated all-pairs against #1c212e and #131722: CVD dE 9.4, normal-vision dE 20.9, >= 3:1).
-_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "C": "#d95926", "D": "#199e70"}
+_ARMS = {v: f"{ml.ARM_NAMES[a]} (arm {a})" for a, v in ml.ARMS.items()}
+# The arms on the grading radar: A, the benchmark, a dashed neutral grey; B, N and M the first three categorical slots
+# of the dark palette (validated all-pairs against #1c212e and #131722: CVD dE 9.4, normal-vision dE 20.9, >= 3:1).
+_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "N": "#d95926", "M": "#199e70"}
 _SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
           "direction_15m": "15-min direction", "session_type_rth": "Session type", "close_direction_rth": "RTH close",
           "first_level_tested": "First level"}
@@ -177,14 +178,12 @@ class ForecastPanel:
         self.preview: Optional[Dict[str, Any]] = None
 
     def reload(self) -> None:
-        """After a job: the preview read again, and the tab of a Forecast now or LLM job shown (the day's runs
-        follow the session bar)."""
+        """After a job: the preview read again, and the tab of a Forecast now job shown (the day's runs follow the
+        session bar)."""
         self.preview = pv.load()
         self._render_preview()
         if RUNNER.job is not None and RUNNER.job.key == "preview":
             self.tabs.set_value("preview")
-        elif LLM_RUNNER.job is not None and LLM_RUNNER.job.key == "llm" and not LLM_RUNNER.busy:
-            self.tabs.set_value("stored")
 
     def show_preview(self) -> None:
         """The Forecast now tab, scrolled to."""
@@ -213,13 +212,13 @@ class ForecastPanel:
                     self._build_preview()
 
     def _build_stored(self) -> None:
-        ui.label(f"Forecasts of the session day's NQ session from each run's frozen evidence, by arm (stage 4): A "
-                 f"the prior ({fc.PRIOR_VERSION}, the earlier sessions alone, the benchmark); B the baseline "
-                 f"({fc.BASELINE_VERSION}, the rule-based analogues smoothed with the prior); C the restricted LLM "
-                 f"({fc.RESTRICTED_VERSION}, Claude's overnight and premarket structure, matched and smoothed like "
-                 f"B); D the synthesis ({fc.SYNTHESIS_VERSION}, Claude's own forecast from B's evidence). C and D run "
-                 f"only when started by hand (Update data, Run LLM forecast). A historical replay is research on "
-                 f"reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
+        ui.label(f"Forecasts of the session day's NQ session from each run's frozen evidence, by arm: A the prior "
+                 f"({fc.PRIOR_VERSION}, the earlier sessions alone, the benchmark); B the baseline "
+                 f"({fc.BASELINE_VERSION}, the rule-based analogues smoothed with the prior); N and M the "
+                 f"scikit-learn models of the 15-minute direction ({ml.ML_NQ_VERSION} from NQ's own features, "
+                 f"{ml.ML_MULTI_VERSION} with ES, RTY, VIX, the 10-year yield and the dollar besides) - "
+                 f"experimental until a forward evaluation shows they improve on B. A historical replay is research "
+                 f"on reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
                  f"hidden until you show them.").classes("text-sm").style(_MUTED)
         with ui.row().classes("w-full items-center gap-4"):
             self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
@@ -229,9 +228,6 @@ class ForecastPanel:
                 self.arm_title = ui.label().classes("text-base font-medium")
                 ui.label("one tile per arm: the one shown below is highlighted - click another to show it").classes(
                     "text-xs").style(_MUTED)
-                ui.space()
-                self.llm_day_button = ui.button("Run C and D for this day", icon="psychology",
-                                                on_click=self._run_llm_for_day).props("dense outline no-caps")
             self.arm_row = ui.element("div").classes("w-full grid gap-3").style(
                 "grid-template-columns:repeat(4,minmax(0,1fr))")
             ui.separator().style("background:#2a2e39")
@@ -267,16 +263,16 @@ class ForecastPanel:
         """The day's arms (the tiles and their comparison), then the runs of the arm shown - the requested
         run's, the arm shown before when the day has it, else arm B, else the first the day has."""
         runs = self.runs
-        have = {fc.arm_of(r["algorithm_version"]) for r in runs}
+        have = {ml.arm_of(r["algorithm_version"]) for r in runs}
         requested = next((r for r in runs if r["run_id"] == run_id), None)
         if requested is not None:
-            self.arm = fc.arm_of(requested["algorithm_version"])
+            self.arm = ml.arm_of(requested["algorithm_version"])
         elif self.arm not in have:
-            self.arm = "B" if "B" in have else next((a for a in fc.ARMS if a in have), None)
+            self.arm = "B" if "B" in have else next((a for a in ml.ARMS if a in have), None)
         self.current = {a: store.get_forecast_run(self.conn, r["run_id"]) for a, r in current_runs(runs).items()}
         self._render_arms(self.day, runs)
         self._render_grading()
-        mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == self.arm]
+        mine = [r for r in runs if ml.arm_of(r["algorithm_version"]) == self.arm]
         self.run_select.set_options({r["run_id"]: self._run_label(r) for r in mine},
                                     value=run_id if requested is not None else (mine[0]["run_id"] if mine else None))
         self.run_select.set_enabled(bool(mine))
@@ -292,15 +288,12 @@ class ForecastPanel:
     def _render_arms(self, day: str, runs: List[Dict[str, Any]]) -> None:
         """One tile per arm: whether it ran for the session (issued, failed or no run) and what it rests on; the
         arm shown below highlighted. A tile with runs shows that arm when clicked."""
-        shown = f"arm {self.arm} · {fc.ARM_NAMES[self.arm]}" if self.arm else "no run"
+        shown = f"arm {self.arm} · {ml.ARM_NAMES[self.arm]}" if self.arm else "no run"
         self.arm_title.set_text(f"Arms for {day} - shown: {shown}")
-        done = all(a in self.current for a in "CD")
-        self.llm_day_button.set_text("C and D issued for this day" if done else f"Run C and D for {day}")
-        self.llm_day_button.set_enabled(not done and self.panel is not None)
         self.arm_row.clear()
         with self.arm_row:
-            for arm in fc.ARMS:
-                mine = [r for r in runs if fc.arm_of(r["algorithm_version"]) == arm]
+            for arm in ml.ARMS:
+                mine = [r for r in runs if ml.arm_of(r["algorithm_version"]) == arm]
                 is_shown = arm == self.arm
                 tile = ui.element("div").classes("rounded px-3 py-2 flex flex-col gap-1"
                                                  + (" cursor-pointer" if mine else ""))
@@ -311,7 +304,7 @@ class ForecastPanel:
                     tile.on("click", lambda a=arm: self.pick_arm(a))
                 with tile:
                     with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                        ui.label(f"{arm} · {fc.ARM_NAMES[arm]}").classes("text-sm font-medium")
+                        ui.label(f"{arm} · {ml.ARM_NAMES[arm]}").classes("text-sm font-medium")
                         if arm == BENCHMARK:
                             ui.label("benchmark").classes("text-xs").style(_MUTED)
                         ui.space()
@@ -321,31 +314,25 @@ class ForecastPanel:
                     ui.label(status).classes("text-xs")
                     ui.label(detail).classes("text-xs break-words").style(_MUTED)
 
-    async def _run_llm_for_day(self) -> None:
-        """Arms C and D for the day shown: the same plan and confirmation as Update data (Claude requests are
-        sent only after its Send)."""
-        if self.panel is None:
-            ui.notify("Arms C and D run from the Update data control in the header.", type="warning")
-            return
-        await self.panel.llm_forecast(days=[self.day], arms="CD", batch=False)
-
     @staticmethod
     def _arm_status(arm: str, mine: List[Dict[str, Any]], current: Optional[Dict[str, Any]]):
         """``(status, detail)`` of one arm's tile."""
         if current is not None:
             ev = current.get("evidence") or {}
             n = len(ev.get("members") or [])
+            used = (current.get("outputs") or {}).get("instruments") or {}
             detail = {"A": f"the prior of {(ev.get('prior') or {}).get('sessions', '?')} earlier session(s)",
                       "B": f"{n} rule-based analogue(s)",
-                      "C": f"{n} analogue(s) from a pool of {ev.get('pool_size', 0)} annotated the same way",
-                      "D": f"confidence {(current.get('outputs') or {}).get('confidence', '?')} of 5, from arm B's "
-                           f"evidence"}[arm]
+                      "N": f"NQ's own features · {ml.STATUS[ml.ML_NQ_VERSION]}",
+                      "M": (f"{', '.join(k for k, v in used.items() if v == 'used') or 'no context instrument'} used"
+                            + (f"; {', '.join(k for k, v in used.items() if v != 'used')} missing" if any(
+                                v != 'used' for v in used.values()) else "")
+                            + f" · {ml.STATUS[ml.ML_MULTI_VERSION]}")}[arm]
             return f"issued {str(current['issued_at'])[11:16]} UTC · {current['algorithm_version']}", detail
         if mine:
             return (f"{mine[0]['lifecycle_status']} - {len(mine)} attempt(s), none issued",
                     (mine[0]["failure_reason"] or "")[:110])
-        return "no run for this session", ("Run C and D for this day (above), or Update data" if arm in "CD" else
-                                           "Update data, Run forecaster")
+        return "no run for this session", "Update data, Run forecaster"
 
     def toggle_outcome(self, event) -> None:
         self.outcome_shown = bool(event.value)
@@ -373,8 +360,8 @@ class ForecastPanel:
         with self.provenance:
             status = (f"issued {str(r['issued_at'])[:19]} UTC (database clock)" if r["issued_at"]
                       else f"{r['lifecycle_status']}: {r['failure_reason']}")
-            arm = fc.arm_of(r["algorithm_version"])
-            ui.html((f"<b>Arm {arm} · {fc.ARM_NAMES[arm]}</b> · " if arm else "")
+            arm = ml.arm_of(r["algorithm_version"])
+            ui.html((f"<b>Arm {arm} · {ml.ARM_NAMES[arm]}</b> · " if arm else "")
                     + f"<b>Run {r['run_id']}</b> - <span style='color:{_STATUS_COLOR[r['lifecycle_status']]}'>"
                     f"{status}</span> · {r['mode'].replace('_', ' ')} · cutoff {str(r['input_cutoff_at'])[:16]} UTC"
                     ).classes("text-sm")
@@ -392,12 +379,11 @@ class ForecastPanel:
             if ev.get("prior"):
                 ui.label(f"analogues {members or 'none'}; prior {ev['prior']['sessions']} earlier session(s) - "
                          f"{ev['prior']['known_as_of']}").classes("text-xs").style(_MUTED)
-            attempt = ev.get("attempt") or {}
-            if attempt:
-                usage = attempt.get("usage") or {}
-                ui.label(f"Claude: {attempt.get('model') or 'no answer'}"
-                         + (f", {usage.get('input_tokens', 0):,} input / {usage.get('output_tokens', 0):,} output "
-                            f"tokens" if usage else "") + f"; request {str(attempt.get('request_id'))[:8]}"
+            model = ev.get("model") or {}
+            if model:
+                ui.label(f"model {model.get('family')} · artifact {str(model.get('sha256'))[:12]} · trained on "
+                         f"{(model.get('training') or {}).get('sessions', '?')} session(s) to "
+                         f"{(model.get('training') or {}).get('to', '?')} · {ml.STATUS.get(r['algorithm_version'], '')}"
                          ).classes("text-xs").style(_MUTED)
 
     def _render_targets(self) -> None:
@@ -554,7 +540,7 @@ class ForecastPanel:
                                 ui.element("span").style(
                                     f"display:inline-block;width:14px;height:0;border-top:2px "
                                     f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
-                                ui.label(f"{arm} · {fc.ARM_NAMES[arm]}")
+                                ui.label(f"{arm} · {ml.ARM_NAMES[arm]}")
                             ui.label("benchmark" if arm == BENCHMARK else
                                      f"same class as {BENCHMARK} on {a['agrees']} of {a['comparable']}").classes(
                                 "text-[10px]").style(_MUTED)
@@ -606,7 +592,7 @@ class ForecastPanel:
         for arm, vals in values.items():
             color, bench = _ARM_COLOR[arm], arm == BENCHMARK
             series.append({
-                "name": f"{arm} · {fc.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
+                "name": f"{arm} · {ml.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
                 "value": [round(100 * (v or 0), 1) for v in vals],
                 "symbol": "circle", "symbolSize": 8,
                 "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
@@ -640,7 +626,7 @@ class ForecastPanel:
                 with ui.row().classes(_CELL + " items-center gap-2 no-wrap"):
                     ui.element("span").style(f"display:inline-block;width:14px;height:0;border-top:2px "
                                              f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
-                    ui.label(f"{arm} · {fc.ARM_NAMES[arm]}")
+                    ui.label(f"{arm} · {ml.ARM_NAMES[arm]}")
                 ui.label(f"{a['hits']} of {a['graded']}").classes(_CELL)
                 ui.label("-" if a["mean_p"] is None else f"{100 * a['mean_p']:.0f}%").classes(_CELL)
                 vs = a["vs_benchmark"]

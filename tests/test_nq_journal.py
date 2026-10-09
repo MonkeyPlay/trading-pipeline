@@ -518,9 +518,9 @@ def test_analogue_sets_are_stored_once_per_pool_and_outcomes(market):
     assert store.get_analogue_set(conn, aset["set_id"])["members"] == aset["members"]
     assert store.get_analogue_set(conn, "not-a-uuid") is None
     assert match(conn) == 0                                                          # nothing changed: nothing new
-    # the lookup is per annotation protocol: no Claude set exists, so none is returned in its place
+    # the lookup is per annotation protocol: no set over another protocol's annotation exists, so none is returned
     assert store.latest_analogue_set(conn, target["snapshot_id"], pre.MATCHER_VERSION, defs.LABEL_VERSION,
-                                     pre.LLM_PROTOCOL_VERSION) is None
+                                     "nq_structure_rules_v1") is None
     with pytest.raises(psycopg.Error, match="append-only"):
         conn.execute("DELETE FROM journal.analogue_members;")
 
@@ -704,375 +704,6 @@ def test_a_registered_experiment_is_frozen_scored_and_immutable(market, tmp_path
     for sql in ("DELETE FROM journal.experiment_cases", "UPDATE journal.experiment_results SET code_revision = 'x'"):
         with pytest.raises(psycopg.Error, match="append-only"):
             conn.execute(sql)
-
-
-@needs_db
-def test_the_d_only_design_registers_without_a_request_and_pairs_d_with_b(market, monkeypatch, capsys):
-    """p1_d_research_v1: registering writes one definition and sends nothing (a Claude client cannot even be built);
-    its explicit pairs are scored - D minus B, D minus A, B minus A - and a session D was not run for is a counted
-    case without a run, never dropped."""
-    import anthropic
-    from contracts import nq_forecast as fc
-    from contracts import p1_d_research
-    from database import journal_store as store
-    from forecaster import experiments as ex
-    from forecaster.forecast_service import forecast_all
-    from scripts.nq_journal import main
-
-    def no_client(*args, **kwargs):
-        raise AssertionError("registering must not build a Claude client")
-    monkeypatch.setattr(anthropic, "Anthropic", no_client)
-    conn = market[0]
-    forecast_all(conn)
-    assert main(["--db", DSN, "experiment-register", "--name", p1_d_research.NAME, "--design", "d-research",
-                 "--start", "2026-06-01", "--end", DAY]) == 0
-    assert "No score has been computed" in capsys.readouterr().out
-    manifest = ex.load_manifest(conn, p1_d_research.NAME)
-    assert {k: v["algorithm"] for k, v in manifest["arms"].items()} == {
-        "A": fc.PRIOR_VERSION, "B": fc.BASELINE_VERSION, "D": fc.SYNTHESIS_VERSION}
-    assert manifest["pairs"] == [["D", "B"], ["D", "A"], ["B", "A"]] and "never a timeliness" in manifest["research_only"]
-    assert "sends nothing" in manifest["controls"]
-    assert manifest["primary"] == {"target": "direction_15m", "metric": p1_d_research.BRIER}       # explicit
-    assert "absolute reduction of 0.01" in manifest["minimum_practical_improvement"] and "unhalved 0-2" in \
-        manifest["minimum_practical_improvement"]
-    assert "both paired mean differences, D - B and D - A" in manifest["decision"]
-    results = ex.score_experiment(conn, p1_d_research.NAME)
-    assert results["primary"]["metric"].startswith("multiclass Brier score, the unhalved sum")
-    assert set(results["primary"]["paired"]) == {"D-B", "D-A", "B-A"}
-    assert results["primary"]["paired"]["B-A"]["common"] > 0 and results["primary"]["paired"]["D-B"]["common"] == 0
-    cases = store.experiment_cases(conn, p1_d_research.NAME)
-    assert {c["status"] for c in cases if c["arm"] == "D"} == {"no_run"}                # counted, not dropped
-    assert main(["--db", DSN, "experiment-register", "--name", "other", "--design", "d-research", "--start",
-                 "2026-06-01", "--end", DAY]) == 1
-    assert "named p1_d_research_v1" in capsys.readouterr().out
-
-
-class _Usage:
-    def to_json(self):
-        return '{"input_tokens": 1000, "output_tokens": 500}'
-
-
-class _Message:
-    def __init__(self, answer, model, stop_reason="end_turn"):
-        self.content = [type("Text", (), {"type": "text", "text": json.dumps(answer)})()]
-        self.model, self.stop_reason, self.usage, self.stop_details = model, stop_reason, _Usage(), None
-
-
-class _Stream:
-    """``client.beta.messages.stream(...)``: a context manager whose final message is ``message``."""
-    def __init__(self, message):
-        self.message = message
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def get_final_message(self):
-        return self.message
-
-
-class _Client:
-    def __init__(self, message):
-        self.calls = []
-        outer = self
-
-        class _Messages:
-            def stream(self, **kw):
-                outer.calls.append(kw)
-                return _Stream(message)
-        self.beta = type("Beta", (), {"messages": _Messages()})()
-
-
-@needs_db
-def test_claude_annotation_attempts_are_kept_and_only_valid_ones_stored(market):
-    from contracts import nq_preopen as pre
-    from database import journal_store as store
-    from forecaster import structure_llm as llm
-    from tests.test_structure_llm import answer_from_rules
-    conn = market[0]
-    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
-    snap = store.list_snapshots(conn, DAY, DAY, version)[0]
-    answer = answer_from_rules(snap)
-    attempts = lambda: conn.execute("SELECT status, model, error FROM journal.annotation_attempts "
-                                    "ORDER BY finished_at;").fetchall()
-
-    # outside a run started and confirmed by hand nothing is sent or recorded
-    requests = lambda: conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
-    before, client = (requests(), len(attempts())), _Client(_Message(answer, pre.LLM_MODEL))
-    with pytest.raises(llm.ManualOnly, match="by hand only"):
-        llm.annotate_live(conn, client, snap)
-    assert (requests(), len(attempts())) == before and client.calls == []
-
-    with llm.manual_requests():
-        fallback = llm.annotate_live(conn, _Client(_Message(answer, "claude-opus-4-8")), snap)
-        assert fallback["status"] == "invalid" and "fallback" in fallback["error"]
-        assert store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is None
-        refused = llm.annotate_live(conn, _Client(_Message({}, pre.LLM_MODEL, stop_reason="refusal")), snap)
-        assert refused["status"] == "refused"
-
-        client = _Client(_Message(answer, pre.LLM_MODEL))
-        ok = llm.annotate_live(conn, client, snap)
-        assert ok["status"] == "ok" and client.calls[0]["fallbacks"] == "default"
-        assert client.calls[0]["betas"] == [llm.FALLBACK_BETA]
-        stored = store.latest_annotation(conn, snap["snapshot_id"], pre.LLM_PROTOCOL_VERSION)
-        assert stored["annotator"] == "llm" and stored["model"] == pre.LLM_MODEL
-        assert [r["status"] for r in attempts()] == ["invalid", "refused", "ok"]
-        # every request was in the ledger before it was sent, and every attempt answers exactly one of them
-        linked = conn.execute("SELECT count(*) FROM journal.inference_requests r JOIN journal.annotation_attempts t "
-                              "ON t.request_id = r.request_id WHERE r.mode = 'live';").fetchone()[0]
-        assert linked == 3 and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-        # an answer that is not JSON keeps its raw text
-        garbled = _Message({}, pre.LLM_MODEL)
-        garbled.content[0].text = "Overnight Structure: Uptrend"
-        bad = llm.annotate_live(conn, _Client(garbled), snap)
-        assert bad["status"] == "invalid" and bad["error"].startswith("not JSON")
-        assert conn.execute("SELECT raw_text FROM journal.annotation_attempts WHERE attempt_id = %s;",
-                            (bad["attempt_id"],)).fetchone()[0] == "Overnight Structure: Uptrend"
-
-
-class _Batches:
-    """The Batch API, in memory: ``create`` keeps the requests, ``results`` answers ``answered`` of them."""
-    def __init__(self, answer_for, fail=False, drop=0):
-        self.requests, self.answer_for, self.fail, self.drop = [], answer_for, fail, drop
-
-    def create(self, requests):
-        if self.fail:
-            raise RuntimeError("overloaded")
-        self.requests = list(requests)
-        return type("Batch", (), {"id": "msgbatch_test"})()
-
-    def retrieve(self, batch_id):
-        return type("Batch", (), {"processing_status": "ended"})()
-
-    def results(self, batch_id):
-        for r in self.requests[self.drop:]:
-            message = _Message(self.answer_for(r["custom_id"]), "claude-opus-5-5")
-            yield type("Result", (), {"custom_id": r["custom_id"],
-                                      "result": type("R", (), {"type": "succeeded", "message": message})()})()
-
-
-@needs_db
-def test_llm_requests_are_accounted_for_across_an_interrupted_run(market):
-    from contracts import nq_preopen as pre
-    from database import journal_store as store
-    from forecaster import structure_llm as llm
-    from tests.test_structure_llm import answer_from_rules
-    conn = market[0]
-    version = defs.PROFILES[defs.DEFAULT_PROFILE].snapshot_version
-    snaps = store.list_snapshots(conn, "2000-01-01", PREV, version)[-3:]
-    assert len(snaps) == 3
-    by_request = {}
-    batches = _Batches(lambda custom_id: answer_from_rules(by_request[custom_id]), drop=1)
-    client = type("Client", (), {"messages": type("M", (), {"batches": batches})()})()
-
-    with pytest.raises(llm.ManualOnly):
-        llm.submit_batch(conn, client, snaps)
-    with pytest.raises(llm.ManualOnly):
-        llm.collect_batch(conn, client, "msgbatch_test")
-    assert batches.requests == [] and store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-
-    with llm.manual_requests():
-        # the run sends a batch and ends before collecting it: the batch id and its requests are on record
-        batch_id = llm.submit_batch(conn, client, snaps)
-        sent = store.inference_batch_requests(conn, batch_id)
-        assert batch_id == "msgbatch_test" and [r["custom_id"] for r in batches.requests] == [r["request_id"] for r in sent]
-        for r in sent:
-            by_request[r["request_id"]] = store.get_snapshot(conn, r["snapshot_id"])
-            assert r["request"]["system"][0]["text"] == llm._system_prompt() and r["code_revision"]
-            assert r["request_hash"] == hashlib.sha256(defs.canonical_json(r["request"]).encode()).hexdigest()
-        pending = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
-        assert {r["batch_id"] for r in pending} == {batch_id} and len(pending) == 3
-
-        # the next run collects it - after a prompt change, which must not touch what was sent: each answer is checked
-        # against the archived request; two answers, and the request the batch has no result for is closed as an error
-        real_prompt = llm._system_prompt
-        llm._system_prompt = lambda: "an edited prompt"
-        try:
-            assert llm.collect_batch(conn, client, batch_id) == {"ok": 2, "error": 1}
-        finally:
-            llm._system_prompt = real_prompt
-        assert [r["request_hash"] for r in store.inference_batch_requests(conn, batch_id)] == \
-            [r["request_hash"] for r in sent]
-        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-        assert llm.collect_batch(conn, client, batch_id) == {}                       # collecting again changes nothing
-        assert sum(store.latest_annotation(conn, s["snapshot_id"], pre.LLM_PROTOCOL_VERSION) is not None
-                   for s in snaps) == 2
-
-        # a live request whose run ended before the answer was stored stays unresolved until closed by hand
-        params, request_hash, _ = llm.build_request(snaps[0])
-        store.save_inference_request(conn, llm._ledger_record(snaps[0], params, request_hash, "live"))
-        lost = store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION)
-        assert [(r["mode"], r["batch_id"]) for r in lost] == [("live", None)]
-        assert llm.close_unresolved(conn, lost) == 1
-        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-
-        # a batch the API refuses to create: its requests are closed at once, nothing is left pending
-        failing = type("Client", (), {"messages": type("M", (), {"batches": _Batches(None, fail=True)})()})()
-        assert llm.submit_batch(conn, failing, snaps[:1]) is None
-        assert store.unresolved_inference_requests(conn, pre.LLM_PROTOCOL_VERSION) == []
-        with pytest.raises(psycopg.Error, match="append-only"):
-            conn.execute("DELETE FROM journal.inference_requests;")
-
-
-class _ArmsClient:
-    """Claude for arms C and D: by the request's schema, a restricted annotation or a synthesis of its bundle."""
-    def __init__(self, synthesis=None):
-        from contracts import nq_preopen as pre
-        from tests.test_llm_arms import synthesis_answer
-        self.calls = []
-        outer = self
-
-        class _Messages:
-            def stream(self, **kw):
-                outer.calls.append(kw)
-                bundle = json.loads(kw["messages"][0]["content"].split("\n", 1)[1])
-                if "predictions" in kw["output_config"]["format"]["schema"]["properties"]:
-                    answer = (synthesis or synthesis_answer)(bundle)
-                else:
-                    bar = bundle["bars_5m"]["rows"][0][0]
-                    answer = {"integrity_status": "ok", "contradictions": [], "fields": {
-                        name: {"value": "Range", "status": "classified", "reason": None, "evidence_ids": [bar],
-                               "basis": "shape"} for name in pre.RESTRICTED_FIELDS}}
-                return _Stream(_Message(answer, pre.LLM_MODEL))
-        self.beta = type("Beta", (), {"messages": _Messages()})()
-
-
-@needs_db
-def test_arms_c_and_d_are_sent_by_hand_issued_and_never_sent_twice(market):
-    import re
-    from contracts import nq_forecast as fc
-    from contracts import nq_preopen as pre
-    from database import journal_store as store
-    from forecaster import llm_arms as la
-    from forecaster import structure_llm as llm
-    from tests.test_llm_arms import synthesis_answer
-    conn = market[0]
-    noon = cal.ny_instant(date.fromisoformat(DAY), time(12, 0))
-    plan = la.plan(conn, 2, now=noon)
-    assert [r["session_date"] for r in plan["sessions"]] == [PREV, DAY]
-    assert (plan["requests_c"], plan["requests_d"], plan["restricted_pool"]) == (2, 2, 0) and plan["usd"] > 0
-    client = _ArmsClient()
-    requests = lambda: conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
-    before = requests()
-    with pytest.raises(llm.ManualOnly):                                  # not started by hand: nothing sent
-        la.run(conn, client, 2, now=noon)
-    assert requests() == before and client.calls == []
-
-    with llm.manual_requests():
-        summary = la.run(conn, client, 2, now=noon)
-    assert summary["requests_sent"] == 4 and len(client.calls) == 4
-    for day in (PREV, DAY):
-        runs = {r["algorithm_version"]: store.get_forecast_run(conn, r["run_id"])
-                for r in store.list_forecast_runs(conn, day, day)}
-        c, d = runs[fc.RESTRICTED_VERSION], runs[fc.SYNTHESIS_VERSION]
-        assert c["lifecycle_status"] == "issued" and c["evidence"]["protocol_version"] == pre.RESTRICTED_PROTOCOL_VERSION
-        assert d["lifecycle_status"] == "issued" and d["schema_version"] == fc.SYNTHESIS_SCHEMA_VERSION
-        assert d["request_id"] and d["outputs"]["confidence"] == 2 and d["annotation_id"] == runs[
-            fc.BASELINE_VERSION]["annotation_id"]                       # arm B's evidence
-        assert {p["estimation_status"] for p in d["predictions"].values()} <= {"judgement", "none"}
-    day_c = store.get_forecast_run(conn, [r["run_id"] for r in store.list_forecast_runs(conn, DAY, DAY)
-                                          if r["algorithm_version"] == fc.RESTRICTED_VERSION][0])
-    assert day_c["evidence"]["pool_size"] == 1                          # C's pool: PREV, annotated the same way
-    assert store.unresolved_inference_requests(conn, fc.SYNTHESIS_VERSION) == []
-    assert store.unresolved_inference_requests(conn, pre.RESTRICTED_PROTOCOL_VERSION) == []
-    assert not any(re.search(r"\d{4}-\d{2}-\d{2}", c["messages"][0]["content"]) for c in client.calls)
-
-    assert la.plan(conn, 2, now=noon)["requests"] == 0                  # everything answered: nothing to send
-    # estimates now come from the requests answered (the fake's usage: 500 output tokens each)
-    assert la.measured_output_tokens(conn, "C") == (500, f"the median of 2 {pre.RESTRICTED_PROTOCOL_VERSION} request(s)")
-    assert la.measured_output_tokens(conn, "D") == (500, f"the median of 2 {fc.SYNTHESIS_VERSION} request(s)")
-    with llm.manual_requests():
-        assert la.run(conn, client, 2, now=noon)["requests_sent"] == 0
-    assert len(client.calls) == 4
-
-    # an invalid synthesis is kept as an invalid run with its raw text; a retry can still issue
-    with llm.manual_requests():
-        bad = la.synthesize(conn, _ArmsClient(lambda b: synthesis_answer(b, top_share="0.85")), "2026-06-10")
-        assert bad["run"]["lifecycle_status"] == "invalid" and "sum to" in bad["run"]["failure_reason"]
-        assert bad["run"]["evidence"]["attempt"]["raw_text"]
-        assert la.synthesize(conn, client, "2026-06-10")["run"]["lifecycle_status"] == "issued"
-        assert la.synthesize(conn, client, "2026-06-10")["status"] == "stored"
-
-    # chosen days: the plan covers exactly the sessions among them; the CLI estimates them, and without a valid
-    # approval (no terminal here) it sends nothing
-    from scripts.nq_journal import main
-    chosen = la.plan(conn, days=["2026-06-08", "2026-06-13", DAY])            # 06-13 is a Saturday
-    assert [r["session_date"] for r in chosen["sessions"]] == ["2026-06-08", DAY]
-    assert chosen["requests_c"] == 1 and chosen["requests_d"] == 1            # DAY's arms are issued already
-    before = requests()
-    assert main(["--db", DSN, "llm-forecast", "--date", "2026-06-08", "--estimate"]) == 0
-    assert main(["--db", DSN, "llm-forecast", "--start", "2026-06-08", "--end", "2026-06-09",
-                 "--approval", "0123abcd"]) == 1
-    assert requests() == before
-
-
-class _ArmsBatchClient(_ArmsClient):
-    """Arms C and D through the Batch API, in memory: batches end when ``ended`` is set; their results answer each
-    request as _ArmsClient would."""
-    def __init__(self):
-        super().__init__()
-        self.batches, self.ended = {}, True
-        outer = self
-
-        class _Batches:
-            def create(self, requests):
-                batch_id = f"msgbatch_{len(outer.batches) + 1}"
-                outer.batches[batch_id] = list(requests)
-                return type("Batch", (), {"id": batch_id})()
-
-            def retrieve(self, batch_id):
-                return type("Batch", (), {"processing_status": "ended" if outer.ended else "in_progress"})()
-
-            def results(self, batch_id):
-                for r in outer.batches[batch_id]:
-                    message = outer.beta.messages.stream(**r["params"]).get_final_message()
-                    yield type("Result", (), {"custom_id": r["custom_id"], "result": type(
-                        "R", (), {"type": "succeeded", "message": message})()})()
-        self.messages = type("M", (), {"batches": _Batches()})()
-
-
-@needs_db
-def test_arms_c_and_d_through_the_batch_api_are_collected_and_never_sent_twice(market):
-    from contracts import nq_forecast as fc
-    from contracts import nq_preopen as pre
-    from database import journal_store as store
-    from forecaster import llm_arms as la
-    from forecaster import structure_llm as llm
-    conn = market[0]
-    days = ["2026-06-03", "2026-06-04"]
-    plan = la.plan(conn, days=days, batch=True)
-    live = la.plan(conn, days=days)
-    assert plan["requests"] == 4 and plan["usd"] == pytest.approx(live["usd"] / 2, abs=0.01)
-    client = _ArmsBatchClient()
-    client.ended = False                                         # still processing when the wait runs out
-    with llm.manual_requests():
-        first = la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)
-    assert first["requests_sent"] == 4 and len(client.batches) == 2
-    pending = la.plan(conn, days=days, batch=True)
-    assert pending["requests"] == 0 and set(pending["pending_batches"]) == {"C", "D"}
-    assert all(r["C"].startswith("pending") and r["D"].startswith("pending") for r in pending["sessions"])
-    with llm.manual_requests():                                  # still processing: nothing is sent again
-        assert la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)[
-            "requests_sent"] == 0
-    assert len(client.batches) == 2
-
-    client.ended = True                                          # the next run collects them first
-    with llm.manual_requests():
-        la.run(conn, client, days=days, batch=True, wait_minutes=0, sleep=lambda s: None)
-    assert len(client.batches) == 2 and la.pending_batches(conn) == {"C": [], "D": []}
-    for day in days:
-        runs = {r["algorithm_version"]: r for r in store.list_forecast_runs(conn, day, day)}
-        assert runs[fc.SYNTHESIS_VERSION]["lifecycle_status"] == "issued"
-        assert runs[fc.RESTRICTED_VERSION]["lifecycle_status"] == "issued"
-        d = store.get_forecast_run(conn, runs[fc.SYNTHESIS_VERSION]["run_id"])
-        request = conn.execute("SELECT mode FROM journal.inference_requests WHERE request_id = %s;",
-                               (d["request_id"],)).fetchone()
-        assert request["mode"] == "batch"
-    assert la.plan(conn, days=days)["requests"] == 0
-    ratio, basis = la._input_chars_per_token(conn, "D")
-    assert "measured" in basis and ratio > 0
 
 
 @needs_db
@@ -1343,32 +974,36 @@ def test_a_live_capture_keeps_receipts_and_verifies_what_was_known(market):
 
 
 # --------------------------------------------------------------------------
-# Arm D live (forecaster/live_synthesis.py): simulated provider answers only
+# The forecast in force (forecaster/delivery.py) and the 09:15 candidate's capture
 # --------------------------------------------------------------------------
 
-def _live_run(algorithm, status="issued", ack_s=-5.0, issued_s=-10.0):
-    """A live run as stored, its issue and acknowledgement ``*_s`` seconds from the deadline (None: none)."""
+def _live_run(algorithm, status="issued", ack_s=-5.0, issued_s=-10.0, mode="live"):
+    """A run as stored, its issue and acknowledgement ``*_s`` seconds from the deadline (None: none)."""
     due = datetime(2027, 6, 14, 13, 29, 50, tzinfo=UTC)
-    return {"run_id": algorithm, "algorithm_version": algorithm, "mode": "live", "lifecycle_status": status,
-            "deadline_at": due, "issued_at": None if issued_s is None or status != "issued" else
-            due + timedelta(seconds=issued_s),
+    return {"run_id": algorithm, "algorithm_version": algorithm, "mode": mode, "lifecycle_status": status,
+            "deadline_at": due if mode == "live" else None, "failure_reason": None if status == "issued" else "why",
+            "issued_at": None if issued_s is None or status != "issued" else due + timedelta(seconds=issued_s),
             "events": [] if ack_s is None else [{"event": "acknowledged", "at": due + timedelta(seconds=ack_s)}]}
 
 
-def test_the_forecast_in_force_is_the_first_timely_of_d_b_a():
+def test_the_forecast_in_force_is_the_first_usable_in_the_delivery_order():
     from contracts import nq_forecast as fc
-    from forecaster.live_synthesis import delivered
-    d, b, a = fc.SYNTHESIS_VERSION, fc.BASELINE_VERSION, fc.PRIOR_VERSION
-    assert delivered([_live_run(b), _live_run(a), _live_run(d)]) == (_live_run(d), "D timely")
-    run, why = delivered([_live_run(b), _live_run(a), _live_run(d, "late", ack_s=None)])
-    assert run["algorithm_version"] == b and why == "B timely (D late)"
-    run, why = delivered([_live_run(b), _live_run(d, ack_s=+1.0)])        # issued in time, acknowledged after
-    assert run["algorithm_version"] == b and why == "B timely (D issued, not acknowledged by the deadline)"
-    run, why = delivered([_live_run(b, "unavailable", ack_s=None), _live_run(a)])
-    assert run["algorithm_version"] == a and why == "A timely (D not run; B unavailable)"
-    run, why = delivered([_live_run(b, "late", ack_s=None), _live_run(a, "late", ack_s=None),
-                          _live_run(d, "failed", ack_s=None)])
-    assert run is None and why == ("no live run issued and acknowledged by the deadline (D failed; B late; A late)")
+    from contracts import nq_ml as ml
+    from forecaster.delivery import delivered
+    name = lambda v: ml.ARM_LABELS[v]
+    m, n, b, a = ml.ML_MULTI_VERSION, ml.ML_NQ_VERSION, fc.BASELINE_VERSION, fc.PRIOR_VERSION
+    assert ml.delivery_order() == [b, a]                                  # the ML forecasts are experimental
+    run, why = delivered([_live_run(b), _live_run(a), _live_run(m)], ml.delivery_order(), name)
+    assert run["algorithm_version"] == b and why == "B (analogues)"       # an experimental model is never delivered
+    order = [m, n, b, a]                                                  # once promoted
+    run, why = delivered([_live_run(m, "unavailable", ack_s=None), _live_run(n), _live_run(b)], order, name)
+    assert run["algorithm_version"] == n and why == "ML NQ-only (fallback: ML multi-instrument unavailable: why)"
+    run, why = delivered([_live_run(m, ack_s=+1.0), _live_run(b)], order, name)    # acknowledged after the deadline
+    assert run["algorithm_version"] == b and "issued, not acknowledged by the deadline" in why
+    run, why = delivered([_live_run(b, "late", ack_s=None), _live_run(a, "late", ack_s=None)], [b, a], name)
+    assert run is None and why == "no usable forecast (B (analogues) late: why; A (frequencies) late: why)"
+    replay = [_live_run(b, ack_s=None, mode="historical_replay"), _live_run(a, ack_s=None, mode="historical_replay")]
+    assert delivered(replay, [b, a], name)[0]["algorithm_version"] == b   # a replay needs no acknowledgement
 
 
 CANDIDATE = "candidate_0915"
@@ -1403,13 +1038,10 @@ def _live_copy(conn, day, built_at=None, profile=CANDIDATE):
     return str(row[0])
 
 
-def _capture_d(conn, day, synthesis, at, manual=True, **kw):
+def _capture(conn, day, at, **kw):
     from forecaster import live_capture as live
-    from forecaster import structure_llm as llm
-    from contextlib import nullcontext
     clock = _Clock(cal.ny_instant(date.fromisoformat(day), at))
-    with llm.manual_requests() if manual else nullcontext():
-        return live.capture(conn, None, day, CANDIDATE, clock=clock, sleep=clock.sleep, synthesis=synthesis, **kw)
+    return live.capture(conn, None, day, CANDIDATE, clock=clock, sleep=clock.sleep, **kw)
 
 
 def _steps(conn, result):
@@ -1417,165 +1049,49 @@ def _steps(conn, result):
     return [e["event"] for e in store.capture_events(conn, result["capture_id"])]
 
 
-def _d_run(conn, result):
-    from contracts import nq_forecast as fc
-    from database import journal_store as store
-    return store.get_forecast_run(conn, next(r["run_id"] for r in result["runs"]
-                                             if r["algorithm"] == fc.SYNTHESIS_VERSION))
-
-
 def _capture_row(conn, capture_id):
     return conn.execute("SELECT * FROM journal.live_captures WHERE capture_id = %s;", (capture_id,)).fetchone()
 
 
 @needs_db
-def test_live_arm_d_is_issued_by_the_deadline_from_arm_bs_live_evidence_and_never_sent_twice(candidate):
-    """The whole live path on the 09:15 candidate with a simulated answer: D's request is built from the live B
-    run's evidence ids and recorded before it is sent; the database issues D, the capture acknowledges it, and D is
-    in force. A restart sends nothing again; the stored run and its evidence cannot be changed."""
-    import re
+def test_a_live_capture_records_the_forecast_in_force_and_its_settings(candidate):
+    """A later session's capture on the candidate profile: A and B issued in time, B in force, recorded as the
+    capture's last step with its settings on the capture row; DAY's capture (its runs late by the database clock):
+    nothing usable, and the record says why."""
     from contracts import nq_forecast as fc
-    from database import journal_store as store
-    from forecaster import live_synthesis as ls
-    from forecaster.forecast_service import timely, utc
     conn = candidate
-    day = "2027-06-14"
-    snapshot_id = _live_copy(conn, day)
-    client = _ArmsClient()
-    result = _capture_d(conn, day, ls.LiveSynthesis(client), time(9, 29, 5))
-    assert len(client.calls) == 1 and result["synthesis"] == "issued" and result["snapshot_id"] == snapshot_id
+    _live_copy(conn, "2027-06-14")
+    result = _capture(conn, "2027-06-14", time(9, 29, 5))
+    assert _steps(conn, result)[-1] == "delivered" and result["status"] == "issued"
+    assert result["delivered"]["arm"] == "B (analogues)" and result["delivered"]["reason"] == "B (analogues)"
     row = _capture_row(conn, result["capture_id"])
-    assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"], row["with_d"]) == (
-        fc.ISSUE_POLICIES["live"], fc.LIVE_DEFAULT_WAIT_S, fc.LIVE_RESERVE_S["D"], True)
-    assert _steps(conn, result)[-4:] == ["forecast", "synthesis_requested", "forecast", "delivered"]
-    assert [(r["algorithm"], r["timely"]) for r in result["runs"]] == [
-        (fc.BASELINE_VERSION, True), (fc.PRIOR_VERSION, True), (fc.SYNTHESIS_VERSION, True)]
-    d = _d_run(conn, result)
-    assert result["delivered"] == {"run_id": d["run_id"], "arm": "D", "reason": "D timely"}
-    assert ls.session_delivered(conn, day, CANDIDATE)[0]["run_id"] == d["run_id"]
-    assert d["mode"] == "live" and d["issue_policy"] == fc.ISSUE_POLICIES["live"] and timely(d)
-    assert utc(d["deadline_at"]) == ls.deadline(day) and utc(d["issued_at"]) <= ls.deadline(day)
-
-    # arm B's frozen live evidence, exactly: the same ids and the same evidence apart from the versions it names
-    b = store.get_forecast_run(conn, result["runs"][0]["run_id"])
-    assert all(d[k] == b[k] for k in ("snapshot_id", "annotation_id", "analogue_set_id"))
-    strip = lambda e: {k: v for k, v in e.items() if k not in ("versions", "attempt")}
-    assert strip(d["evidence"]) == strip(b["evidence"]) and d["evidence"]["mode"] == "live"
-    assert d["evidence"]["versions"]["algorithm"] == fc.SYNTHESIS_VERSION
-    request = conn.execute("SELECT * FROM journal.inference_requests WHERE request_id = %s;",
-                           (d["request_id"],)).fetchone()
-    assert request["request_hash"] == d["evidence"]["attempt"]["request_hash"]
-    assert str(request["snapshot_id"]) == snapshot_id and utc(request["created_at"]) <= utc(d["issued_at"])
-    assert not re.search(r"\d{4}-\d{2}-\d{2}", client.calls[0]["messages"][0]["content"])     # date-blinded
-
-    # a restart: nothing is sent again, and D is still the forecast in force
-    again = _capture_d(conn, day, ls.LiveSynthesis(client), time(9, 29, 20))
-    assert len(client.calls) == 1 and again["synthesis"] == "issued"
-    assert "synthesis_skipped" in _steps(conn, again) and again["delivered"]["run_id"] == d["run_id"]
-    for sql in ("UPDATE journal.forecast_runs SET lifecycle_status = 'late'",
-                "UPDATE journal.forecast_evidence SET evidence = '{}'",
-                "DELETE FROM journal.forecast_predictions"):
-        with pytest.raises(psycopg.Error, match="append-only"):
-            conn.execute(sql)
-
-
-@needs_db
-def test_live_arm_d_falls_back_to_the_numerical_forecast(candidate):
-    """Simulated provider answers that do not make it: an invalid answer, an error, no approval, a passed
-    deadline, no answer at all. Each is recorded; arm B, issued in time, is the forecast in force."""
-    import threading
-    from contracts import nq_forecast as fc
-    from forecaster import live_synthesis as ls
-    from tests.test_llm_arms import synthesis_answer
-    conn = candidate
-    requests = lambda snap: ls.requests_of(conn, snap)
-
-    def in_force(result):
-        return result["delivered"]["arm"], result["delivered"]["reason"]
-
-    _live_copy(conn, "2027-06-15")                                      # an invalid answer: kept, never in force
-    bad = _capture_d(conn, "2027-06-15", ls.LiveSynthesis(_ArmsClient(lambda b: synthesis_answer(b, top_share="0.85"))),
-                     time(9, 29, 5))
-    assert bad["synthesis"] == "invalid" and in_force(bad) == ("B", "B timely (D invalid)")
-    assert "sum to" in _d_run(conn, bad)["failure_reason"] and _d_run(conn, bad)["evidence"]["attempt"]["raw_text"]
-
-    def error(client, params):
-        raise RuntimeError("overloaded")
-    _live_copy(conn, "2027-06-16")                                      # the provider's error: a failed run
-    failed = _capture_d(conn, "2027-06-16", ls.LiveSynthesis(None, send=error), time(9, 29, 5))
-    assert failed["synthesis"] == "failed" and in_force(failed) == ("B", "B timely (D failed)")
-    assert _d_run(conn, failed)["failure_reason"] == "RuntimeError: overloaded"
-
-    client = _ArmsClient()
-    unapproved_snap = _live_copy(conn, "2027-06-17")                    # not started by hand: nothing sent
-    unapproved = _capture_d(conn, "2027-06-17", ls.LiveSynthesis(client), time(9, 29, 5), manual=False)
-    assert client.calls == [] and requests(unapproved_snap) == [] and unapproved["synthesis"] == "skipped"
-    assert in_force(unapproved) == ("B", "B timely (D not run)") and "synthesis_skipped" in _steps(conn, unapproved)
-
-    passed_snap = _live_copy(conn, "2027-06-21")                        # the deadline passed before the request
-    passed = _capture_d(conn, "2027-06-21", ls.LiveSynthesis(client), time(9, 29, 55))
-    assert client.calls == [] and requests(passed_snap) == [] and in_force(passed)[0] == "B"
-
-    release = threading.Event()
-
-    def silent(client, params):
-        release.wait(10)
-        raise RuntimeError("answered after the capture gave up")
-    _live_copy(conn, "2027-06-22")                                      # no answer by the deadline, nor after
-    try:
-        silent_result = _capture_d(conn, "2027-06-22", ls.LiveSynthesis(None, send=silent, late_wait_s=0.3),
-                                   time(9, 29, 49, 800000))
-    finally:
-        release.set()
-    assert in_force(silent_result) == ("B", "B timely (D not run)")    # decided at the deadline, before D's run
-    assert _steps(conn, silent_result)[-3:] == ["synthesis_requested", "delivered", "forecast"]
-    assert silent_result["synthesis"] == "failed"
-    assert _d_run(conn, silent_result)["failure_reason"] == "no answer 0 s after the deadline"
-    assert ls.session_delivered(conn, "2027-06-22", CANDIDATE)[0]["algorithm_version"] == fc.BASELINE_VERSION
-
-
-@needs_db
-def test_a_late_live_synthesis_is_stored_late_and_never_in_force(candidate):
-    """DAY's live candidate snapshot (built before its open; its arms A and B are late by the database clock): D's
-    valid answer comes after the deadline was reached on the capture's clock - the forecast in force is decided
-    first (none: nothing was timely), then D is stored, and the database makes it late: no issued_at, its answer
-    kept, never timely."""
-    import time as _time
-    from forecaster import live_synthesis as ls
-    from forecaster import structure_llm as llm
-    conn = candidate
+    assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"]) == (fc.ISSUE_POLICIES["live"],
+                                                                           fc.LIVE_DEFAULT_WAIT_S, fc.LIVE_RESERVE_S)
     _live_copy(conn, DAY, built_at=cal.ny_instant(date.fromisoformat(DAY), time(9, 20)))
-
-    def slow(client, params):
-        _time.sleep(0.5)
-        return llm.send(_ArmsClient(), params)
-    result = _capture_d(conn, DAY, ls.LiveSynthesis(None, send=slow, late_wait_s=10), time(9, 29, 49, 800000))
-    assert _steps(conn, result)[-3:] == ["synthesis_requested", "delivered", "forecast"]
-    assert result["delivered"] == {"run_id": None, "arm": None, "reason": "no live run issued and acknowledged by "
-                                   "the deadline (D not run; B late; A late)"}
-    d = _d_run(conn, result)
-    assert d["lifecycle_status"] == "late" and d["issued_at"] is None and "after the deadline" in d["failure_reason"]
-    assert d["evidence"]["attempt"]["answer"] and d["predictions"]
-    assert ls.session_delivered(conn, DAY, CANDIDATE)[0] is None
+    late = _capture(conn, DAY, time(9, 29, 5))
+    assert late["delivered"]["run_id"] is None and late["delivered"]["reason"].startswith("no usable forecast")
 
 
 @needs_db
-def test_a_capture_whose_wait_leaves_no_time_to_issue_never_starts(candidate):
-    """The data wait plus the reserve for issuing must end by the deadline: after a 09:29 cutoff there is no time
-    for D at all; after 09:15 at most 13.3 minutes. Nothing is recorded and nothing is sent."""
+def test_a_capture_whose_wait_leaves_no_time_to_issue_never_starts(candidate, capsys):
+    """The data wait plus the reserve for issuing must end by the deadline: after 09:15 at most 14.7 minutes, after
+    09:29 at most 40 seconds. Nothing is recorded; the command stops before it connects to IB."""
+    from contracts import nq_forecast as fc
     from forecaster import live_capture as live
-    from forecaster import live_synthesis as ls
+    from scripts.nq_journal import main
     conn = candidate
-    client = _ArmsClient()
     count = lambda: conn.execute("SELECT count(*) FROM journal.live_captures;").fetchone()[0]
     before = count()
-    with pytest.raises(live.LiveCaptureError, match="no wait fits after a 09:29 cutoff"):
-        live.capture(conn, None, "2027-06-23", "research_0929", synthesis=ls.LiveSynthesis(client))
-    with pytest.raises(live.LiveCaptureError, match="at most 13.3 minutes fit"):
-        live.capture(conn, None, "2027-06-23", CANDIDATE, synthesis=ls.LiveSynthesis(client), wait_s=13.5 * 60)
-    live.check_wait("2027-06-23", CANDIDATE, 13 * 60, True)               # the candidate wait fits, with D
-    live.check_wait("2027-06-23", "research_0929", 20, False)             # A and B alone after 09:29
-    assert count() == before and client.calls == []
+    assert fc.LIVE_RESERVE_S == 10
+    with pytest.raises(live.LiveCaptureError, match="at most 14.7 minutes fit"):
+        _capture(conn, "2027-06-23", time(9, 10), wait_s=15 * 60)
+    with pytest.raises(live.LiveCaptureError, match="at most 0.7 minutes fit"):
+        live.capture(conn, None, "2027-06-23", "research_0929", wait_s=60)
+    live.check_wait("2027-06-23", CANDIDATE, 13 * 60)                      # the candidate wait fits
+    live.check_wait("2027-06-23", "research_0929", 20)
+    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--wait-minutes", "1"]) == 1
+    assert "Not started" in capsys.readouterr().out
+    assert count() == before
 
 
 class _DelayedIB(_LiveIB):
@@ -1618,8 +1134,8 @@ def test_a_long_wait_keeps_the_0915_evidence_cutoff_and_a_bar_too_late_is_a_miss
         found = next(e for e in events if e["event"] == "bars_received")
         assert taken["status"] == "failed" and "CheckViolation" in taken["reason"] and found
         row = _capture_row(conn, taken["capture_id"])
-        assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"], row["with_d"]) == (
-            fc.ISSUE_POLICIES["live"], 780, fc.LIVE_RESERVE_S["AB"], False)
+        assert (row["issue_policy"], row["wait_limit_s"], row["reserve_s"]) == (
+            fc.ISSUE_POLICIES["live"], 780, fc.LIVE_RESERVE_S)
         requested = [e["detail"] for e in events if e["event"] == "bars_requested"]
         assert requested[0]["newest"] < cutoff_bar and requested[-1]["newest"] == cutoff_bar
         assert 16 < len(requested) < 60                                  # fast at first, then every 15 s
@@ -1647,115 +1163,3 @@ def test_a_long_wait_keeps_the_0915_evidence_cutoff_and_a_bar_too_late_is_a_miss
         save_trading_day(conn, NQ_CID, PREV, original)
 
 
-@needs_db
-def test_live_arm_d_needs_an_approval_before_anything_starts(candidate, capsys):
-    """Without a valid approval (and no terminal here) the live command stops before connecting to IB; a wait that
-    leaves no time for D stops it before that."""
-    from scripts.nq_journal import main
-    conn = candidate
-    before = conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0]
-    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--with-d"]) == 1      # research_0929: no time for D
-    assert "Not started" in capsys.readouterr().out
-    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--profile", CANDIDATE, "--with-d",
-                 "--wait-minutes", "13", "--approval", "0123abcd"]) == 1
-    assert "Nothing was sent" in capsys.readouterr().out
-    assert main(["--db", DSN, "live", "--date", "2027-06-23", "--profile", CANDIDATE, "--with-d"]) == 1
-    assert "started by hand only" in capsys.readouterr().out
-    assert conn.execute("SELECT count(*) FROM journal.inference_requests;").fetchone()[0] == before
-    assert store_captures(conn, "2027-06-23") == []
-
-
-def store_captures(conn, day):
-    from database import journal_store as store
-    return store.live_captures(conn, day, day)
-
-
-@needs_db
-def test_d_availability_counts_every_scheduled_opportunity(candidate):
-    """Over 2027-06-14 to 06-23 (the captures above): one valid D stored by the deadline, every other outcome a
-    failure in the denominator - invalid, failed, no request (twice), no capture - with an exact interval."""
-    from forecaster import live_availability as la_
-    from forecaster.journal import pool_started
-    conn = candidate
-    assert pool_started(conn, CANDIDATE)                                 # Auto would keep this pool current
-    res = la_.availability(conn, "2027-06-14", "2027-06-23", CANDIDATE)
-    assert (res["numerator"], res["denominator"]) == (1, 7) and res["met"] is False
-    assert res["categories"] == {"timely": 1, "invalid": 1, "failed": 2, "no request": 2, "no capture": 1}
-    by_day = {x["session_date"]: (x["category"], x["detail"]) for x in res["sessions"]}
-    assert by_day["2027-06-17"] == ("no request", "not approved: Claude requests are started by hand only")
-    assert by_day["2027-06-21"][1].startswith("the deadline had passed")
-    assert by_day["2027-06-23"] == ("no capture", None)
-    lo, hi = res["interval"]
-    assert abs(lo - 0.00361) < 1e-4 and abs(hi - 0.57872) < 1e-4            # Clopper-Pearson, 1 of 7
-    assert la_.exact_interval(0, 10) == (0.0, pytest.approx(0.30850, abs=1e-4))
-    text = la_.report(res)
-    assert "1 of 7 scheduled opportunities" in text and "not met" in text and "not evidence of skill" in text
-    excluded = la_.availability(conn, "2027-06-14", "2027-06-23", CANDIDATE, excluded=["2027-06-23"])
-    assert excluded["denominator"] == 6
-
-
-@needs_db
-def test_the_live_comparison_scores_d_where_all_arms_were_timely_and_the_delivered_policy_everywhere(candidate):
-    """p1_live_abd_v1's manifest (registered here only to test it): the delivered arm is the first timely run of
-    D, B, A on every session; A, B and D are paired only where all three were timely; availability is part of the
-    results. No outcomes exist for 2027, so every case with a run is 'no_outcome' - nothing is scored."""
-    from contracts import nq_forecast as fc
-    from contracts import p1_live_abd
-    from database import journal_store as store
-    from forecaster import experiments as ex
-    conn = candidate
-    m = p1_live_abd.manifest("2027-06-14", "2027-06-23")
-    assert m["mode"] == "live" and m["official_run"]["rule"] == "first_timely" and m["profile"] == CANDIDATE
-    assert m["arms"]["delivered"]["delivered"] == [fc.SYNTHESIS_VERSION, fc.BASELINE_VERSION, fc.PRIOR_VERSION]
-    assert "does not establish that the true improvement is at least 0.01" in m["decision"]
-    assert m["availability"]["requirement"] == 0.90 and "late completion" in m["availability"]["denominator"]
-    assert ex.register_experiment(conn, m)
-    results = ex.score_experiment(conn, p1_live_abd.NAME)
-    cases = {(c["session_date"], c["arm"]): c for c in store.experiment_cases(conn, p1_live_abd.NAME)}
-    runs = lambda day: {r["algorithm_version"]: r["run_id"] for r in store.list_forecast_runs(conn, day, day,
-                                                                                              CANDIDATE, "live")}
-    assert cases[("2027-06-14", "delivered")]["run_id"] == runs("2027-06-14")[fc.SYNTHESIS_VERSION]
-    assert cases[("2027-06-15", "delivered")]["run_id"] == runs("2027-06-15")[fc.BASELINE_VERSION]
-    assert cases[("2027-06-15", "D")]["status"] == "no_run"                # invalid: no timely D
-    assert cases[("2027-06-23", "delivered")]["detail"].startswith("no timely run of")
-    assert results["cases"]["delivered"] == {"no_outcome": 6, "no_run": 1}
-    assert results["availability"]["numerator"] == 1 and results["availability"]["denominator"] == 7
-    assert set(results["primary"]["paired"]) == {"D-B", "D-A", "B-A", "delivered-B", "delivered-A"}
-
-
-@needs_db
-def test_the_latency_pilot_sends_nothing_above_its_cap_and_reports_no_score(candidate, monkeypatch, capsys):
-    """p1_d_latency_pilot_v1 on two candidate sessions here: a plan whose worst case is above the cap sends nothing;
-    an invalid approval sends nothing; approved, it sends what the plan needs, and its report gives durations,
-    validation and token costs - never a score. The timeliness estimate then has v5 generation times."""
-    from contracts import p1_d_latency_pilot as pilot
-    from forecaster import d_pilot
-    from forecaster import structure_llm as llm
-    from forecaster import timeliness as tl
-    from scripts.nq_journal import main
-    conn = candidate
-    monkeypatch.setattr(pilot, "SESSIONS", (PREV, DAY))
-    client = _ArmsClient()
-    monkeypatch.setattr(pilot, "MAX_USD", 1.00)                         # below one request's worst case
-    plan = d_pilot.plan(conn)
-    assert plan["requests"] == 2 and plan["worst"] > 1.0 and not plan["fits"] and plan["allowed"] == 0
-    with llm.manual_requests():
-        assert d_pilot.run(conn, client)["stopped"].startswith(f"stopped before {PREV}")
-    assert main(["--db", DSN, "d-pilot", "--estimate"]) == 1 and "nothing will be sent" in capsys.readouterr().out
-    monkeypatch.setattr(pilot, "MAX_USD", 2.00)
-    assert d_pilot.plan(conn)["allowed"] == 2
-    assert main(["--db", DSN, "d-pilot", "--approval", "0123abcd"]) == 1
-    assert "Nothing was sent" in capsys.readouterr().out and client.calls == []
-
-    before = len(tl.d_generation_seconds(conn))
-    with llm.manual_requests():
-        summary = d_pilot.run(conn, client)
-    assert summary["requests_sent"] == 2 and len(client.calls) == 2 and summary["stopped"] is None
-    rows = d_pilot.rows(conn)
-    assert [(r["session_date"], r["status"]) for r in rows] == [(PREV, "issued"), (DAY, "issued")]
-    assert all(r["seconds"] >= 0 and r["usage"]["output_tokens"] == 500 and r["usd"] == pytest.approx(0.014)
-               for r in rows)
-    text = d_pilot.report(conn)
-    assert "**Valid:** 2 of 2" in text and "No predictive score" in text and "brier" not in text.lower()
-    assert len(tl.d_generation_seconds(conn)) == before + 2
-    assert d_pilot.plan(conn)["requests"] == 0                            # answered: never sent again

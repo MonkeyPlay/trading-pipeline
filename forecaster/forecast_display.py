@@ -41,7 +41,7 @@ def _basis(target: str, p: Dict[str, Any], algorithm: str) -> str:
     source = ("the earlier-session prior alone" if algorithm == fc.PRIOR_VERSION else
               {"analogues": f"{p['eligible']} analogue label(s) ({p['without_label']} without)",
                "prior_only": f"no analogue label ({p['without_label']} without): the prior only",
-               "judgement": f"the synthesis' judgement from arm B's evidence ({p['eligible']} analogue label(s))",
+               "model": f"a trained model ({p['eligible']} training session(s))",
                "none": "no estimate"}[p["estimation_status"]])
     share = f"; p = {percent(p['distribution'][p['predicted_label']])}" if p["status"] == "predicted" else ""
     return (f"{algorithm}: {source}, prior {p['prior_sessions']} session(s) "

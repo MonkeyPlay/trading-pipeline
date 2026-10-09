@@ -26,7 +26,6 @@ dashboard (PREVIEW_FILE), replaced by the next.
 A preview is not a forecast run: it has no run id, no issue policy and no place in an
 experiment. Before the cutoff its evidence is incomplete by design - an input not yet
 known is unavailable, never filled in - so it can differ from the official forecast.
-Claude is never asked: the preview uses the rule-based annotation.
 """
 
 from __future__ import annotations

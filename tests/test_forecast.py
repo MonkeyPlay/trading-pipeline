@@ -53,13 +53,13 @@ def test_the_contract_is_p1s_47_properties_with_explicit_units():
     kinds = {r["version"]: r["kind"] for r in fc.all_records()}
     assert kinds == {fc.FORECAST_SCHEMA_VERSION: "forecast_schema", fc.BASELINE_VERSION: "forecast_algorithm",
                      fc.PRIOR_VERSION: "forecast_algorithm", "nq_issue_replay_v1": "issue_policy",
-                     "nq_issue_live_v3": "issue_policy", fc.SYNTHESIS_SCHEMA_VERSION: "forecast_schema",
-                     fc.RESTRICTED_VERSION: "forecast_algorithm", fc.SYNTHESIS_VERSION: "forecast_algorithm"}
+                     "nq_issue_live_v4": "issue_policy"}                # no LLM definition is registered any more
     live = fc.ISSUE_POLICY_DEFINITIONS["live"]
     assert live["deadline_et"] == "09:29:50" and "never from older bars" in live["freshness"] and \
         "verified" in live["verification"]
     assert "never enter the snapshot" in live["evidence_cutoff"] and "refused" in live["data_wait"]
-    assert "missed opportunity" in live["missed"] and "never replaces" in live["late_result"]
+    assert "missed opportunity" in live["missed"] and "delivery order" in live["delivered"]
+    assert not any("arm D" in str(v) or "Claude" in str(v) for k, v in live.items() if k != "supersedes")
 
 
 def test_the_distribution_is_the_exact_smoothed_baseline():
@@ -176,7 +176,7 @@ ASET = {"set_id": "x", "target_snapshot_id": "s1", "target_annotation_id": "a1",
     (lambda s, a, x: a.update(snapshot_id="s2"), "is of snapshot s2"),
     (lambda s, a, x: x.update(target_annotation_id="a2"), "targets annotation a2"),
     (lambda s, a, x: x.update(target_snapshot_id="s2"), "targets snapshot s2"),
-    (lambda s, a, x: x.update(protocol_version=pre.LLM_PROTOCOL_VERSION), "protocol"),
+    (lambda s, a, x: x.update(protocol_version="nq_structure_rules_v1"), "protocol"),
     (lambda s, a, x: x.update(members=[{"session_date": "2026-06-12"}]), "not earlier"),
     (lambda s, a, x: x["outcome_summary"]["prior"].update(manifest=[["s3", "2026-06-15", 1]]), "prior session"),
     (lambda s, a, x: x.update(prior_digest="other"), "prior digest"),

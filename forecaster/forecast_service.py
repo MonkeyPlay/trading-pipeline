@@ -90,9 +90,6 @@ def freeze_forecast_evidence(conn, snapshot: Dict[str, Any], annotation: Dict[st
     cutoff price and frozen candidate levels. Raises ForecastInputError when the ids do not fit together.
     """
     check_inputs(snapshot, annotation, analogue_set, profile, mode)
-    if (algorithm == fc.RESTRICTED_VERSION) != (annotation["protocol_version"] == pre.RESTRICTED_PROTOCOL_VERSION):
-        raise ForecastInputError(f"{algorithm} needs {'a' if algorithm == fc.RESTRICTED_VERSION else 'no'} "
-                                 f"{pre.RESTRICTED_PROTOCOL_VERSION} annotation, not {annotation['protocol_version']}")
     p = snapshot["payload"]
     cp = (p.get("references") or {}).get("cutoff_price") or {}
     evidence: Dict[str, Any] = {

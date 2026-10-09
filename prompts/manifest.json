@@ -1,5 +1,5 @@
 {
-  "description": "Source specifications for the NQ prompt-v2 implementation (docs/nq_prompt_v2.md). Runtime prompts adapted from these belong under prompts/runtime/.",
+  "description": "Source specifications for the NQ prompt-v2 implementation (docs/nq_prompt_v2.md): the P1 and P2 target and label definitions and the guideline's field-ownership appendix. The LLM runtime prompts and the guideline's proposed runtime prompts (Appendix A) were removed with the LLM forecasts on 2026-10-09.",
   "sources": [
     {
       "id": "P1",
@@ -30,17 +30,6 @@
       "byte_exact_original": true
     },
     {
-      "id": "A",
-      "path": "prompts/source/GUIDELINE APPENDIX A - RUNTIME PROMPTS.md",
-      "title": "Appendix A Proposed runtime prompts",
-      "document": "Nasdaq 100 Forecast Implementation Guideline, 28 September 2026, implementation proposal version 1",
-      "contents": "A1 structure annotation, A2 forecast synthesis, A3 optional supplementary outcome annotation, A4 provider-neutral interface sketch",
-      "status": "Proposed implementation prompts, not P1/P2 text. Runtime prompts adapted from them go under prompts/runtime/, each under its own version identifier.",
-      "sha256": "8a7813a15dd696b113bf340e7eaa9c0059856d62d82561144ad35eadca70a1c9",
-      "bytes": 6139,
-      "provenance": "The text of the guideline's Appendix A, pasted into a Claude Code session on 2026-10-04 and saved as received."
-    },
-    {
       "id": "B",
       "path": "prompts/source/GUIDELINE APPENDIX B - PRE-OPEN FIELD OWNERSHIP.md",
       "title": "Appendix B Pre open field ownership",
@@ -49,133 +38,6 @@
       "sha256": "328f6939debe7280540c02b7ae912453512af5cccc4aed824ab9de53edae5bbc",
       "bytes": 2551,
       "provenance": "The text of the guideline's Appendix B, pasted into a Claude Code session on 2026-10-04 and saved as received."
-    }
-  ],
-  "runtime": [
-    {
-      "id": "nq_structure_llm_v1",
-      "path": "prompts/runtime/structure_annotation_v1.md",
-      "title": "Structure annotation - runtime prompt",
-      "derived_from": [
-        "A (A1, verbatim)",
-        "P1 section 4 (verbatim)",
-        "P1 section 3, trend timeframes (verbatim)"
-      ],
-      "sha256": "e58c8cfa9b70c92d352b58fb5a881613d11c82044a149c728798b2de9bc5a156",
-      "bytes": 9882,
-      "provenance": "Generated 2026-10-04 from the source files for nq_structure_llm_v1 (registered, never run); kept because that registration records its hash."
-    },
-    {
-      "id": "nq_structure_llm_v2",
-      "path": "prompts/runtime/structure_annotation_v2.md",
-      "title": "Structure annotation - runtime prompt",
-      "derived_from": [
-        "nq_structure_llm_v1's prompt, with Higher-Timeframe Bias left to HTB-v1"
-      ],
-      "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
-      "bytes": 9693,
-      "provenance": "Generated 2026-10-04; the registered protocol nq_structure_llm_v2 records the same hash, so an edit needs a new protocol version."
-    },
-    {
-      "id": "nq_structure_llm_v3",
-      "path": "prompts/runtime/structure_annotation_v2.md",
-      "title": "Structure annotation - runtime prompt",
-      "derived_from": [
-        "nq_structure_llm_v2's prompt, unchanged (v3 changes the validation and adds the request ledger)"
-      ],
-      "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
-      "bytes": 9693,
-      "provenance": "The same file as nq_structure_llm_v2; nq_structure_llm_v3 records the same hash, so an edit needs a new protocol version."
-    },
-    {
-      "id": "nq_structure_llm_v4",
-      "path": "prompts/runtime/structure_annotation_v2.md",
-      "title": "Structure annotation - runtime prompt",
-      "derived_from": [
-        "nq_structure_llm_v3's prompt, unchanged (v4 changes the effort from high to xhigh)"
-      ],
-      "sha256": "faafc71cabf1192e5886e16837cc0e524f78f7bfc5e6e5048d9689bb90d12b3d",
-      "bytes": 9693,
-      "provenance": "The same file as nq_structure_llm_v2 and v3; nq_structure_llm_v4 records the same hash, so an edit needs a new protocol version."
-    },
-    {
-      "id": "nq_structure_restricted_v1",
-      "path": "prompts/runtime/structure_annotation_restricted_v1.md",
-      "title": "Structure annotation, restricted (arm C) - runtime prompt",
-      "derived_from": [
-        "A (A1, verbatim)",
-        "P1 section 4, Overnight Structure and Premarket Pattern (verbatim)"
-      ],
-      "sha256": "dc963f5ed840d9b4d638ef1173f0ddff2922134a1a53d265ed7ff83e35f817c9",
-      "bytes": 8114,
-      "provenance": "Generated 2026-10-05 for arm C (guideline revision 2, sequence item 6); nq_structure_restricted_v1 records its hash, so an edit needs a new protocol version."
-    },
-    {
-      "id": "nq_synthesis_p1_v1",
-      "path": "prompts/runtime/forecast_synthesis_v1.md",
-      "title": "Forecast synthesis (arm D) - runtime prompt",
-      "derived_from": [
-        "A (A2, verbatim)",
-        "nq_prompt_v2_1_impl5 target rules (generated from contracts/nq_prompt_v2.TARGETS)"
-      ],
-      "sha256": "56ba2da7ee8d31ccf1e33f6dc9a4ff959ad63d3531017ca9237b2a296c316776",
-      "bytes": 9670,
-      "provenance": "Generated 2026-10-05 for arm D (guideline revision 2, 4B); nq_synthesis_p1_v1 records its hash, so an edit needs a new algorithm version."
-    },
-    {
-      "id": "nq_structure_restricted_v2",
-      "path": "prompts/runtime/structure_annotation_restricted_v1.md",
-      "title": "Structure annotation, restricted (arm C) - runtime prompt",
-      "derived_from": [
-        "nq_structure_restricted_v1's prompt, unchanged (v2 raises max_tokens to 64,000 and streams)"
-      ],
-      "sha256": "dc963f5ed840d9b4d638ef1173f0ddff2922134a1a53d265ed7ff83e35f817c9",
-      "bytes": 8114,
-      "provenance": "The same file as nq_structure_restricted_v1; nq_structure_restricted_v2 records the same hash."
-    },
-    {
-      "id": "nq_synthesis_p1_v2",
-      "path": "prompts/runtime/forecast_synthesis_v2.md",
-      "title": "Forecast synthesis (arm D) - runtime prompt",
-      "derived_from": [
-        "nq_synthesis_p1_v1's prompt with empty strings for none (the v2 schema has no nullable field)"
-      ],
-      "sha256": "0b02d6315507382b1ca5e9d9a8611846058a7249dd3ad8c2e0b4d6857dba9059",
-      "bytes": 9753,
-      "provenance": "Generated 2026-10-05 from forecast_synthesis_v1.md; nq_synthesis_p1_v2 records its hash, so an edit needs a new algorithm version."
-    },
-    {
-      "id": "nq_synthesis_p1_v3",
-      "path": "prompts/runtime/forecast_synthesis_v3.md",
-      "title": "Forecast synthesis (arm D) - runtime prompt",
-      "derived_from": [
-        "nq_synthesis_p1_v2's prompt with the flat output shape (a list of predictions, probability pairs)"
-      ],
-      "sha256": "39a1e24bd45c0273937717b744a4df5e9b33321c7d3930cc4e05337269a93c08",
-      "bytes": 9938,
-      "provenance": "Generated 2026-10-05 from forecast_synthesis_v2.md; nq_synthesis_p1_v3 records its hash, so an edit needs a new algorithm version."
-    },
-    {
-      "id": "nq_structure_restricted_v3",
-      "path": "prompts/runtime/structure_annotation_restricted_v3.md",
-      "title": "Structure annotation, restricted (arm C) - runtime prompt",
-      "derived_from": [
-        "nq_structure_restricted_v1's prompt with the evidence section for the 5m bars and swing points only"
-      ],
-      "sha256": "7e3b2c4472814e9ad432d36d816ecf54ec5cf42512a6ef0e8b7eb11cd0817dc3",
-      "bytes": 8006,
-      "provenance": "Generated 2026-10-05; nq_structure_restricted_v3 records its hash, so an edit needs a new protocol version."
-    },
-    {
-      "id": "nq_synthesis_p1_v4",
-      "path": "prompts/runtime/forecast_synthesis_v4.md",
-      "title": "Forecast synthesis (arm D) - runtime prompt",
-      "derived_from": [
-        "nq_synthesis_p1_v3's prompt with the evidence section for the 15m and final 2m bars only"
-      ],
-      "sha256": "f2be1cb5c5e1668fe6a0cc34d92d64fdc42522af90a038873a39b6f08089ff38",
-      "bytes": 10036,
-      "provenance": "Generated 2026-10-05; nq_synthesis_p1_v4 records its hash, so an edit needs a new algorithm version."
     }
   ]
 }

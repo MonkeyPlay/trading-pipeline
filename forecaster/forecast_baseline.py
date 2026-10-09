@@ -2,7 +2,7 @@
 """
 The deterministic P1 baseline forecast (contracts/nq_forecast.BASELINE,
 nq_baseline_p1_v1): pure functions on a run's frozen evidence
-(forecaster/forecast_service.freeze_forecast_evidence) - no database, no LLM.
+(forecaster/forecast_service.freeze_forecast_evidence) - no database.
 
   distribution(target, members, prior)   the smoothed analogue distribution of one
                                           target, exactly: (count + k x prior) / (n + k)

@@ -15,4 +15,8 @@ nicegui>=3.17
 
 # Market data collection (Interactive Brokers official API)
 ibapi>=9.81
-anthropic>=1.4  # Claude structure annotation (forecaster/structure_llm.py)
+
+# Statistics and the NQ direction model (forecaster/ml_model.py; the fan models use scipy too)
+scipy>=1.11
+scikit-learn>=1.5
+joblib>=1.3

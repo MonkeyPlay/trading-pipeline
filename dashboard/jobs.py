@@ -16,9 +16,6 @@ dashboard's database connection or its event loop:
                far, any time from its Globex open - never stored in the journal
                (forecaster/preview.py); the preview step runs even when the
                collection failed, from the bars already stored
-  llm          python scripts/nq_journal.py llm-forecast --date D ... --approval T
-               arms C and D (Claude) on the chosen sessions, after the
-               dashboard's confirmation issued the one-time approval T for them
   live         python scripts/nq_journal.py live
                today's session captured at the 09:29 cutoff and its forecasts
                issued (forecaster/live_capture.py); only before the open
@@ -47,13 +44,9 @@ A job is one or more steps, each a process run in turn; Stop ends the running st
 and skips the rest. A step named in NEEDS_SUCCESS is skipped when the step it needs
 failed in the same job (no RTH set is issued from a collection that failed).
 
-A job has no terminal (its stdin is empty), so nothing that asks a person - such as
-the confirmation the Claude API requests need (they are manual only) - can run here.
+A job has no terminal (its stdin is empty), so nothing that asks a person can run here.
 
-One job runs at a time on a runner: RUNNER for collection, the journal, previews and
-the live capture (and Auto), LLM_RUNNER for the Claude arms (runner_for) - so a long
-LLM job, which can wait half an hour for a batch, never stops Auto from collecting
-and recording the session. A job belongs to the dashboard process, not to a browser
+One job runs at a time (RUNNER). A job belongs to the dashboard process, not to a browser
 tab: every page shows the same job and its output, a page opened while it runs
 picks it up, and closing the tab does not stop it. Its output is appended to
 logs/pipeline_run.log, beside the scheduled runs'. Auto mode belongs to the process
@@ -126,15 +119,6 @@ def preview_command() -> List[str]:
 def rth_command(by: str) -> List[str]:
     """The RTH analogue issue, recorded as made by ``by``: 'auto' (Auto mode) or 'manual' (a job a person started)."""
     return [sys.executable, os.path.join("scripts", "nq_journal.py"), "rth-issue", "--by", by]
-
-
-def llm_command(days: List[str], arms: str, approval: Optional[str] = None, batch: bool = False) -> List[str]:
-    """Arms C and D on the given session ``days`` (forecaster/llm_arms.py); Claude requests need the dashboard's
-    one-time ``approval`` for exactly those days (forecaster/approvals.py) - without one only what needs no request
-    runs."""
-    dates = [x for d in days for x in ("--date", d)]
-    return ([sys.executable, os.path.join("scripts", "nq_journal.py"), "llm-forecast", *dates, "--arms", arms]
-            + (["--batch"] if batch else []) + (["--approval", approval] if approval else []))
 
 
 def live_window(now: datetime) -> Tuple[bool, str]:
@@ -498,14 +482,6 @@ class AutoMode:
             pass
 
 
-# The dashboard's runners, shared by every page, and its auto mode: LLM jobs on their own runner, so Auto (which waits
-# while RUNNER is busy) keeps collecting during them. Both write the same log.
+# The dashboard's runner, shared by every page, and its auto mode.
 RUNNER = JobRunner()
-LLM_RUNNER = JobRunner()
 AUTO = AutoMode(RUNNER)
-LLM_JOBS = ("llm",)
-
-
-def runner_for(key: str) -> JobRunner:
-    """The runner a job of ``key`` runs on: LLM_RUNNER for the Claude arms, RUNNER for everything else."""
-    return LLM_RUNNER if key in LLM_JOBS else RUNNER
