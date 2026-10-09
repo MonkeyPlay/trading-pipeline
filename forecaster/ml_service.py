@@ -19,7 +19,11 @@ arms A and B, and records the forecast in force.
   issue_pending(conn, profile, now)
       Auto's journal step: every snapshot after the models' training window still
       without its ML runs, once the context instruments' cutoff bars are in (or
-      MAX_WAIT_MINUTES after the cutoff) - then the forecast in force recorded
+      MAX_WAIT_MINUTES after the cutoff); and the session's forecast in force, recorded
+      once - when the delivery order's ML models (none while experimental) have their
+      runs, and only by the replay deadline (contracts/nq_ml.replay_deadline): a session
+      caught up later gets ML runs that are reconstructions and no delivery, so what was
+      in force that morning is never decided after the fact
   record_delivery(conn, day, profile, mode)
       the first usable run in contracts/nq_ml.delivery_order(), or none, with the reason
       (journal.forecast_deliveries, migration 0030)
@@ -182,7 +186,8 @@ def issue(conn, snapshot: Dict[str, Any], profile: str, mode: str, version: str,
         "outputs": {"instruments": {s: ("used" if v in mf.USED else v) for s, v in used.items() if s != "NQ"},
                     "model": {"family": (result.get("model") or {}).get("family"),
                               "sha256": (result.get("model") or {}).get("sha256")},
-                    "status": ml.STATUS[version], "seconds": result.get("seconds")},
+                    "feature_version": ml.FEATURE_VERSION, "status": ml.STATUS[version],
+                    "seconds": result.get("seconds")},
     }
     run_id, created = store.save_forecast_run(conn, run, evidence, _predictions(result))
     out = store.get_forecast_run(conn, run_id)
@@ -226,9 +231,10 @@ def record_delivery(conn, day: str, profile: str, mode: str) -> Dict[str, Any]:
 
 def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = None,
                   root: Optional[str] = None) -> Dict[str, int]:
-    """Auto's step (see the module docstring); returns how many runs and deliveries were new."""
+    """Auto's step (see the module docstring); returns how many runs (and reconstructions among them) and deliveries
+    were new, and how many sessions wait for the context instruments."""
     now = now or datetime.now(timezone.utc)
-    counts = {"runs": 0, "deliveries": 0, "waiting": 0}
+    counts = {"runs": 0, "reconstructions": 0, "deliveries": 0, "waiting": 0}
     if profile != ml.PROFILE:
         return counts
     mans = {v: mm.manifest(v, root) for v in ml.ALGORITHMS}
@@ -237,23 +243,31 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
         return counts
     start = min(m["training"]["to"] for m in mans.values())
     version = defs.PROFILES[profile].snapshot_version
+    in_order = [v for v in ml.delivery_order() if v in ml.ALGORITHMS]      # promoted models: none while experimental
     for snap in store.list_snapshots(conn, start, now.date().isoformat(), version):
         day = str(snap["session_date"])
         if day <= start or snap["data_mode"] == "live_capture":
             continue
+        deadline = ml.replay_deadline(_utc(snap["cutoff_at"]))
         have = {r["algorithm_version"] for r in store.list_forecast_runs(conn, day, day, profile, "historical_replay")}
         todo = [v for v in mans if v not in have]
-        if todo and not context_ready(conn, snap, now):
+        if todo and context_ready(conn, snap, now):
+            fs = features(conn, snap, now)
+            for v in todo:
+                _, created = issue(conn, snap, profile, "historical_replay", v, root, now, fs)
+                counts["runs"] += int(created)
+                counts["reconstructions"] += int(created and now > deadline)
+            have |= set(todo)
+        elif todo:
             counts["waiting"] += 1
-            continue
-        fs = features(conn, snap, now) if todo else None
-        for v in todo:
-            _, created = issue(conn, snap, profile, "historical_replay", v, root, now, fs)
-            counts["runs"] += int(created)
-        if store.latest_delivery(conn, day, profile, "historical_replay") is None:
+        if (now <= deadline and all(v in have for v in in_order)
+                and store.first_delivery(conn, day, profile, "historical_replay") is None):
             record_delivery(conn, day, profile, "historical_replay")
             counts["deliveries"] += 1
-    if counts["runs"] or counts["deliveries"] or counts["waiting"]:
-        logger.info(f"ML forecasts ({', '.join(mans)}): {counts['runs']} new run(s), {counts['deliveries']} "
-                    f"deliver(ies) recorded, {counts['waiting']} session(s) waiting for the context instruments.")
+    if any(counts.values()):
+        logger.info(f"ML forecasts ({', '.join(mans)}): {counts['runs']} new run(s)"
+                    + (f" ({counts['reconstructions']} reconstruction(s): issued after the replay deadline, never in "
+                       "force)" if counts["reconstructions"] else "")
+                    + f", {counts['deliveries']} deliver(ies) recorded, {counts['waiting']} session(s) waiting for "
+                      "the context instruments.")
     return counts

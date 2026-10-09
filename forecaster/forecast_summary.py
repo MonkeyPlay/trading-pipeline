@@ -6,8 +6,10 @@ did not produce.
 
   build(conn, day)   the session's runs, read back: per arm its status and class
                      probabilities, the ML forecasts' differences from A and B in
-                     percentage points, the forecast in force and why (the recorded
-                     delivery, forecaster/delivery.py), B's reference levels with their
+                     percentage points, whether a run is a reconstruction (a replay issued
+                     after its replay deadline, contracts/nq_ml.replay_deadline), the
+                     forecast in force and why (the session's first recorded delivery,
+                     forecaster/delivery.py), B's reference levels with their
                      distances from the cutoff price (points and multiples of T), the
                      instruments the multi-instrument model used, missed or found stale,
                      with their market times and ages, what was observed in each (its
@@ -59,7 +61,7 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
         arm = ml.arm_of(r["algorithm_version"])
         if arm is not None and arm not in runs:
             runs[arm] = store.get_forecast_run(conn, r["run_id"])
-    delivery = store.latest_delivery(conn, day, profile, mode)
+    delivery = store.first_delivery(conn, day, profile, mode)
     a, b = _dist(runs.get("A"), ml.TARGET), _dist(runs.get("B"), ml.TARGET)
     arms = {}
     for arm, run in runs.items():
@@ -69,7 +71,8 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
                  "issued_at": _et(run["issued_at"]), "probabilities": d,
                  "class": ((run.get("predictions") or {}).get(ml.TARGET) or {}).get("predicted_label"),
                  "experimental": run["algorithm_version"] in ml.ALGORITHMS
-                 and ml.STATUS[run["algorithm_version"]] != "production"}
+                 and ml.STATUS[run["algorithm_version"]] != "production",
+                 "reconstruction": ml.reconstruction(run)}
         if d and arm not in ("A",):
             if a:
                 entry["minus_A_pp"] = {c: round(100 * (d[c] - a[c]), 1) for c in ml.CLASSES}
@@ -126,9 +129,11 @@ def lines(s: Dict[str, Any]) -> List[str]:
            f"({s['mode'].replace('_', ' ')})."]
     f = s.get("in_force")
     out.append(f"In force: {f['label'] or 'no forecast'} - {f['reason']} (decided {f['decided_at']})." if f else
-               "In force: not recorded for this session.")
+               "In force: not recorded for this session (none is recorded after its replay deadline).")
     for arm, e in s["arms"].items():
-        head = f"{arm} {e['label'] or e['version']}" + (" [experimental]" if e["experimental"] else "")
+        head = (f"{arm} {e['label'] or e['version']}" + (" [experimental]" if e["experimental"] else "")
+                + (" [reconstruction: issued after the replay deadline, never in force]" if e["reconstruction"]
+                   else ""))
         if e["status"] != "issued" or not e["probabilities"]:
             out.append(f"{head}: {e['status']}" + (f" - {e['reason']}" if e["reason"] else "") + ".")
             continue

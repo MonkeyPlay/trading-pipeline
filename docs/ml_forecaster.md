@@ -4,9 +4,11 @@ The pre-open forecast of NQ's 15-minute direction from NQ's own data and a small
 markets. It replaced the LLM forecasting system on 2026-10-09.
 
 **Where it stands.** On development data no ML configuration beats the historical frequencies
-(arm A), and adding other instruments did not establish an improvement. So **B (the analogues)
-stays the forecast in force**, and the three ML forecasts are issued beside it as **experimental**,
-to be confirmed or not by the forward evaluation `p1_ml_forward_v1` on fresh sessions.
+(arm A), and adding other instruments did not establish an improvement. **B (the analogues)
+stays the forecast in force because it is the existing baseline**, not because these results show
+it better than A: B − A is +0.017 [−0.013, +0.047], nominally worse. A remains the benchmark
+that any promotion must beat. The three ML forecasts are issued beside B as **experimental**.
+The forward evaluation `p1_ml_forward_v1` on fresh sessions decides whether any is promoted.
 
 Contract: [contracts/nq_ml.py](../contracts/nq_ml.py). Code: [forecaster/ml_features.py](../forecaster/ml_features.py),
 [ml_model.py](../forecaster/ml_model.py), [ml_train.py](../forecaster/ml_train.py),
@@ -174,20 +176,48 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
 
 ## Forward evaluation `p1_ml_forward_v1`
 
-[contracts/nq_ml.py](../contracts/nq_ml.py) `forward_manifest`. It is registered after
-deployment for the sessions from 2026-10-12, and registering it sends and schedules nothing.
+[contracts/nq_ml.py](../contracts/nq_ml.py) `forward_manifest` and `promotion_rule`. It is
+registered after deployment for the sessions from 2026-10-12. Registering writes one definition
+and sends and schedules nothing.
 
-- **Arms:** A, B, N, M and P, plus the delivered policy.
-- **Runs scored:** those Auto issues at each snapshot (historical replay, as A and B).
-- **Primary target and score:** `direction_15m`, unhalved multiclass Brier, scored once at 60
-  sessions.
-- **Comparisons:** paired, on the sessions where every arm has a forecast. Availability is
-  counted over every scheduled session, with an exact interval.
-- **Decision rule:** an ML forecast improves on B only if ML − B is at most −0.01 (absolute,
-  0–2 scale) with its whole 95 % interval below zero. That is evidence of some improvement,
-  not that the true gain is at least 0.01. Multi beats NQ-only only under the same rule.
-- **Promotion:** only a forecast that meets the rule can be promoted (`STATUS` becomes
-  `production`), which puts it first in the delivery order.
+**What it pins.** Registration records:
+- the code revision, which must be a clean commit;
+- the feature version and the forecast schema;
+- each model's artifact SHA-256, training window, parameters and software versions.
+
+It refuses when an artifact is missing or differs from its registered definition.
+
+**What it scores.**
+- **Arms:** A, B, N, M and P, plus the delivered forecast (the session's first recorded
+  delivery).
+- **The official run of each arm:** the first one issued by the replay deadline (cutoff + 35
+  minutes, 10:04 ET), under the pinned artifact and feature version. A later run is a
+  reconstruction and no case.
+- **Primary score:** `direction_15m`, unhalved multiclass Brier, on the common sessions where all
+  five arms are scored.
+- **Endpoint:** the first 60 scheduled sessions. `experiment-score` refuses to score before the
+  60th has its outcome.
+- **Availability:** counted over every scheduled session, with an exact interval.
+
+**The promotion rule, applied mechanically at the endpoint:**
+1. **Candidates:** N, M and P. Each is compared with B, the existing baseline, and with A, the
+   benchmark, and must beat **both**.
+2. **Threshold:** the mean difference must be at most −0.01 (absolute, 0–2 scale), with the
+   whole interval below zero. That is evidence of some improvement, not that the true gain is at
+   least 0.01.
+3. **Multiple comparisons:** Bonferroni over the three candidates. Every interval the rule uses is
+   a 98.33 % moving-block bootstrap interval. Requiring both baselines is an intersection-union
+   test and needs no further adjustment. Every other comparison is reported at 95 % and is
+   descriptive only.
+4. **Availability:** on time in at least 90 % of all scheduled sessions (the share you set for a
+   forecast arm). Unavailable, failed, missing and reconstructed runs count against it.
+5. **Pooled training:** P qualifies only if it also beats N under the same rule.
+6. **Selection:** at most one model. If none qualifies, nothing changes. Otherwise take the
+   first qualifying candidate in the order N, P, M (fewest live inputs first), and move to a
+   later one only if it beats the current choice under the same rule.
+
+The scoring names the model that qualifies. Promoting it means changing `STATUS` in a new
+commit, deployed, which puts it first in the delivery order.
 
 ## In production
 
@@ -203,8 +233,17 @@ deployment for the sessions from 2026-10-12, and registering it sends and schedu
 - **Live capture:** on the research profile, the ML forecasts are issued live beside A and B
   (`nq_issue_live_v4`).
 - **The forecast in force:** the first usable run in the delivery order (promoted ML, then B,
-  then A), with the reason any earlier one was passed over. It is recorded per session in
-  `journal.forecast_deliveries` (migration 0030), stamped by the database clock.
+  then A), with the reason any earlier one was passed over. It is recorded once per session in
+  `journal.forecast_deliveries` (migration 0030), stamped by the database clock. It is recorded
+  only on the session's morning, by the replay deadline, and the first recorded row is the one
+  in force: a later row never changes it.
+- **Reconstructions:** a replay run issued after its replay deadline is a reconstruction. That
+  covers a catch-up after downtime, such as the deployment's first ML runs for 2026-10-09. It is
+  stored and shown as one (summary and arm tiles), but it is never in force, never a forward
+  case and never timely. Nothing recreates missed live records: the fan's forward marks are
+  issued within 30 minutes of the mark or not at all, and live captures happen live or not at
+  all. Historical bars can be collected again; they then carry their late receipt times and are
+  reconstructed inputs.
 - **Presentation:** [forecaster/forecast_summary.py](../forecaster/forecast_summary.py) builds
   the summary from validated numbers only. It replaces the synthesis and contains no generated
   text, causal claim or invented confidence. It shows:

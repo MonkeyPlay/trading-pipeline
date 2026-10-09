@@ -37,6 +37,13 @@ strategy is tested here.
 Sessions already used to calibrate the structure rules or to inspect label
 disagreements are development data (4C), whatever an experiment calls them; the
 decisive test is prospective.
+
+The forward ML evaluation (contracts/nq_ml.forward_manifest) adds: the official run
+'first_forward' - issued by the replay deadline under the registered artifact and feature
+version, a later run being a reconstruction and no case; the delivered arm as recorded
+(the session's first delivery, decided by that deadline); an endpoint before which
+nothing is scored (at_endpoint); and a promotion rule applied mechanically to the scores
+(promotion).
 """
 
 from __future__ import annotations
@@ -65,6 +72,9 @@ OFFICIAL_RUN_RULES = {
     "first": "the first issued run of the session, profile and arm by the database issue time",
     "latest": "the last issued run of the session, profile and arm when the cases are frozen",
     "first_timely": "the first issued run acknowledged by its deadline (live runs only)",
+    "first_forward": "the first issued run of the session, profile and arm by the database issue time that was "
+                     "issued by its replay deadline (the cutoff plus the context wait plus five minutes) under the "
+                     "registered artifact and feature version; a later run is a reconstruction, no case",
 }
 DEVELOPMENT_NOTE = ("development data (guideline 4C): the structure rules were calibrated and the label "
                     "disagreements inspected on these sessions, so the result identifies clear failures and a "
@@ -88,6 +98,8 @@ def experiment_manifest(name: str, start: str, end: str, profile: str = defs.DEF
         raise ValueError(f"official_run must be one of {sorted(OFFICIAL_RUN_RULES)}")
     if official_run == "first_timely" and mode != "live":
         raise ValueError("first_timely applies to live runs only")
+    if official_run == "first_forward" and mode != "historical_replay":
+        raise ValueError("first_forward applies to historical-replay runs only")
     if purpose not in ("development", "test"):
         raise ValueError("purpose must be development or test")
     # the arms computed from the evidence (fc.ALGORITHMS) and the ML forecasts (contracts/nq_ml.py)
@@ -138,6 +150,7 @@ def register_experiment(conn, manifest: Dict[str, Any]) -> bool:
     for version in [manifest["label_version"], manifest["snapshot_version"], manifest["convention_version"],
                     manifest["annotation_protocol"], manifest["matcher_version"], manifest["issue_policy"],
                     manifest["forecast_schema"]] + [v for a in manifest["arms"].values()
+                                                    if a.get("delivered") != "recorded"     # read from deliveries
                                                     for v in a.get("delivered") or [a["algorithm"]]]:
         if store.get_version(conn, version) is None:
             raise ValueError(f"{version} is not registered: run the journal (catch-up) first")
@@ -155,14 +168,27 @@ def load_manifest(conn, name: str) -> Dict[str, Any]:
 # Cases (the official-run rule, frozen once)
 # --------------------------------------------------------------------------
 
-def official_run(runs: Sequence[Dict[str, Any]], rule: str) -> Optional[Dict[str, Any]]:
-    """The run a session's arm is scored by, from its issued runs (oldest issue first)."""
+def official_run(runs: Sequence[Dict[str, Any]], rule: str,
+                 pin: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """The run a session's arm is scored by, from its issued runs (oldest issue first). ``pin``: the artifact and
+    feature version a 'first_forward' ML run must have been issued under."""
     if rule == "first_timely":
         from forecaster.forecast_service import timely
         runs = [r for r in runs if timely(r)]
+    if rule == "first_forward":
+        from contracts import nq_ml
+        runs = [r for r in runs if not nq_ml.reconstruction(r) and _pinned(r, pin)]
     if not runs:
         return None
     return runs[-1] if rule == "latest" else runs[0]
+
+
+def _pinned(run: Dict[str, Any], pin: Optional[Dict[str, str]]) -> bool:
+    if not pin:
+        return True
+    out = run.get("outputs") or {}
+    return ((out.get("model") or {}).get("sha256") == pin["sha256"]
+            and out.get("feature_version") == pin["feature_version"])
 
 
 def exact_interval(k: int, n: int, level: float = 0.95) -> Optional[Tuple[float, float]]:
@@ -198,30 +224,47 @@ def delivered_run(runs: Sequence[Dict[str, Any]], order: Sequence[str]) -> Optio
 
 def build_cases(conn, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Per scheduled session and arm: the official run and the outcome revision it is scored against. An arm with a
-    ``delivered`` order (live only) is the policy in force: the first timely run of those algorithms."""
+    ``delivered`` order (live only) is the policy in force: the first timely run of those algorithms; one with
+    ``delivered: recorded`` is the session's first recorded delivery. With an endpoint, the sessions up to it only."""
     s, rule = manifest["sessions"], manifest["official_run"]["rule"]
     history = store.outcome_history(conn, manifest["label_version"])
     by_arm: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     for arm, spec in manifest["arms"].items():
         days: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        if spec.get("delivered") == "recorded":                  # read from the deliveries, per session
+            by_arm[arm] = days
+            continue
         for algorithm in spec.get("delivered") or [spec["algorithm"]]:
             for run in store.issued_runs(conn, s["from"], s["to"], manifest["profile"], manifest["mode"],
                                          algorithm, manifest["label_version"]):
                 days[run["session_date"]].append(run)
         by_arm[arm] = days
     excluded = set((manifest.get("excluded_sessions") or {}).get("sessions") or [])
+    pins = manifest.get("pins") or {}
     cases = []
-    for session in cal.sessions_between(s["from"], s["to"]):
+    scheduled = cal.sessions_between(s["from"], s["to"])
+    if manifest.get("endpoint"):
+        scheduled = scheduled[:manifest["endpoint"]["sessions"]]
+    for session in scheduled:
         day = session.session_date.isoformat()
         if day in excluded:
             continue
         for arm, spec in manifest["arms"].items():
             order = spec.get("delivered")
-            run = delivered_run(by_arm[arm].get(day, []), order) if order else official_run(by_arm[arm].get(day, []),
-                                                                                              rule)
+            mine = by_arm[arm].get(day, [])
+            if order == "recorded":
+                run, detail = _recorded_delivery(conn, day, manifest)
+            else:
+                run = delivered_run(mine, order) if order else official_run(mine, rule, pins.get(arm))
+                detail = (f"no timely run of {', '.join(order)}" if order else
+                          f"no issued {spec['algorithm']} run ({rule})")
             case = {"session_date": day, "arm": arm, "run_id": None, "snapshot_id": None, "outcome_revision": None,
-                    "status": "no_run", "detail": (f"no timely run of {', '.join(order)}" if order else
-                                                   f"no issued {spec['algorithm']} run ({rule})")}
+                    "status": "no_run", "detail": detail}
+            if run is None and rule == "first_forward" and order is None and mine:
+                late = [r for r in mine if _pinned(r, pins.get(arm))]
+                case.update(status="reconstruction" if late else "not_pinned",
+                            detail=(f"issued {str(late[0]['issued_at'])[:19]} UTC, after the replay deadline: a "
+                                    "reconstruction" if late else "issued under another artifact or feature version"))
             if run is not None:
                 revisions = history.get(run["snapshot_id"]) or []
                 case.update(run_id=run["run_id"], snapshot_id=run["snapshot_id"])
@@ -231,6 +274,43 @@ def build_cases(conn, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
                     case.update(status="no_outcome", detail="no outcome recorded for the run's snapshot")
             cases.append(case)
     return cases
+
+
+def _recorded_delivery(conn, day: str, manifest: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The forecast actually in force for a forward session: its first recorded delivery, if decided by the replay
+    deadline and naming a run - ``(run, why not)``."""
+    from contracts import nq_ml
+    rec = store.first_delivery(conn, day, manifest["profile"], manifest["mode"])
+    if rec is None:
+        return None, "no delivery recorded by the replay deadline"
+    if rec["run_id"] is None:
+        return None, f"no usable forecast was in force: {rec['reason']}"
+    run = store.get_forecast_run(conn, rec["run_id"])
+    if nq_ml._instant(rec["decided_at"]) > nq_ml.replay_deadline(nq_ml._instant(run["input_cutoff_at"])):
+        return None, "the delivery was recorded after the replay deadline"
+    return run, ""
+
+
+def at_endpoint(conn, manifest: Dict[str, Any], today: str) -> Tuple[bool, str]:
+    """Whether an experiment with an endpoint (the forward ML evaluation) may be scored on ``today``: its endpoint
+    session has its outcome, or its end date has passed - ``(ok, why)``. One without an endpoint always may."""
+    end = manifest.get("endpoint")
+    if not end:
+        return True, ""
+    s = manifest["sessions"]
+    if today > s["to"]:
+        return True, f"the end date {s['to']} has passed"
+    sessions = [x.session_date.isoformat() for x in cal.sessions_between(s["from"], min(today, s["to"]))]
+    if len(sessions) < end["sessions"]:
+        return False, (f"{len(sessions)} of the {end['sessions']} scheduled sessions have taken place (to {today}); "
+                       f"the endpoint is the {end['sessions']}th")
+    last = sessions[end["sessions"] - 1]
+    known = conn.execute("SELECT count(*) FROM journal.outcomes o JOIN journal.snapshots s ON s.snapshot_id = "
+                         "o.snapshot_id WHERE s.session_date = %s AND s.snapshot_version = %s;",
+                         (last, manifest["snapshot_version"])).fetchone()[0]
+    if not known:
+        return False, f"the endpoint session {last} has no outcome yet"
+    return True, f"the endpoint session {last} has its outcome"
 
 
 def freeze_cases(conn, name: str) -> Tuple[int, bool]:
@@ -471,8 +551,57 @@ def score_experiment(conn, name: str) -> Dict[str, Any]:
     results["reliability"] = {arm: reliability(scored[arm], days, list(defs.TARGETS[primary]["labels"]))
                               for arm in arms}
     results["availability"] = availability(status, len(days))
+    if manifest.get("promotion"):
+        results["promotion"] = promotion(scored, days, manifest, results["availability"])
     results["_case_scores"] = {t: {a: s for a, s in v.items()} for t, v in per_target_scores.items()}
     return results
+
+
+def promotion(scores: Dict[str, Dict[str, Dict[str, Any]]], days: Sequence[str], manifest: Dict[str, Any],
+              available: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """The registered promotion rule (contracts/nq_ml.promotion_rule) applied to the primary target's per-session
+    scores (pure): per candidate its comparisons against B and A - and P's against N - at the rule's interval level
+    on the common sessions, its availability, whether it qualifies; then the selection, or none."""
+    rule = manifest["promotion"]
+    common = [d for d in days if all(scores.get(a, {}).get(d, {}).get("status") == "scored"
+                                     for a in manifest["common_arms"])]
+    threshold = -float(Fraction(rule["minimum_improvement"]))
+
+    def compare(x: str, y: str) -> Dict[str, Any]:
+        diffs = [scores[x][d]["brier"] - scores[y][d]["brier"] for d in common]
+        mean = _mean(diffs)
+        iv = block_bootstrap(diffs, rule["block_sessions"], rule["resamples"], rule["seed"], rule["interval_level"])
+        meets = mean is not None and iv is not None and mean <= threshold and iv[1] < 0
+        return {"pair": f"{x}-{y}", "n": len(diffs), "diff": _r(mean), "interval": [_r(v) for v in iv] if iv else None,
+                "meets": meets}
+
+    out: Dict[str, Any] = {"common": len(common), "interval_level": rule["interval_level"], "candidates": {}}
+    for x in rule["order"]:
+        c = {"vs_B": compare(x, "B"), "vs_A": compare(x, "A")}
+        if x == "P":
+            c["vs_N"] = compare("P", "N")
+        av = available.get(x) or {}
+        c["availability"] = av
+        c["available_enough"] = av.get("rate") is not None and av["rate"] >= float(rule["availability_minimum"])
+        c["qualifies"] = (c["vs_B"]["meets"] and c["vs_A"]["meets"] and c["available_enough"]
+                          and (x != "P" or c["vs_N"]["meets"]))
+        out["candidates"][x] = c
+    qualifying = [x for x in rule["order"] if out["candidates"][x]["qualifies"]]
+    choice, steps = None, []
+    for x in qualifying:
+        if choice is None:
+            choice = x
+            steps.append(f"{x} qualifies: the first in the order {', '.join(rule['order'])}")
+            continue
+        t = compare(x, choice)
+        steps.append(f"{x} qualifies too; {t['pair']} {_f(t['diff'])} {_ci(t['interval'])}: "
+                     + (f"meets the rule, so {x}" if t["meets"] else f"does not meet the rule, so {choice} stays"))
+        if t["meets"]:
+            choice = x
+    out.update(qualifying=qualifying, selected=choice, algorithm=rule["candidates"].get(choice) if choice else None,
+               steps=steps or ["no candidate qualifies: nothing is promoted - B stays in force as the existing "
+                               "baseline and A remains the benchmark"])
+    return out
 
 
 def store_results(conn, name: str, results: Dict[str, Any]) -> str:
@@ -533,14 +662,34 @@ def write_report(manifest: Dict[str, Any], results: Dict[str, Any], directory: s
              f"- **Primary:** {manifest['primary']['target']}, {manifest['primary']['metric']}. "
              f"{manifest['zero_probability'][0].upper()}{manifest['zero_probability'][1:]}.",
              f"- **Profitability:** {manifest['profitability']}.", "", "## Coverage", ""]
-    lines += _table(["arm"] + ["case", "no_run", "no_outcome"],
-                    [[a] + [results["cases"][a].get(k, 0) for k in ("case", "no_run", "no_outcome")] for a in arms])
+    kinds = ["case", "no_run", "no_outcome"] + sorted({k for a in arms for k in results["cases"][a]}
+                                                      - {"case", "no_run", "no_outcome"})
+    lines += _table(["arm"] + kinds, [[a] + [results["cases"][a].get(k, 0) for k in kinds] for a in arms])
     if results.get("availability"):
         lines += ["", "Availability over every scheduled session (an issued run, whether or not its outcome is "
                       "recorded yet), with an exact 95 % interval:", ""]
         lines += _table(["arm", "issued", "sessions", "rate", "95 % interval"],
                         [[a, v["issued"], v["sessions"], _f(v["rate"], 3), _ci(v["interval"])]
                          for a, v in results["availability"].items()])
+    if results.get("promotion"):
+        pr, rule = results["promotion"], manifest["promotion"]
+        lines += ["", "## Promotion (the registered rule, applied mechanically)", "",
+                  f"{rule['threshold'][0].upper()}{rule['threshold'][1:]}. {rule['multiple_comparisons']}. "
+                  f"{rule['availability'][0].upper()}{rule['availability'][1:]}. {rule['pooled']}. "
+                  f"{rule['selection'][0].upper()}{rule['selection'][1:]}.", "",
+                  f"Common sessions: {pr['common']}; intervals at {100 * pr['interval_level']:.2f} %.", ""]
+        rows = []
+        for x, c in pr["candidates"].items():
+            for key in ("vs_B", "vs_A", "vs_N"):
+                if key in c:
+                    t = c[key]
+                    rows.append([x, t["pair"], t["n"], _f(t["diff"]), _ci(t["interval"]), "yes" if t["meets"] else "no",
+                                 _f(c["availability"].get("rate"), 3), "yes" if c["qualifies"] else "no"])
+        lines += _table(["candidate", "comparison", "sessions", "Brier diff", "interval", "meets", "availability",
+                         "qualifies"], rows)
+        lines += ["", "Selection: " + "; ".join(pr["steps"]) + "."
+                  + (f" **Selected: {pr['selected']} (`{pr['algorithm']}`)** - promoted only by a change of "
+                     "contracts/nq_ml.STATUS in a new commit, deployed." if pr["selected"] else "")]
     primary = results["primary"]
     lines += ["", f"## Primary: {primary['target']}", ""]
     for key, p in primary["paired"].items():

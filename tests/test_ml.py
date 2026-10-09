@@ -69,6 +69,70 @@ def test_the_contract_is_complete_and_experimental():
     assert {ml.arm_of(v) for v in ml.ALGORITHMS} == {"N", "M", "P"}
 
 
+def test_a_replay_run_after_its_deadline_is_a_reconstruction_and_never_a_forward_case():
+    from forecaster.experiments import official_run
+    cutoff = datetime(2026, 10, 9, 13, 29, tzinfo=UTC)                         # 09:29 ET
+    run = {"mode": "historical_replay", "input_cutoff_at": cutoff, "issued_at": cutoff + timedelta(minutes=12)}
+    assert ml.replay_deadline(cutoff) == cutoff + timedelta(minutes=35) and not ml.reconstruction(run)
+    assert not ml.reconstruction(dict(run, issued_at=cutoff + timedelta(minutes=31)))   # a busy cycle after the wait
+    assert ml.reconstruction(dict(run, issued_at=cutoff + timedelta(hours=7)))           # a catch-up that evening
+    assert not ml.reconstruction(dict(run, mode="live", issued_at=cutoff + timedelta(hours=7)))   # live: its own rule
+    assert not ml.reconstruction(dict(run, issued_at=None))
+    pin = {"sha256": "abc", "feature_version": ml.FEATURE_VERSION}
+    mk = lambda minutes, sha="abc": dict(run, issued_at=cutoff + timedelta(minutes=minutes),      # noqa: E731
+                                         run_id=f"{minutes}{sha}", outputs={"model": {"sha256": sha},
+                                                                            "feature_version": ml.FEATURE_VERSION})
+    assert official_run([mk(45), mk(50)], "first_forward", pin) is None                 # reconstructions only
+    assert official_run([mk(12, "old"), mk(14), mk(45)], "first_forward", pin)["run_id"] == "14abc"
+    assert official_run([mk(12, "old")], "first_forward")["run_id"] == "12old"          # A and B: nothing pinned
+
+
+def _promotion(offsets, available=None, n=60):
+    """The promotion rule on synthetic per-session Brier scores: A's a fixed pattern, every other arm A's plus its
+    offset and a little noise."""
+    from forecaster.experiments import promotion
+    rng = np.random.default_rng(7)
+    days = [(date(2026, 10, 12) + timedelta(days=i)).isoformat() for i in range(n)]
+    base = rng.uniform(0.3, 0.9, n)
+    scores = {"A": {d: {"status": "scored", "brier": float(base[i])} for i, d in enumerate(days)}}
+    for arm, offset in offsets.items():
+        noise = rng.normal(0, 0.01, n)
+        scores[arm] = {d: {"status": "scored", "brier": float(base[i] + offset + noise[i])} for i, d in enumerate(days)}
+    manifest = {"promotion": ml.promotion_rule(), "common_arms": ["A", "B", "N", "M", "P"]}
+    return promotion(scores, days, manifest, available or {a: {"rate": 1.0} for a in ("N", "M", "P")})
+
+
+def test_the_promotion_rule_selects_at_most_one_model_that_beats_both_baselines():
+    rule = ml.promotion_rule()
+    assert rule["order"] == ["N", "P", "M"] and abs(rule["interval_level"] - (1 - 0.05 / 3)) < 1e-6
+    assert "existing baseline" in rule["baselines"] and "not established" not in rule["baselines"]
+    none = _promotion({"B": 0.0, "N": 0.02, "M": 0.0, "P": -0.005})          # nothing beats A by the threshold
+    assert none["selected"] is None and "nothing is promoted" in none["steps"][0]
+    both = _promotion({"B": 0.0, "N": -0.05, "M": -0.10, "P": 0.0})         # M beats N by the rule: M
+    assert both["qualifying"] == ["N", "M"] and both["selected"] == "M"
+    assert both["algorithm"] == ml.ML_MULTI_VERSION and both["candidates"]["M"]["vs_A"]["meets"]
+    close = _promotion({"B": 0.0, "N": -0.05, "M": -0.055, "P": 0.0})       # M only 0.005 better than N: N stays
+    assert close["qualifying"] == ["N", "M"] and close["selected"] == "N"
+    pooled = _promotion({"B": 0.0, "N": -0.05, "M": 0.0, "P": -0.05})       # P beats A and B but not N
+    assert not pooled["candidates"]["P"]["qualifies"] and pooled["candidates"]["P"]["vs_B"]["meets"]
+    assert pooled["selected"] == "N"
+    b_only = _promotion({"B": -0.05, "N": -0.04, "M": 0.0, "P": 0.0})       # beats A, not B: no promotion
+    assert b_only["selected"] is None and b_only["candidates"]["N"]["vs_A"]["meets"]
+    rare = _promotion({"B": 0.0, "N": -0.05, "M": 0.0, "P": 0.0},
+                      available={"N": {"rate": 0.85}, "M": {"rate": 1.0}, "P": {"rate": 1.0}})
+    assert rare["selected"] is None and not rare["candidates"]["N"]["available_enough"]
+
+
+def test_the_forward_evaluation_is_scored_only_at_its_endpoint():
+    from forecaster.experiments import at_endpoint
+    m = {"endpoint": {"sessions": 60}, "sessions": {"from": "2026-10-12", "to": "2027-06-30"},
+         "snapshot_version": defs.PROFILES[ml.PROFILE].snapshot_version}
+    ok, why = at_endpoint(None, m, "2026-11-20")                              # nothing read before the 60th session
+    assert not ok and "of the 60 scheduled sessions" in why
+    assert at_endpoint(None, m, "2027-07-01")[0]                             # the end date has passed
+    assert at_endpoint(None, {"sessions": m["sessions"]}, "2026-10-13")[0]   # no endpoint: as every earlier design
+
+
 # --------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------
@@ -244,18 +308,33 @@ def mm_fraction(v):
     return fraction(v)
 
 
+def mf_utc(v):
+    from forecaster.ml_features import _utc
+    return _utc(v)
+
+
 @needs_db
 def test_ml_runs_are_issued_after_the_training_window_only_once_with_exact_probabilities(journal):
     from database import journal_store as store
     from forecaster import ml_service
     conn = journal["conn"]
-    # issued now: the synthetic bars were stored today, so an earlier issue time would rightly find them unreceived
-    first = ml_service.issue_pending(conn, ml.PROFILE)
-    assert ml_service.issue_pending(conn, ml.PROFILE)["runs"] == 0                # idempotent
     after = [d for d in journal["pool"] if d > journal["until"]]
+    # the first session's morning, 5 minutes after the cutoff: the forecast in force is recorded (B - nothing
+    # experimental is delivered), the ML forecasts wait for the context instruments
+    cutoff = mf_utc(_snap(conn, after[0])["cutoff_at"])
+    early = ml_service.issue_pending(conn, ml.PROFILE, now=cutoff + timedelta(minutes=5))
+    assert early == {"runs": 0, "reconstructions": 0, "deliveries": 1, "waiting": 1}
+    assert store.first_delivery(conn, after[0], ml.PROFILE, "historical_replay")["algorithm"] == fc.BASELINE_VERSION
+    # issued now, long after every session's replay deadline: reconstructions, and no forecast in force decided
+    # after the fact (the synthetic bars were stored today, so an earlier issue time would find them unreceived)
+    first = ml_service.issue_pending(conn, ml.PROFILE)
+    assert first["runs"] > 0 and first["reconstructions"] == first["runs"] and first["deliveries"] == 0
+    assert ml_service.issue_pending(conn, ml.PROFILE)["runs"] == 0                # idempotent
+    assert all(store.first_delivery(conn, d, ml.PROFILE, "historical_replay") is None for d in after[1:])
     runs = store.list_forecast_runs(conn, after[0], after[-1], ml.PROFILE, "historical_replay")
     ml_runs = [r for r in runs if r["algorithm_version"] in ml.ALGORITHMS]
-    assert {r["session_date"] for r in ml_runs} == set(after) and first["deliveries"] >= len(after) - 2
+    assert {r["session_date"] for r in ml_runs} == set(after)
+    assert all(ml.reconstruction(r) for r in ml_runs if r["lifecycle_status"] == "issued")
     run = store.get_forecast_run(conn, next(r["run_id"] for r in ml_runs if r["lifecycle_status"] == "issued"))
     p = run["predictions"][ml.TARGET]
     assert p["estimation_status"] == "model" and sum(Fraction(v) for v in p["distribution"].values()) == 1
@@ -263,6 +342,7 @@ def test_ml_runs_are_issued_after_the_training_window_only_once_with_exact_proba
     others = [v for t, v in run["predictions"].items() if t != ml.TARGET]
     assert all(v["status"] == "unavailable" and "B's forecast stands" in v["reason"] for v in others)
     ev = run["evidence"]
+    assert run["outputs"]["feature_version"] == ml.FEATURE_VERSION
     assert ev["model"]["sha256"] == journal["manifests"][run["algorithm_version"]]["sha256"]
     assert set(ev["features"]) == set(ml.CONFIGS[ml.CONFIG_OF[run["algorithm_version"]]])
     # a session inside the training window: unavailable, never an in-sample forecast
@@ -319,6 +399,8 @@ def test_the_forecast_in_force_falls_back_explicitly(journal, monkeypatch):
     assert run["algorithm_version"] == fc.BASELINE_VERSION and "ML NQ-only not run" in why
     rec = store.latest_delivery(conn, day, ml.PROFILE, "historical_replay")
     assert rec["delivery_order"] and rec["decided_at"]
+    first = store.first_delivery(conn, day, ml.PROFILE, "historical_replay")   # that morning's: what was in force
+    assert first["algorithm"] == fc.BASELINE_VERSION and first["delivery_id"] < rec["delivery_id"]
     with pytest.raises(psycopg.Error, match="append-only"):
         conn.execute("DELETE FROM journal.forecast_deliveries")
 
@@ -327,9 +409,15 @@ def test_the_forecast_in_force_falls_back_explicitly(journal, monkeypatch):
 def test_the_summary_states_measurements_and_sources_only(journal):
     from forecaster import forecast_summary as fsum
     conn = journal["conn"]
-    day = [d for d in journal["pool"] if d > journal["until"]][1]
+    after = [d for d in journal["pool"] if d > journal["until"]]
+    day = after[0]                                       # its forecast in force was recorded that morning
     s = fsum.build(conn, day)
     assert s["in_force"]["label"] == "B (analogues)" and set(s["arms"]) >= {"A", "B", "N", "M", "P"}
+    issued = [e for a, e in s["arms"].items() if a in ("N", "M", "P") and e["status"] == "issued"]
+    assert issued and all(e["reconstruction"] for e in issued)                 # issued long after the deadline
+    assert "[reconstruction: issued after the replay deadline, never in force]" in " ".join(fsum.lines(s))
+    later = " ".join(fsum.lines(fsum.build(conn, after[1])))
+    assert "In force: not recorded for this session (none is recorded after its replay deadline)" in later
     m = s["arms"]["M"]
     if m["status"] == "issued":
         assert set(m["minus_A_pp"]) == set(m["minus_B_pp"]) == set(ml.CLASSES) and m["experimental"]
@@ -359,20 +447,49 @@ def test_the_development_comparison_runs_on_identical_opportunities(journal, mon
 
 
 @needs_db
-def test_the_forward_evaluation_registers_without_issuing_anything(journal):
+def test_the_forward_evaluation_pins_its_versions_and_counts_no_reconstruction(journal, monkeypatch, capsys,
+                                                                              tmp_path):
     from database import journal_store as store
     from forecaster import experiments as ex
+    from forecaster import provenance
     from forecaster.journal import register
+    from scripts.nq_journal import main
     conn = journal["conn"]
     register(conn)                                           # the ML definitions, from the artifacts' manifests
     for v in ml.ALGORITHMS:
         d = store.get_version(conn, v)["definition"]
         assert d["artifact"]["sha256"] == journal["manifests"][v]["sha256"] and d["status"] == "experimental"
     before = conn.execute("SELECT count(*) FROM journal.forecast_runs").fetchone()[0]
-    m = ml.forward_manifest("2026-06-15", "2026-12-31")
-    assert ex.register_experiment(conn, m)
+    after = [d for d in journal["pool"] if d > journal["until"]]
+    monkeypatch.setattr(provenance, "code_revision", lambda: "0123abc")
+    with pytest.raises(ml.NotRegistrable, match="no stored artifact"):
+        ml.forward_manifest(conn, after[0], "2027-12-31", root=str(tmp_path))
+    monkeypatch.setattr(provenance, "code_revision", lambda: "0123abc+dirty")
+    with pytest.raises(ml.NotRegistrable, match="clean commit"):
+        ml.forward_manifest(conn, after[0], "2027-12-31")
+    monkeypatch.setattr(provenance, "code_revision", lambda: "0123abc")
+    m = ml.forward_manifest(conn, after[0], "2027-12-31")
+    assert m["official_run"]["rule"] == "first_forward" and m["versions"]["code_revision"] == "0123abc"
+    assert {ml.ARMS[a]: v["sha256"] for a, v in m["versions"]["models"].items()} == \
+        {v: man["sha256"] for v, man in journal["manifests"].items()}
+    assert m["pins"]["M"] == {"sha256": journal["manifests"][ml.ML_MULTI_VERSION]["sha256"],
+                              "feature_version": ml.FEATURE_VERSION}
     assert m["primary"]["target"] == "direction_15m" and "unhalved" in m["primary"]["metric"]
-    assert ["M", "N"] in m["pairs"] and m["arms"]["delivered"]["delivered"] == ml.delivery_order()
+    assert m["promotion"] == ml.promotion_rule() and m["endpoint"]["sessions"] == 60
+    assert m["arms"]["delivered"]["delivered"] == "recorded" and ["P", "N"] in m["pairs"]
+    assert ex.register_experiment(conn, m)
+    cases = ex.build_cases(conn, m)
+    assert len({c["session_date"] for c in cases}) == 60                     # the endpoint's sessions only
+    mine = [c for c in cases if c["session_date"] in after]
+    # every run of the synthetic sessions was issued long after its replay deadline: a reconstruction, no case -
+    # and the forecast in force recorded that morning was stamped now by the database, too late as well
+    assert any(c["status"] == "reconstruction" for c in mine) and not any(c["status"] == "case" for c in mine)
+    assert all("reconstruction" in c["detail"] for c in mine if c["status"] == "reconstruction")
+    delivered = {c["session_date"]: c for c in mine if c["arm"] == "delivered"}
+    assert delivered[after[0]]["detail"] == "the delivery was recorded after the replay deadline"
+    assert delivered[after[1]]["detail"] == "no delivery recorded by the replay deadline"
+    assert main(["--db", DSN, "experiment-score", "--name", ml.FORWARD["name"]]) == 1
+    assert "Not scored: p1_ml_forward_v1 is scored once, at its endpoint" in capsys.readouterr().out
     assert conn.execute("SELECT count(*) FROM journal.forecast_runs").fetchone()[0] == before
 
 

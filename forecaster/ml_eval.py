@@ -275,6 +275,10 @@ def report(res: Dict[str, Any], chosen: Dict[str, str], lat: Optional[Dict[str, 
         v = res["pairs"][k]
         iv = v["brier_interval"]
         lines.append(f"- **{names[k.split(' - ')[0]]} against B:** {_f(v['brier_diff'])} {_ci(iv)}.")
+    v = res["pairs"]["B - A"]
+    lines.append(f"- **B against A:** {_f(v['brier_diff'])} {_ci(v['brier_interval'])} - B stays in force because it "
+                 "is the existing baseline, not because this shows it better than A; A remains the benchmark any "
+                 "promotion must beat (contracts/nq_ml.promotion_rule).")
     lines += ["", f"Pooled training rows: " + ", ".join(f"{k} {v}" for k, v in res["pooled_rows"].items())
               + " - three instruments on one day share its news, so the effective sample grows far less than "
                 "threefold.", "",

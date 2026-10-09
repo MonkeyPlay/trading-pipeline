@@ -352,7 +352,8 @@ class ForecastPanel:
                             + (f"; {', '.join(k for k, v in used.items() if v != 'used')} missing" if any(
                                 v != 'used' for v in used.values()) else "")
                             + f" · {ml.STATUS[ml.ML_MULTI_VERSION]}")}[arm]
-            return f"issued {str(current['issued_at'])[11:16]} UTC · {current['algorithm_version']}", detail
+            late = " · reconstruction (after the replay deadline)" if ml.reconstruction(current) else ""
+            return f"issued {str(current['issued_at'])[11:16]} UTC · {current['algorithm_version']}{late}", detail
         if mine:
             return (f"{mine[0]['lifecycle_status']} - {len(mine)} attempt(s), none issued",
                     (mine[0]["failure_reason"] or "")[:110])

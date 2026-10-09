@@ -22,8 +22,10 @@ rules, with which models and tuning budget, and how it is evaluated and delivere
                       part of its own training window
   DEV_EVALUATION      the chronological development comparison (walk-forward,
                       one-session embargo); POOLED the separate pooled-training candidate
-  STATUS              experimental until an improvement over B is established on fresh
-                      forward sessions; delivery_order() follows it
+  STATUS              experimental until FORWARD's promotion rule is met on fresh forward
+                      sessions; delivery_order() follows it
+  replay_deadline()   when a historical-replay run stops being the session's forecast and
+                      becomes a reconstruction
 
 Every definition here is registered (journal.definition_versions) under its version name
 when the model artifact it describes exists; a changed definition needs a new name.
@@ -32,7 +34,7 @@ when the model artifact it describes exists; a changed definition needs a new na
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import time
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from contracts import nq_forecast as fc
@@ -264,49 +266,148 @@ POOLED = {
 }
 FORWARD = {
     "name": "p1_ml_forward_v1",
-    "design": "prospective sessions only, from the first session after deployment: the ML runs Auto issues at the "
-              "snapshot (historical-replay mode, the same as A and B), scored once at the endpoint",
+    "design": "prospective sessions only, from the first session after deployment: the runs Auto issues at each "
+              "snapshot by its replay deadline (historical-replay mode, as A and B), scored once at the endpoint",
     "endpoint_sessions": 60,
+    "candidates": ("N", "P", "M"),             # the selection order: fewest live inputs first
+    "baselines": ("B", "A"),
     "minimum_improvement": "0.01",
-    "decision": "an ML forecast improves on B only when the paired mean Brier difference ML - B on the primary "
-                "target is at most -0.01 (absolute, unhalved scale) and its whole 95 % interval lies below zero - "
-                "evidence of some improvement with a point estimate at the threshold, not that the true "
-                "improvement is at least 0.01; the multi-instrument model is preferred to the NQ-only one only if "
-                "multi - nq_only meets the same rule",
+    "alpha": "0.05",
+    "availability": "0.90",                    # the on-time share the user set for a forecast arm (2026-10-09, arm D)
+    "seed": 20261012,
 }
-# Experimental until FORWARD's decision rule is met; delivery_order() then puts it first.
+# Experimental until FORWARD's promotion rule is met; delivery_order() then puts the promoted model first.
 STATUS = {ML_MULTI_VERSION: "experimental", ML_NQ_VERSION: "experimental", ML_POOLED_VERSION: "experimental"}
 # Replay forecasts wait for the context instruments' cutoff bars up to this long after the cutoff, then issue with
 # whatever is fresh (a stale optional instrument is imputed and flagged; a stale required one makes the multi model
 # abstain); NQ's own features come from the snapshot, which already waited for NQ's cutoff bar.
 MAX_WAIT_MINUTES = 30
+# A historical-replay run is the session's forecast only when Auto issued it that morning: by the cutoff plus the
+# context wait plus five minutes for Auto's cycle (10:04 ET for the 09:29 cutoff), by the database clock - the margin
+# keeps a busy cycle at the end of the wait from turning a morning run into one. A later run - a catch-up
+# after downtime, such as the deployment's first runs for 2026-10-09 - is a reconstruction: stored and shown as one,
+# never in force (no delivery is recorded after the deadline) and never a case of the forward evaluation.
+REPLAY_DEADLINE_MINUTES = MAX_WAIT_MINUTES + 5
 
 
-def forward_manifest(start: str, end: str) -> Dict[str, Any]:
-    """The forward ML evaluation (FORWARD) over the prospective sessions [start, end] - registering it writes one
-    definition row; it sends nothing and schedules nothing (Auto issues the runs it scores)."""
+def replay_deadline(cutoff_at: datetime) -> datetime:
+    """The latest issue time at which a historical-replay run of a snapshot with this cutoff is its session's
+    forecast; later it is a reconstruction."""
+    return cutoff_at + timedelta(minutes=REPLAY_DEADLINE_MINUTES)
+
+
+def reconstruction(run: Dict[str, Any]) -> bool:
+    """A historical-replay run issued after its replay deadline (see REPLAY_DEADLINE_MINUTES)."""
+    if run.get("mode") != "historical_replay" or run.get("issued_at") is None:
+        return False
+    return _instant(run["issued_at"]) > replay_deadline(_instant(run["input_cutoff_at"]))
+
+
+def _instant(value) -> datetime:
+    from datetime import timezone
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+class NotRegistrable(ValueError):
+    """The forward evaluation cannot be registered as it stands (an artifact missing or not the registered one, or
+    code that is not a clean commit)."""
+
+
+def promotion_rule() -> Dict[str, Any]:
+    """FORWARD's promotion rule as registered text and parameters - applied mechanically at the endpoint
+    (forecaster/experiments.promotion)."""
+    k = len(FORWARD["candidates"])
+    level = 1 - float(FORWARD["alpha"]) / k
+    return {
+        "candidates": {a: ARMS[a] for a in FORWARD["candidates"]},
+        "baselines": "B, the forecast in force as the existing baseline, and A, the frequencies, the benchmark: a "
+                     "candidate must beat both - the development comparison did not establish B as better than A",
+        "comparison": "per candidate X and baseline Y, the mean per-session difference X - Y of the primary score on "
+                      "the common sessions (every one of A, B, N, M and P scored), with a moving-block bootstrap "
+                      "percentile interval (blocks of 5 sessions, 2000 resamples, seed "
+                      f"{FORWARD['seed']})",
+        "minimum_improvement": FORWARD["minimum_improvement"],
+        "threshold": f"the mean difference at most -{FORWARD['minimum_improvement']} (absolute, unhalved 0-2 scale) "
+                     "with the whole interval below zero - evidence of some improvement with a point estimate at the "
+                     f"threshold, not that the true improvement is at least {FORWARD['minimum_improvement']}",
+        "interval_level": round(level, 6), "block_sessions": 5, "resamples": 2000, "seed": FORWARD["seed"],
+        "multiple_comparisons": f"Bonferroni over the {k} candidates: every interval the promotion and the selection "
+                                f"use is two-sided at 1 - {FORWARD['alpha']}/{k} ({100 * level:.2f} %); clearing both "
+                                "baselines is an intersection-union test, so the pair needs no further adjustment. "
+                                "Every other comparison is reported at 95 %, descriptive only",
+        "availability": f"on time in at least {float(FORWARD['availability']):.0%} of all scheduled sessions: an "
+                        "issued run by the replay deadline under the registered artifact and feature version; "
+                        "unavailable, failed, missing and reconstructed runs count against it - the rate, n and the "
+                        "exact (Clopper-Pearson) 95 % interval are reported",
+        "availability_minimum": FORWARD["availability"],
+        "pooled": "P qualifies only if it also meets the rule against N: pooled training must improve on the "
+                  "NQ-trained model",
+        "selection": "none qualifies: nothing is promoted - B stays in force as the existing baseline and A remains "
+                     "the benchmark; one qualifies: that one; several: start from the first qualifying candidate in "
+                     f"the order {', '.join(FORWARD['candidates'])} (fewest live inputs first) and move to a later "
+                     "qualifying one only if it meets the same rule against the current choice",
+        "order": list(FORWARD["candidates"]),
+        "effect": "the scoring states which model qualifies; a promotion is a change of contracts/nq_ml.STATUS in a "
+                  "new commit, deployed - nothing changes by itself",
+    }
+
+
+def forward_manifest(conn, start: str, end: str, root: Optional[str] = None) -> Dict[str, Any]:
+    """The forward ML evaluation (FORWARD) over the prospective sessions [start, end]: the promotion rule and the
+    exact code, feature and model-artifact versions it evaluates. Registering it writes one definition row; it sends
+    and schedules nothing (Auto issues the runs it scores). Raises NotRegistrable unless every model's artifact is
+    stored, matches its registered definition, and the code is a clean commit."""
+    from database import journal_store as store
     from forecaster import experiments as ex
-    m = ex.experiment_manifest(FORWARD["name"], start, end, profile=PROFILE, purpose="test", official_run="first",
-                               mode="historical_replay", arms={a: v for a, v in ARMS.items()})
-    m["arms"]["delivered"] = {"algorithm": "delivered", "delivered": delivery_order(),
-                              "question": "the forecast in force (delivery_order(): B, then A, while the ML "
-                                          "forecasts are experimental)"}
+    from forecaster import ml_model as mm
+    from forecaster.provenance import code_revision
+    revision = code_revision()
+    if revision == "unknown" or revision.endswith("+dirty"):
+        raise NotRegistrable(f"the code is not a clean commit ({revision}): register from a deployed revision")
+    models = {}
+    for arm in FORWARD["candidates"]:
+        version = ARMS[arm]
+        man = mm.manifest(version, root)
+        if man is None:
+            raise NotRegistrable(f"{version} has no stored artifact")
+        registered = store.get_version(conn, version)
+        if registered is None or registered["definition"]["artifact"]["sha256"] != man["sha256"]:
+            raise NotRegistrable(f"{version}: the stored artifact ({man['sha256'][:12]}) is not the registered one")
+        models[arm] = {"algorithm": version, "sha256": man["sha256"], "family": man["family"], "params": man["params"],
+                       "training": {k: man["training"][k] for k in ("from", "to", "sessions", "rows")},
+                       "software": man["software"], "definition_hash": registered["definition_hash"]}
+    m = ex.experiment_manifest(FORWARD["name"], start, end, profile=PROFILE, purpose="test",
+                               official_run="first_forward", mode="historical_replay",
+                               arms={a: v for a, v in ARMS.items()})
+    m["arms"]["delivered"] = {"algorithm": "delivered", "delivered": "recorded",
+                              "question": "the forecast actually in force: the session's first recorded delivery "
+                                          "(journal.forecast_deliveries), decided by the replay deadline - B, then A, "
+                                          "while the ML forecasts are experimental"}
     m.update({
-        "pairs": [["M", "B"], ["N", "B"], ["P", "B"], ["M", "A"], ["N", "A"], ["P", "A"], ["M", "N"], ["P", "N"],
-                  ["B", "A"]],
-        "common_arms": list(ARMS),
+        "design": FORWARD["design"],
+        "versions": {"code_revision": revision, "feature_version": FEATURE_VERSION, "forecast_schema": SCHEMA_VERSION,
+                     "models": models},
+        "pins": {arm: {"sha256": v["sha256"], "feature_version": FEATURE_VERSION} for arm, v in models.items()},
+        "replay_deadline": f"the cutoff plus {REPLAY_DEADLINE_MINUTES} minutes (10:04 ET for the 09:29 cutoff), by "
+                           "the database clock: a run issued later is a reconstruction, never a case",
+        "pairs": [["N", "B"], ["P", "B"], ["M", "B"], ["N", "A"], ["P", "A"], ["M", "A"], ["P", "N"], ["M", "N"],
+                  ["M", "P"], ["B", "A"]],
+        "pairs_note": "reported at 95 %, descriptive; the promotion rule recomputes its comparisons at its own level",
+        "common_arms": ["A", "B", "N", "M", "P"],
         "primary": {"target": TARGET, "metric": "multiclass Brier score, the unhalved sum over the classes "
                                                 "sum_c (p_c - [c realised])^2, 0 to 2 per session, lower is better"},
         "companions": ["multiclass log loss (natural log), lower is better",
                        "calibration (reliability of the issued probabilities)",
                        "accuracy of the issued class (ambiguous predictions counted apart)"],
-        "minimum_practical_improvement": f"an absolute reduction of {FORWARD['minimum_improvement']} in the mean "
-                                         "per-session Brier score on the unhalved 0-2 scale; not a relative one",
-        "decision": FORWARD["decision"],
-        "endpoint": f"scored once, at {FORWARD['endpoint_sessions']} scheduled sessions or on the end date; "
-                    "availability may be checked before, never a score",
+        "promotion": promotion_rule(),
+        "endpoint": {"sessions": FORWARD["endpoint_sessions"],
+                     "rule": f"scored once, after the {FORWARD['endpoint_sessions']}th scheduled session from the "
+                             "start has its outcome, or after the end date: experiment-score refuses before; "
+                             "availability may be checked before, never a score"},
         "availability_rule": "every scheduled session is an opportunity for every arm: a run that is unavailable, "
-                             "failed or missing counts against it (results.availability)",
+                             "failed, missing or a reconstruction counts against it (results.availability)",
         "development_note": "the arms' development comparison (docs/reports/ml_development.md) used sessions that "
                             "were inspected before; only these prospective sessions can confirm an improvement",
         "controls": "registering writes one definition; the runs are those Auto issues at each snapshot",

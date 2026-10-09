@@ -588,9 +588,19 @@ def save_delivery(conn: Database, session_date: str, profile: str, mode: str, ru
 
 
 def latest_delivery(conn: Database, session_date: str, profile: str, mode: str) -> Optional[Dict[str, Any]]:
-    """The newest recorded forecast in force of a session, profile and mode, or None."""
+    """The newest recorded delivery of a session, profile and mode, or None."""
+    return _delivery(conn, session_date, profile, mode, "DESC")
+
+
+def first_delivery(conn: Database, session_date: str, profile: str, mode: str) -> Optional[Dict[str, Any]]:
+    """The forecast in force of a session, profile and mode: its first recorded delivery - a later row never changes
+    what was in force - or None."""
+    return _delivery(conn, session_date, profile, mode, "ASC")
+
+
+def _delivery(conn: Database, session_date: str, profile: str, mode: str, order: str) -> Optional[Dict[str, Any]]:
     row = conn.execute("SELECT * FROM journal.forecast_deliveries WHERE session_date = %s AND profile = %s AND "
-                       "mode = %s ORDER BY delivery_id DESC LIMIT 1;", (session_date, profile, mode)).fetchone()
+                       f"mode = %s ORDER BY delivery_id {order} LIMIT 1;", (session_date, profile, mode)).fetchone()
     if row is None:
         return None
     d = dict(zip(row.keys(), row))

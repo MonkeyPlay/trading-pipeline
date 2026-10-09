@@ -54,6 +54,7 @@
 - **NQ-only, boosted against B:** 0.0181 [-0.0220, +0.0593].
 - **pooled (NQ+ES+RTY), logistic against B:** -0.0157 [-0.0474, +0.0179].
 - **pooled (NQ+ES+RTY), boosted against B:** -0.0192 [-0.0573, +0.0212].
+- **B against A:** 0.0172 [-0.0132, +0.0468] - B stays in force because it is the existing baseline, not because this shows it better than A; A remains the benchmark any promotion must beat (contracts/nq_ml.promotion_rule).
 
 Pooled training rows: NQ 278, ES 279, RTY 267 - three instruments on one day share its news, so the effective sample grows far less than threefold.
 
@@ -69,9 +70,9 @@ The family with the lower development Brier score per configuration (a developme
 
 From nothing loaded to probabilities - the session's features as of the cutoff from the database, the artifact loaded and checked, the prediction:
 
-- **nq_ml_nq_p1_v1:** median 5.15 s, slowest 5.28 s (5 issues)
-- **nq_ml_multi_p1_v1:** median 5.08 s, slowest 5.32 s (5 issues)
-- **nq_ml_pooled_p1_v1:** median 5.17 s, slowest 5.22 s (5 issues)
+- **nq_ml_nq_p1_v1:** median 5.31 s, slowest 5.55 s (5 issues)
+- **nq_ml_multi_p1_v1:** median 5.28 s, slowest 5.49 s (5 issues)
+- **nq_ml_pooled_p1_v1:** median 5.21 s, slowest 5.48 s (5 issues)
 
 ## Missing inputs (share of pool sessions, multi-instrument features)
 

@@ -298,8 +298,9 @@ Pages:
     ([forecaster/forecast_summary.py](forecaster/forecast_summary.py)). **Arms for the day**: one
     tile per arm - A prior (the benchmark), B baseline, N, M and P the ML forecasts (NQ-only,
     multi-instrument, pooled; experimental) - saying whether it ran (issued, unavailable and why,
-    failed, no run) and what it rests on; the arm shown is highlighted and a click shows
-    another. Below the tiles a radar compares the arms that forecast every target with the benchmark
+    failed, no run), whether a run is a reconstruction (issued after its replay deadline, the
+    cutoff + 35 minutes: never in force, never a forward case) and what it rests on; the arm
+    shown is highlighted and a click shows another. Below the tiles a radar compares the arms that forecast every target with the benchmark
     (arm A dashed, chance dotted) ([forecaster/grading.py](forecaster/grading.py)): before the
     outcome, how sure each arm is of its predicted class per target, with a table of the classes
     marking each that differs from arm A's; with the realised outcome shown and recorded, the

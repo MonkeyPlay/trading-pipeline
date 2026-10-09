@@ -350,7 +350,7 @@ def cmd_experiment_register(conn, args):
             from contracts import nq_ml
             if args.name != nq_ml.FORWARD["name"]:
                 raise ValueError(f"the ml-forward design is named {nq_ml.FORWARD['name']}")
-            manifest = nq_ml.forward_manifest(args.start, args.end)
+            manifest = nq_ml.forward_manifest(conn, args.start, args.end)
         else:
             manifest = ex.experiment_manifest(args.name, args.start, args.end, args.profile, args.purpose,
                                               args.official_run)
@@ -359,9 +359,16 @@ def cmd_experiment_register(conn, args):
         print(f"Not registered: {e}")
         return 1
     print(f"{args.name}: {'registered' if new else 'already registered, identical'} - sessions "
-          f"{args.start} to {args.end}, {args.profile}, {args.purpose}, official run '{args.official_run}', arms "
-          + ", ".join(f"{k} {v['algorithm']}" for k, v in manifest["arms"].items())
-          + f"; primary {manifest['primary']['target']} log loss. No score has been computed.")
+          f"{args.start} to {args.end}, {manifest['profile']}, {manifest['purpose']}, official run "
+          f"'{manifest['official_run']['rule']}', arms " + ", ".join(f"{k} {v['algorithm']}" for k, v in
+                                                                  manifest["arms"].items())
+          + f"; primary {manifest['primary']['target']}, {manifest['primary']['metric'].split(',')[0]}.")
+    if manifest.get("versions"):
+        v = manifest["versions"]
+        print(f"  code {v['code_revision']}, features {v['feature_version']}; artifacts "
+              + ", ".join(f"{a} {m['sha256'][:12]}" for a, m in v["models"].items()))
+        print(f"  endpoint: {manifest['endpoint']['rule']}")
+    print("No score has been computed.")
     return 0
 
 
@@ -373,6 +380,10 @@ def cmd_experiment_score(conn, args):
     except ValueError as e:
         print(e)
         return 1
+    ok, why = ex.at_endpoint(conn, manifest, datetime.now(cal.NY_TZ).date().isoformat())
+    if not ok:
+        print(f"Not scored: {args.name} is scored once, at its endpoint - {why}.")
+        return 1
     results = ex.score_experiment(conn, args.name)
     result_id = ex.store_results(conn, args.name, results)
     path = ex.write_report(manifest, results, args.report_dir, result_id)
@@ -381,6 +392,9 @@ def cmd_experiment_score(conn, args):
         print(f"{args.name} ({manifest['purpose']}): {results['primary']['target']} {key} on {p['common']} common "
               f"sessions - log loss diff {ex._f(ll['diff'])} {ex._ci(ll['interval'])} over {ll['both_finite']} "
               f"finite pairs, Brier diff {ex._f(p['brier']['diff'])} {ex._ci(p['brier']['interval'])}")
+    if results.get("promotion"):
+        pr = results["promotion"]
+        print(f"promotion: " + "; ".join(pr["steps"]) + (f" - selected {pr['selected']}" if pr["selected"] else ""))
     print(f"result {result_id}; report {path}")
     return 0
 
