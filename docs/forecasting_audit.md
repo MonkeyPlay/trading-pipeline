@@ -37,7 +37,9 @@ throughout.
 **Collect before claiming.** The forward studies collect from today:
 
 - the RTH research (`rth_continuation_v2`) and operational (`rth_operational_v1`) evaluations,
-  issued live by Auto;
+  issued live by Auto. The first session (Oct 9) is complete: 60 of 60 windows and 3 of 3
+  cases in each evaluation, none missing. Health checks are logged in
+  `docs/reports/rth_evaluation_health.md` (counts and timing, never a score);
 - the fan's forward record (since 2026-10-06).
 
 An LLM comparison needs its own registered forward experiment (proposed below). Running it
