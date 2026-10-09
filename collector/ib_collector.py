@@ -91,6 +91,12 @@ from collector.rolls import front_contracts, missing_cycle_months, segments, upc
 # or belong to a session that has not fully closed -> stored as is_completed=0.
 _PARTIAL_BAR_WINDOW = timedelta(hours=2)
 
+# A run's window reaches back to the first day after a symbol's last recorded active contract, at most this many
+# calendar days: a session missed while nothing collected (2026-10-08) is then planned and assigned too. Its bars may
+# already be stored - as an earlier run's warm-up days - but without its active-contract row no snapshot, matcher or
+# evaluation reads it.
+CATCH_UP_DAYS = 10
+
 # How many days back a stored complete session is refetched for vendor revisions; None (--no-trailing-refresh)
 # refetches none - for a run every minute, which then fetches only missing and incomplete days and the session in
 # progress.
@@ -526,6 +532,19 @@ def _resolve_window(days_to_download, start=None, end=None):
     return start_day, end_day
 
 
+def _catch_up_start(conn, symbol, start_day):
+    """``start_day``, or earlier: the first day after ``symbol``'s last recorded active contract before it, at most
+    CATCH_UP_DAYS back - so a missed session is planned and assigned. A symbol with nothing recorded keeps the
+    window."""
+    row = conn.execute("SELECT max(trading_day) FROM active_contracts WHERE symbol = %s AND trading_day < %s;",
+                       (symbol, start_day.isoformat())).fetchone()
+    last = row[0] if row is not None else None
+    if last is None:
+        return start_day
+    last = last if isinstance(last, date) else date.fromisoformat(str(last))
+    return min(start_day, max(last + timedelta(days=1), start_day - timedelta(days=CATCH_UP_DAYS)))
+
+
 def _implausible(instrument: Instrument, day_bars):
     """
     An error message if the day's median close falls outside the instrument's
@@ -669,6 +688,7 @@ class _Work:
     assignment: Dict[str, int] = field(default_factory=dict)   # day -> contract_id
     uncovered: List[str] = field(default_factory=list)         # days no known contract covers
     rule: str = ""
+    start: Optional[date] = None                   # the window's first day for this symbol (_catch_up_start)
 
     @property
     def label(self):
@@ -842,7 +862,7 @@ def _collect_work(app, conn, work):
 def _collect_one(app, conn, work, start_day, end_day, gap_fill):
     """One symbol: its contracts resolved via IB when the database lacks them, then every planned day collected."""
     if work.jobs is None:
-        _resolve_online(app, conn, work, start_day, end_day, gap_fill)
+        _resolve_online(app, conn, work, work.start or start_day, end_day, gap_fill)
         _record_assignment(conn, work)
     return _collect_work(app, conn, work)
 
@@ -943,17 +963,20 @@ def run_collection_workflow(dsn, host, port, client_id, instruments, days_to_dow
             if instrument.is_future and not rolling and not expiry:
                 expiry = Config.expiry_for(symbol)
             work = _Work(symbol, instrument, expiry if instrument.is_future else None, rolling)
+            work.start = _catch_up_start(conn, symbol, start_day)
             logger.info(f"Window: {start_day} -> {end_day} ({work.label}, {INTERVAL_LABEL}"
-                        f"{', rolling' if rolling else ''}).")
+                        f"{', rolling' if rolling else ''})"
+                        + (f"; from {work.start}: no active contract recorded since" if work.start < start_day
+                           else "") + ".")
 
             if rolling:
-                if not _plan_rolling(conn, work, start_day, end_day, gap_fill):
+                if not _plan_rolling(conn, work, work.start, end_day, gap_fill):
                     logger.info(f"{symbol}: the stored contract chain does not cover the window; "
                                 f"it must be discovered via IB first.")
             else:
                 row = get_contract_by_expiry(conn, symbol, work.expiry)
                 if row is not None:
-                    _plan_single(conn, work, row, start_day, end_day, gap_fill)
+                    _plan_single(conn, work, row, work.start, end_day, gap_fill)
                 else:
                     logger.info(f"{work.label} is not in the database yet; it must be resolved via IB first.")
 

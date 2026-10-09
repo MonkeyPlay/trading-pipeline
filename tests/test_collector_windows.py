@@ -7,7 +7,7 @@ request (which IB forbids within 15 s, and the pacer would wait out). And a run 
 minute (--no-trailing-refresh) plans only missing and incomplete days.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -114,3 +114,31 @@ def test_without_the_trailing_refresh_only_missing_incomplete_and_in_progress_da
     ledger["2026-10-07"] = row(0, "EMPTY")
     assert plan(trailing_days=None)["2026-10-07"] == ("refetch", "session in progress")
     assert plan()["2026-10-07"] == ("refetch", "session in progress")
+
+
+class _LastAssigned:
+    """A connection whose only answer is a symbol's last recorded active-contract day."""
+
+    def __init__(self, last):
+        self.last = last
+
+    def execute(self, sql, params):
+        assert "active_contracts" in sql
+        last = self.last
+
+        class Row:
+            def fetchone(self):
+                return (last,)
+        return Row()
+
+
+def test_a_missed_session_is_planned_and_assigned_again():
+    """2026-10-08 was missed while nothing collected; the next run's window (today only, Auto) reaches back to it so
+    its active contract is recorded - without it no snapshot, ATR or matcher reads the day. At most CATCH_UP_DAYS."""
+    today = date(2026, 10, 9)
+    assert collector._catch_up_start(_LastAssigned(date(2026, 10, 7)), "NQ", today) == date(2026, 10, 8)
+    assert collector._catch_up_start(_LastAssigned("2026-10-08"), "NQ", today) == today       # nothing missed
+    assert collector._catch_up_start(_LastAssigned(None), "NQ", today) == today               # a new symbol
+    assert collector._catch_up_start(_LastAssigned(date(2026, 9, 1)), "NQ", today) == \
+        today - timedelta(days=collector.CATCH_UP_DAYS)
+

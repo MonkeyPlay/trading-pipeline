@@ -386,7 +386,14 @@ def test_catch_up_takes_a_session_once_its_pre_open_is_stored(market):
                 conn.execute("DELETE FROM bars WHERE trading_day = %s AND contract_id = %s AND timestamp_utc >= %s;",
                              (DAY, NQ_CID, cal.ny_instant(d, time(9, 20))))
                 why = snapshot_pending(conn, DAY, now=midday)
-                assert "bar closing at the 09:29 ET cutoff is not stored yet (newest: 09:19 ET)" in why
+                assert "bar closing at the 09:29 ET cutoff is not stored and confirmed yet (newest: 09:19 ET" in why
+                raise _RolledBack
+        # ... nor while the bar closing at the cutoff is the newest stored: it may still be forming
+        with pytest.raises(_RolledBack):
+            with conn:
+                conn.execute("DELETE FROM bars WHERE trading_day = %s AND contract_id = %s AND timestamp_utc >= %s;",
+                             (DAY, NQ_CID, cal.ny_instant(d, time(9, 29))))
+                assert "(newest: 09:28 ET; a later bar confirms it)" in snapshot_pending(conn, DAY, now=midday)
                 raise _RolledBack
         assert snapshot_pending(conn, DAY, now=midday) is None
         result = catch_up(conn, now=midday)
