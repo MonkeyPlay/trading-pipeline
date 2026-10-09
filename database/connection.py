@@ -4,7 +4,12 @@ PostgreSQL / TimescaleDB connection management for the NQ Trading Pipeline.
 
 Schema is managed exclusively through forward-only migrations
 (``database/migrations/``); see ``database/migrations.py``. An existing database
-is upgraded in place and never regenerated.
+is upgraded in place and never regenerated - and only by an explicit deployment
+step (``scripts/deploy.sh``, or ``python -m database.migrations --db URL`` from the
+revision being deployed). Routine processes - the dashboard, the collector, the
+CLIs - only check that the database's schema is the one their code expects
+(``init_database``) and stop when it is not: creating a migration file in a
+checkout can never change a database by itself.
 
 The rest of the codebase was written against ``sqlite3`` and keeps that shape:
 ``conn.execute(...)`` returns a cursor, ``with conn:`` is one transaction, and
@@ -26,7 +31,7 @@ import psycopg
 from psycopg.adapt import Loader
 from psycopg.types.string import TextLoader
 
-from database.migrations import apply_migrations
+from database.migrations import apply_migrations, get_user_version, latest_version
 
 logger = logging.getLogger(__name__)
 
@@ -157,15 +162,36 @@ def get_db_connection(dsn: Optional[str] = None) -> Database:
     return Database(raw)
 
 
-def init_database(dsn: Optional[str] = None, schema_path=None):
+class SchemaMismatch(RuntimeError):
+    """The database's schema version is not the one this code's migrations end at: deploy first."""
+
+
+def check_schema(conn, dsn: Optional[str] = None) -> int:
+    """The database's schema version when it is the one this checkout's migrations end at; raises SchemaMismatch
+    otherwise - behind (a migration not deployed) or ahead (this code is older than the database)."""
+    db, code = get_user_version(conn), latest_version()
+    if db != code:
+        where = describe_dsn(dsn)
+        raise SchemaMismatch(
+            f"The database at {where} is at schema v{db:04d}; this code expects v{code:04d}. "
+            + ("Deploy the migrations explicitly: scripts/deploy.sh <revision> (or python -m database.migrations "
+               "--db <url> from the revision to run)." if db < code else
+               "This checkout is older than the database: run the deployed revision (scripts/deploy.sh).")
+            + " Routine processes never migrate a database.")
+    return db
+
+
+def init_database(dsn: Optional[str] = None, schema_path=None, apply: bool = False) -> int:
     """
-    Ensures the database is migrated to the latest schema version. Safe to call
-    on every process start. ``schema_path`` is accepted for backwards
-    compatibility and ignored (migrations are authoritative).
+    Every process start: checks that the database's schema is the one this code expects (check_schema) and
+    returns its version - it never migrates. ``apply=True`` applies pending migrations first: the deployment step,
+    the test and development databases only. ``schema_path`` is accepted for backwards compatibility and ignored.
     """
     conn = get_db_connection(dsn)
     try:
-        apply_migrations(conn)
+        if apply:
+            apply_migrations(conn)
+        return check_schema(conn, dsn)
     finally:
         conn.close()
 
@@ -195,7 +221,7 @@ def reset_database(dsn: Optional[str] = None):
         logger.info(f"Dropped {len(names)} table(s); schema version reset to 0.")
     finally:
         conn.close()
-    init_database(dsn)
+    init_database(dsn, apply=True)
 
 
 def describe_dsn(dsn: Optional[str] = None) -> str:
@@ -209,9 +235,7 @@ def describe_dsn(dsn: Optional[str] = None) -> str:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    from database.migrations import get_user_version
-
-    init_database()
+    init_database(apply=True)
     c = get_db_connection()
     try:
         print("schema version:", get_user_version(c))

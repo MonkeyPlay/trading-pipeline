@@ -87,7 +87,7 @@ def migrate(sqlite_path, dsn=None):
                 f"v{REQUIRED_SQLITE_VERSION:04d}. Upgrade it with the SQLite-era code first."
             )
 
-        init_database(dsn)
+        init_database(dsn, apply=True)                # first-time setup of a new store
         conn = get_db_connection(dsn)
         try:
             held = conn.execute("SELECT COUNT(*) FROM contracts;").fetchone()[0]

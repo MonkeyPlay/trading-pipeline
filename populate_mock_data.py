@@ -153,7 +153,7 @@ def main(reset=False, dsn=None, force=False):
         logger.info(f"Resetting dev database at {describe_dsn(dsn)} ...")
         reset_database(dsn)
     else:
-        init_database(dsn)
+        init_database(dsn, apply=True)                # a development database
 
     logger.info(f"Populating mock data into {describe_dsn(dsn)}")
     conn = get_db_connection(dsn)

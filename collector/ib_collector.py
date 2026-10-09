@@ -1105,7 +1105,7 @@ if __name__ == "__main__":
         TRAILING_DAYS = None
 
     if args.init_only:
-        init_database(args.db)
+        init_database(args.db, apply=True)             # an explicit setup step - never part of a routine run
         print("Database initialized successfully. Exiting.")
         sys.exit(0)
 
@@ -1135,7 +1135,7 @@ if __name__ == "__main__":
                and not any(expiry for _, expiry in instruments))
     refresh = None
     if journal:
-        init_database(args.db)                         # migrated before the second connection uses it
+        init_database(args.db)                         # the schema checked before the second connection uses it
         refresh = EventsRefresh(args.db)
         refresh.start()
 

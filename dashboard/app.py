@@ -48,7 +48,7 @@ def connection():
     """
     global _connection
     if _connection is None:
-        init_database(Config.DATABASE_URL)  # idempotent: applies pending migrations
+        init_database(Config.DATABASE_URL)  # checks the schema; only a deployment migrates (scripts/deploy.sh)
         _connection = get_db_connection(Config.DATABASE_URL)
     return _connection
 
