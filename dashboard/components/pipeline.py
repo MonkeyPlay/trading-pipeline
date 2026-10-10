@@ -17,16 +17,17 @@ from typing import Any, Callable, List, Optional
 from nicegui import ui
 
 from config import Config
+from dashboard import theme
 from dashboard.jobs import (RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
                             preview_command, rth_command)
 from features import calendar as cal
 from forecaster.preview import PreviewUnavailable, preview_target
 from forecaster.rth_analogues import due_window as rth_due
 
-_MUTED = "color:#787b86"
-_PANEL = "#1c212e"
+_MUTED = theme.MUTED
+_PANEL = theme.PANEL
 _LOG_LINES = 1000         # lines the page's log holds; logs/pipeline_run.log has every line
-_OUTCOME_COLOR = {"running": "#2962ff", "finished": "#26a69a"}
+_OUTCOME_COLOR = {"running": theme.SIGNAL, "finished": theme.INK}
 
 COLLECTOR, FORECASTER, PREVIEW, LIVE = ("Collector", "Forecaster", "Forecast now", "Live pre-open forecast")
 
@@ -70,7 +71,7 @@ class PipelinePanel:
         with ui.row().classes("items-center gap-2 no-wrap"):
             self.spinner = ui.spinner(size="sm")
             self.button = ui.button("Update data", icon="sync", on_click=lambda: self.dialog.open()).props(
-                "flat no-caps").tooltip("Run the collector or the forecaster, and see their output")
+                "outline no-caps").tooltip("Run the collector or the forecaster, and see their output")
         with ui.dialog() as self.dialog, ui.card().classes("w-[64rem] max-w-full gap-3").style(f"background:{_PANEL}"):
             with ui.row().classes("w-full items-center"):
                 ui.label("Update data").classes("text-lg font-medium")
@@ -116,7 +117,7 @@ class PipelinePanel:
                 self.stop_button = ui.button("Stop", icon="stop", on_click=self.stop).props(
                     "flat no-caps color=negative")
             self.log = ui.log(max_lines=_LOG_LINES).classes("w-full h-96 text-xs").style(
-                "background:#131722;font-family:ui-monospace,monospace")
+                "background:var(--tp-paper);color:var(--tp-ink);border-radius:6px;font-family:ui-monospace,monospace")
             ui.label("Every run's output is also appended to logs/pipeline_run.log.").classes("text-xs").style(_MUTED)
         self._follow(self._latest())
         self._render()
@@ -222,11 +223,11 @@ class PipelinePanel:
         note = ("Possible " if self.preview_possible else "Not possible now: ") + preview_why
         if note != self.preview_note.text:
             self.preview_note.set_text(note)
-            self.preview_note.style(f"color:{'#26a69a' if self.preview_possible else '#787b86'}")
+            self.preview_note.style(f"color:{theme.INK if self.preview_possible else theme.INK2}")
         note = ("Available now - " if allowed else "Not available: ") + why
         if note != self.live_note.text:
             self.live_note.set_text(note)
-            self.live_note.style(f"color:{'#26a69a' if allowed else '#787b86'}")
+            self.live_note.style(f"color:{theme.INK if allowed else theme.INK2}")
         shown_running = job is not None and job.running
         self.stop_button.set_visibility(shown_running)
         self.spinner.set_visibility(busy)
@@ -234,7 +235,7 @@ class PipelinePanel:
         if job is None:
             self.status.set_content(f"<span style='{_MUTED}'>Nothing run from the dashboard since it started.</span>")
             return
-        color = _OUTCOME_COLOR.get(job.outcome, "#ef5350")
+        color = _OUTCOME_COLOR.get(job.outcome, theme.SIGNAL)
         end = "" if job.running else f", ended {_et(job.finished_at)}"
         self.status.set_content(f"<b>{job.title}</b> - <span style='color:{color}'>{job.outcome}</span> "
                                 f"<span style='{_MUTED}'>· started {_et(job.started_at)}{end} · {_elapsed(job)}</span>")

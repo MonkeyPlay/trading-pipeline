@@ -702,6 +702,17 @@ The dashboard is [NiceGUI](https://nicegui.io) serving TradingView's
 **vendored** at `dashboard/components/lib/lightweight-charts.standalone.js`, so the
 dashboard loads no CDN and works with no network access.
 
+**The look** ("daylight recorder", [dashboard/theme.py](dashboard/theme.py)): chart paper and ink, with
+colour kept for meaning. Candles are ink - an up bar hollow, a down bar solid - so colour is free for the
+arms (A grey and dashed, B blue, N amber, M teal, P plum) and the levels. Provenance reads the same on every
+page: observed is solid, recorded a solid line, recomputed dashed and hollow, a forecast grey fog, and a time
+the clock has passed but the delayed feed has not is hatched red. Every colour is named in `theme.py`; the
+pages use them as CSS variables (`var(--tp-ink)`), the charts as the values (`theme.CHART`). The typeface,
+Archivo, comes from Google Fonts; offline the pages fall back to the system sans. Under the session bar,
+the **session timeline** ([dashboard/components/session_timeline.py](dashboard/components/session_timeline.py))
+runs from the 18:00 Globex open to the close: how far the stored bars reach, the clock while the session is in
+progress, and which targets are observed, waiting for their bars or still forecasts.
+
 Every chart in the app goes through one component, [dashboard/components/lightweight_chart.js](dashboard/components/lightweight_chart.js).
 
 **The chart is built once and then mutated in place.** Python never issues drawing

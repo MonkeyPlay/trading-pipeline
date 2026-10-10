@@ -37,6 +37,7 @@ from nicegui import ui
 
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
+from dashboard import theme
 from dashboard.components.preopen import LEVEL_LABELS
 from database import journal_store as store
 from features import calendar as cal
@@ -45,11 +46,10 @@ from forecaster.preopen_display import p1_record
 from forecaster.rth_analogues import windows_over
 from matching.structural import features
 
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 _CELL = "px-2 py-1 text-xs whitespace-nowrap"
 _WRAP = "px-2 py-1 text-xs whitespace-normal break-words"
-_MATCH, _MISMATCH, _PARTIAL, _NONE = ("rgba(38,166,154,0.28)", "rgba(239,83,80,0.28)", "rgba(253,216,53,0.22)",
-                                      "rgba(120,123,134,0.12)")
+_MATCH, _MISMATCH, _PARTIAL, _NONE = (theme.AGREE, theme.DIFFER, theme.PARTLY, theme.NOT_COMPARABLE)
 _FEATURE_LABEL = {f: f"vs {LEVEL_LABELS[f[len('price:'):]]}" if f.startswith("price:") else f
                   for f in pre.MATCH_WEIGHTS}
 _CHOSEN = "bg-primary text-white"
@@ -115,7 +115,7 @@ class AnaloguesPanel:
         """The panel's elements, in the caller's container: a note when the day has no analogues, else the body."""
         self.note = ui.label().classes("text-sm").style(_MUTED)
         with ui.column().classes("w-full gap-3") as self.body:
-            self.preview_note = ui.label().classes("text-sm").style("color:#ffa726")
+            self.preview_note = ui.label().classes("text-sm").style("color:var(--tp-amber)")
             ui.label(f"Earlier sessions most like the selected one by P1's rubric ({pre.MATCHER_VERSION}): price "
                      f"location against its own levels, structure, trends and moving averages, the final hour and "
                      f"event risk. The chart beside the session shows one of them; their realised labels and the "
@@ -125,7 +125,7 @@ class AnaloguesPanel:
                 self.summary = ui.label().classes("text-sm").style(_MUTED)
             self.table = ui.column().classes("w-full gap-0 overflow-x-auto")
             with ui.expansion("P1 pre-open record (47 fields)", icon="list_alt", value=False).classes(
-                    "w-full").style("background:#1c212e"):
+                    "w-full"):
                 self.record = ui.column().classes("w-full gap-0")
             self.outcome_panel = ui.column().classes("w-full gap-1")
 
@@ -236,21 +236,21 @@ class AnaloguesPanel:
         target_annotation = self._target_annotation()
         target_values = features(target_annotation) if target_annotation else {}
         with self.table:
-            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:#2a2e39"):
-                ui.label("").classes(_CELL).style("background:#1c212e")
-                ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:#1c212e")
+            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:var(--tp-rule)"):
+                ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
+                ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:var(--tp-sheet)")
                 for m in members:
                     self.date_buttons[m["snapshot_id"]] = self._date_button(m)
-                ui.label("similarity / coverage").classes(_CELL).style(f"background:#1c212e;{_MUTED}")
-                ui.label("").classes(_CELL).style("background:#1c212e")
+                ui.label("similarity / coverage").classes(_CELL).style(f"background:var(--tp-sheet);{_MUTED}")
+                ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
                 for m in members:
                     ui.label(f"{float(m['similarity']):.1f}% / {float(m['comparable_weight']):.0f}%").classes(
-                        _CELL).style("background:#1c212e")
+                        _CELL).style("background:var(--tp-sheet)")
                 for feature, weight in pre.MATCH_WEIGHTS.items():
                     ui.label(f"{_FEATURE_LABEL[feature]} ({float(weight):g}%)").classes(_CELL).style(
-                        f"background:#1c212e;{_MUTED}")
+                        f"background:var(--tp-sheet);{_MUTED}")
                     value = target_values.get(feature)
-                    ui.label("—" if value is None else str(value)).classes(_CELL).style("background:#1c212e")
+                    ui.label("—" if value is None else str(value)).classes(_CELL).style("background:var(--tp-sheet)")
                     for m in members:
                         c = m["components"][feature]
                         shown = c["analogue"]
@@ -264,16 +264,16 @@ class AnaloguesPanel:
                     member_labels = [self._labels(m["snapshot_id"], m["outcome_revision"]) for m in members]
                     for t in pre.OUTCOME_TARGETS:
                         ui.label(defs.TARGETS[t]["realised_property"]).classes(_CELL).style(
-                            "background:#262b38;color:#ffa726")
+                            "background:var(--tp-tint);color:var(--tp-amber)")
                         own = (target_labels or {}).get(t, {}).get("label")
                         ui.label(defs.display(t, own) if target_labels else
                                  f"observed: window over {self.over[t]} ET" if t in self.over else "—").classes(
-                            _CELL).style("background:#262b38")
+                            _CELL).style("background:var(--tp-tint)")
                         for labels in member_labels:
                             lab = (labels or {}).get(t, {}).get("label")
                             ui.label(defs.display(t, lab) if labels else "no outcome").classes(_CELL).style(
-                                "background:#262b38")
-            ui.label("Green: same value; red: different; yellow: partly similar (Chop Score); grey: not "
+                                "background:var(--tp-tint)")
+            ui.label("Blue: same value; red: different; amber: partly similar (Chop Score); grey: not "
                      "comparable. Click an analogue's date to chart it beside the session.").classes(
                 "text-xs mt-1").style(_MUTED)
         if self.outcomes_shown:
@@ -307,19 +307,19 @@ class AnaloguesPanel:
                      f"{aset['data_mode'].replace('_', ' ')}: outcomes computed after the fact.").classes(
                 "text-xs").style(_MUTED)
             with ui.grid(columns="minmax(0,1.1fr) minmax(0,0.8fr) minmax(0,1.6fr) minmax(0,3fr)").classes(
-                    "gap-px w-full").style("background:#2a2e39"):
+                    "gap-px w-full").style("background:var(--tp-rule)"):
                 for head in ("Target", "Analogues with a label", "Counts", "Smoothed (prior)"):
-                    ui.label(head).classes(_CELL).style(f"background:#1c212e;{_MUTED}")
+                    ui.label(head).classes(_CELL).style(f"background:var(--tp-sheet);{_MUTED}")
                 for t, s in summary["targets"].items():
                     over = self.over.get(t)
                     ui.label(defs.TARGETS[t]["predicted_property"]
                              + (f" — window over at {over} ET: observed, no longer a forecast" if over else "")
-                             ).classes(_WRAP).style("background:#1c212e" + (f";{_MUTED}" if over else ""))
+                             ).classes(_WRAP).style("background:var(--tp-sheet)" + (f";{_MUTED}" if over else ""))
                     ui.label(f"{s['eligible']} of {summary['analogues']} ({s['status'].replace('_', ' ')})").classes(
-                        _CELL).style("background:#1c212e")
+                        _CELL).style("background:var(--tp-sheet)")
                     counts = ", ".join(f"{defs.display(t, c)} {n}" for c, n in s["counts"].items() if n) or "—"
-                    ui.label(counts).classes(_WRAP).style("background:#1c212e")
+                    ui.label(counts).classes(_WRAP).style("background:var(--tp-sheet)")
                     smoothed = ", ".join(
                         f"{defs.display(t, c)} {float(v) * 100:.0f}% ({float(s['prior'][c]) * 100:.0f}%)"
                         for c, v in (s["smoothed"] or {}).items()) or "—"
-                    ui.label(smoothed).classes(_WRAP).style("background:#1c212e")
+                    ui.label(smoothed).classes(_WRAP).style("background:var(--tp-sheet)")

@@ -42,14 +42,14 @@ from nicegui import ui
 
 from contracts import nq_prompt_v2 as defs
 from contracts import nq_rth as rth
+from dashboard import theme
 from database import journal_store as store
 from features import calendar as cal
 from forecaster import rth_analogues as ra
 
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 _CELL = "px-2 py-1 text-xs whitespace-nowrap"
-_GOOD, _BAD, _PARTIAL, _NONE = ("rgba(38,166,154,0.28)", "rgba(239,83,80,0.28)", "rgba(253,216,53,0.22)",
-                                "rgba(120,123,134,0.12)")
+_GOOD, _BAD, _PARTIAL, _NONE = (theme.AGREE, theme.DIFFER, theme.PARTLY, theme.NOT_COMPARABLE)
 _CHOSEN = "bg-primary text-white"
 FOLLOW = "follow"
 ISSUED, RECONSTRUCTED = "issued", "reconstructed"
@@ -104,7 +104,7 @@ class RthAnaloguesPanel:
         self.note = ui.label().classes("text-sm").style(_MUTED)
         with ui.column().classes("w-full gap-2") as self.body:
             self.title = ui.label().classes("text-sm font-medium")
-            self.quality = ui.label().classes("text-sm").style("color:#ffa726")
+            self.quality = ui.label().classes("text-sm").style("color:var(--tp-amber)")
             with ui.row().classes("w-full items-center gap-4"):
                 self.view_toggle = ui.toggle({ISSUED: "As issued", RECONSTRUCTED: "Reconstructed"},
                                              value=RECONSTRUCTED, on_change=self._view_picked).props(
@@ -329,26 +329,26 @@ class RthAnaloguesPanel:
             return
         members = aset["members"]
         with self.table:
-            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:#2a2e39"):
-                ui.label("").classes(_CELL).style("background:#1c212e")
-                ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:#1c212e")
+            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:var(--tp-rule)"):
+                ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
+                ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:var(--tp-sheet)")
                 for m in members:
                     self.date_buttons[m["snapshot_id"]] = self._date_button(m)
-                ui.label("similarity / coverage").classes(_CELL).style(f"background:#1c212e;{_MUTED}")
-                ui.label("").classes(_CELL).style("background:#1c212e")
+                ui.label("similarity / coverage").classes(_CELL).style(f"background:var(--tp-sheet);{_MUTED}")
+                ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
                 for m in members:
                     ui.label(f"{float(m['similarity']):.1f}% / {float(m['comparable_weight']):.0f}%").classes(
-                        _CELL).style("background:#1c212e")
+                        _CELL).style("background:var(--tp-sheet)")
                 for group, names in rth.GROUPS.items():
-                    ui.label(group).classes(_CELL + " font-medium").style("background:#262b38;color:#b2b5be")
+                    ui.label(group).classes(_CELL + " font-medium").style("background:var(--tp-tint);color:var(--tp-ink)")
                     for _ in range(1 + len(members)):
-                        ui.label("").classes(_CELL).style("background:#262b38")
+                        ui.label("").classes(_CELL).style("background:var(--tp-tint)")
                     for f in names:
                         ui.label(f"{rth.LABELS[f]} ({float(rth.WEIGHTS[f]):g}%)").classes(_CELL).style(
-                            f"background:#1c212e;{_MUTED}")
+                            f"background:var(--tp-sheet);{_MUTED}")
                         target = aset["target_features"].get(f)
                         ui.label("(the path)" if f == "path" and target is not None else _value(f, target)).classes(
-                            _CELL).style("background:#1c212e")
+                            _CELL).style("background:var(--tp-sheet)")
                         for m in members:
                             c = m["components"][f]
                             if f == "path" and c["comparable"]:
@@ -360,7 +360,7 @@ class RthAnaloguesPanel:
                             ui.label(text).classes(_CELL).style(_cell_style(c))
             ui.label("Prices in each session's own daily ATR (frozen before its open); path: the root mean square "
                      "gap between the two paths minute by minute; relative volume against the same minutes of the 20 "
-                     "sessions before. In brackets the feature's score: green 0.75 or more, red 0.25 or less, yellow "
+                     "sessions before. In brackets the feature's score: blue 0.75 or more, red 0.25 or less, amber "
                      "between, grey not comparable. Click a date to chart that analogue beside the session.").classes(
                 "text-xs mt-1").style(_MUTED)
         self.mark(self.chosen)

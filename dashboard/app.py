@@ -25,15 +25,15 @@ from nicegui import app, ui
 
 from config import Config
 from contracts import nq_prompt_v2 as defs
+from dashboard import theme
 from dashboard.components.pipeline import PipelinePanel
 from dashboard.components.session_bar import SessionBar
+from dashboard.components.session_timeline import SessionTimeline
 from dashboard.views.candles import show_candles_page
 from dashboard.views.evaluation import show_evaluation_page
 from dashboard.views.forecast import run_day
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
-
-_PAGE_BACKGROUND = "#131722"
 
 _connection = None
 
@@ -79,19 +79,24 @@ def chrome(active: str, conn, day: Optional[str] = None, symbol: Optional[str] =
     reads the database again when a job ends. The page follows the bar's
     ``on_change`` and adds its own reload to the panel's ``on_update``.
     """
-    ui.query("body").style(f"background:{_PAGE_BACKGROUND}")
+    theme.apply()
     bar = SessionBar(conn, day, symbol, contract)
-    with ui.header().classes("items-center gap-6 px-4 py-2").style("background:#1c212e"):
-        ui.label("Trading Pipeline").classes("text-lg font-medium")
-        for label, target in (("Session Explorer", "/"), ("Evaluation", "/evaluation")):
-            button = ui.button(label, on_click=lambda t=target: ui.navigate.to(f"{t}?{bar.query()}"))
-            button.props("flat no-caps" if label != active else "flat no-caps color=primary")
+    with ui.header().classes("items-center gap-5 px-6 py-0"):
+        ui.label("Trading Pipeline").classes("tp-x text-base font-bold")
+        with ui.row().classes("tp-nav gap-1 self-stretch items-stretch"):
+            for label, target in (("Session Explorer", "/"), ("Evaluation", "/evaluation")):
+                button = ui.button(label, on_click=lambda t=target: ui.navigate.to(f"{t}?{bar.query()}"))
+                button.props("flat no-caps").classes("tp-active" if label == active else "")
         ui.space()
         panel = PipelinePanel(conn)
         panel.show_preview = lambda: ui.navigate.to(f"/?{bar.query()}&view=preview")
         panel.build()
-        status = ui.label(_db_status(conn)).classes("text-xs").style("color:#787b86")
+        status = ui.label(_db_status(conn)).classes("text-xs").style(theme.MUTED)
     bar.build()
+    if bar.date is not None:                               # the session's timeline, under the bar
+        timeline = SessionTimeline(conn, bar)
+        timeline.build()
+        bar.on_change.append(lambda _what: timeline.refresh())
     panel.on_update.append(lambda: status.set_text(_db_status(conn)))
     panel.on_update.append(bar.reload)
     return panel, bar
@@ -127,7 +132,7 @@ def main() -> None:
     ui.run(
         title="Trading Pipeline",
         favicon="📈",
-        dark=True,
+        dark=False,
         host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
         port=int(os.getenv("DASHBOARD_PORT", "8080")),
         reload=False,

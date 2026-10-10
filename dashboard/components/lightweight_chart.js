@@ -22,6 +22,10 @@ import "lightweight-charts";
 
 const LWC = () => window.LightweightCharts;
 
+// Set from the theme when a chart mounts (dashboard/theme.py CHART); the canvas primitives below read them.
+let CANVAS_FONT = "system-ui, sans-serif";
+let RELEASE_RGB = "78, 92, 102";
+
 /* ------------------------------------------------------------------ */
 /* Band fill primitive                                                 */
 /* ------------------------------------------------------------------ */
@@ -307,7 +311,7 @@ class DensityFanRenderer {
         const rgb = fan.model_rgb || "77, 182, 255";
         const w = Math.max(2, Math.round(v.half * 0.9 * hr));
         ctx.lineWidth = Math.max(1, Math.round(1.5 * hr));
-        ctx.font = `${Math.round(10 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.font = `600 ${Math.round(10 * vr)}px ${CANVAS_FONT}`;
         ctx.textBaseline = "bottom";
         for (const m of v.marks) {
           const x = Math.round(m.x * hr);
@@ -337,15 +341,15 @@ class DensityFanRenderer {
       }
 
       // Scheduled releases ahead: where the fan widens.
-      ctx.font = `${Math.round(11 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.font = `${Math.round(11 * vr)}px ${CANVAS_FONT}`;
       ctx.textBaseline = "bottom";
       for (const r of v.releases) {
         const x = Math.round(r.x * hr);
-        ctx.fillStyle = "rgba(255, 167, 38, 0.55)";
+        ctx.fillStyle = `rgba(${RELEASE_RGB}, 0.55)`;
         for (let y = 0; y < height; y += Math.round(6 * vr)) {
           ctx.fillRect(x, y, Math.max(1, Math.round(hr)), Math.round(3 * vr));
         }
-        ctx.fillStyle = "rgba(255, 167, 38, 0.9)";
+        ctx.fillStyle = `rgba(${RELEASE_RGB}, 0.95)`;
         ctx.fillText(r.label, x + Math.round(4 * hr), height - Math.round(6 * vr));
       }
       ctx.restore();
@@ -508,7 +512,7 @@ class TrendProjectionRenderer {
       ctx.beginPath();
       ctx.arc(p3[0], p3[1], Math.max(2, Math.round(2.5 * hr)), 0, 2 * Math.PI);
       ctx.fill();
-      ctx.font = `${Math.round(10 * vr)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.font = `600 ${Math.round(10 * vr)}px ${CANVAS_FONT}`;
       ctx.textBaseline = "middle";
       // To the right of the curve's end; pulled back only as far as the pane's right edge needs.
       const gap = Math.round(6 * hr);
@@ -604,7 +608,7 @@ class TrendProjection {
 /* Diffing                                                             */
 /* ------------------------------------------------------------------ */
 
-const FIELDS = ["value", "open", "high", "low", "close", "color", "wickColor"];
+const FIELDS = ["value", "open", "high", "low", "close", "color", "borderColor", "wickColor"];
 
 function samePoint(a, b) {
   if (a.time !== b.time) return false;
@@ -737,14 +741,14 @@ export default {
       <div ref="chart" style="width:100%;"></div>
       <div v-if="legend.length || readout" class="nq-chart-legend" style="
         position:absolute;top:8px;left:12px;z-index:3;pointer-events:none;
-        font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;">
-        <div v-if="readout" style="color:#d1d4dc;margin-bottom:2px;white-space:nowrap;">
+        font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;" :style="{fontFamily: t.font}">
+        <div v-if="readout" :style="{color: t.legend_value}" style="margin-bottom:2px;white-space:nowrap;">
           {{ readout }}
         </div>
         <div v-for="item in legend" :key="item.key" style="white-space:nowrap;">
           <span :style="{color:item.color}">&#9632;</span>
-          <span style="color:#b2b5be;"> {{ item.label }}</span>
-          <span v-if="item.value !== null" style="color:#d1d4dc;"> {{ item.value }}</span>
+          <span :style="{color: t.legend_label}"> {{ item.label }}</span>
+          <span v-if="item.value !== null" :style="{color: t.legend_value}"> {{ item.value }}</span>
         </div>
       </div>
     </div>
@@ -762,10 +766,17 @@ export default {
     // Charts with the same group show the same time of day (see "Linked charts").
     sync_group: { type: String, default: null },
     sync_lead: { type: Boolean, default: false },
+    // The palette (dashboard/theme.py CHART); the defaults below are the same day theme.
+    theme: { type: Object, default: null },
   },
 
   data() {
     return {
+      t: Object.assign({
+        background: "#F6F8F7", text: "#4E5C66", ink: "#16212A", grid: "#DDE3E0", border: "#C8D0CC",
+        font: "system-ui, sans-serif", up_body: "#F6F8F7", up_border: "#16212A", down_body: "#16212A",
+        down_border: "#16212A", legend_value: "#16212A", legend_label: "#4E5C66", release_rgb: "78, 92, 102",
+      }, this.theme || {}),
       legend: [],
       readout: "",
     };
@@ -773,6 +784,9 @@ export default {
 
   mounted() {
     const lwc = LWC();
+    const t = this.t;
+    CANVAS_FONT = t.font;
+    RELEASE_RGB = t.release_rgb;
     this.series = {};          // key -> { api, points, style, pane }
     this.bands = {};           // key -> { primitive, host, spec }
     this.spec = { series: {}, bands: {} };
@@ -783,19 +797,20 @@ export default {
     this.chart = lwc.createChart(this.$refs.chart, {
       autoSize: true,
       layout: {
-        background: { color: "#161a25" },
-        textColor: "#b2b5be",
+        background: { color: t.background },
+        textColor: t.text,
+        fontFamily: t.font,
         attributionLogo: false,
-        panes: { separatorColor: "#2a2e39", separatorHoverColor: "#363a45" },
+        panes: { separatorColor: t.border, separatorHoverColor: t.text },
       },
       grid: {
-        vertLines: { color: "#1f2430" },
-        horzLines: { color: "#1f2430" },
+        vertLines: { color: t.grid },
+        horzLines: { color: t.grid },
       },
       crosshair: { mode: lwc.CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "#2a2e39", scaleMargins: { top: 0.08, bottom: 0.08 } },
+      rightPriceScale: { borderColor: t.border, scaleMargins: { top: 0.08, bottom: 0.08 } },
       timeScale: {
-        borderColor: "#2a2e39",
+        borderColor: t.border,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 6,
@@ -808,11 +823,14 @@ export default {
     // throws when it has no value to show.
     if (this.show_candles) {
       this.candles = this.chart.addSeries(lwc.CandlestickSeries, {
-        upColor: "#26a69a",
-        downColor: "#ef5350",
-        wickUpColor: "#26a69a",
-        wickDownColor: "#ef5350",
-        borderVisible: false,
+        // Ink candles: an up bar hollow, a down bar solid.
+        upColor: t.up_body,
+        downColor: t.down_body,
+        borderUpColor: t.up_border,
+        borderDownColor: t.down_border,
+        wickUpColor: t.up_border,
+        wickDownColor: t.down_border,
+        borderVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.25 },
       });
       this.shade = new TimeShade();

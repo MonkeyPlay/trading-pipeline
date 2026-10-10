@@ -22,14 +22,15 @@ from typing import Any, Dict, List, Optional
 
 from nicegui import ui
 
+from dashboard import theme
 from database import journal_store as store
 from forecaster import fan_experiment as fx
 from forecaster import fan_forward as fwd
 from forecaster import fan_live
 
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 _CELL = "px-2 py-1 text-xs"
-_VERDICT = {"better": "#26a69a", "worse": "#ef5350"}
+_VERDICT = {"better": theme.INK, "worse": theme.SIGNAL}
 _CLASS = {"live": "live", "delayed_origin": "delayed origin", "late": "late", "expired": "expired",
           "on_time": "v1 'on time'", "delayed": "v1 delayed", "legacy": "no rules"}
 

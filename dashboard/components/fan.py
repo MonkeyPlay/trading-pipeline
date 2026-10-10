@@ -67,6 +67,7 @@ import numpy as np
 import pandas as pd
 
 from contracts import fan as F
+from dashboard import theme
 from dashboard.components.spec import to_epoch
 from features import calendar as cal
 from features.session_windows import get_trading_day_date
@@ -81,8 +82,8 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path
                          "fan_cache")                  # v2's per-session errors and the day's accuracy (not in git)
 FAN_CANDLES = 120           # future candles drawn, at the chart's timeframe (to the day's end at most)
 CONFIDENCE_FLOOR = 0.25     # the accuracy fade never goes below this: a faint band, not nothing
-FAN_RGB = "209, 212, 220"   # the chart's text ink: a neutral fog - no series' identity, no direction
-FAN_ALPHA = 0.36            # the opacity of the most likely price one minute ahead
+FAN_RGB = theme.rgb(theme.INK)   # the candles' ink: a neutral fog - no series' identity, no direction
+FAN_ALPHA = 0.3             # the opacity of the most likely price one minute ahead
 CAPTION_MINUTES = (15, 30, 60)
 DELAYED_MINUTES = 3         # an origin this much older than the clock is said to be on a delayed feed
 
@@ -90,7 +91,8 @@ Z: List[float] = [NormalDist().inv_cdf(q) for q in F.QUANTILES]
 MEDIAN = F.QUANTILES.index(0.5)
 _P5, _P95 = F.QUANTILES.index(0.05), F.QUANTILES.index(0.95)
 _P25, _P75 = F.QUANTILES.index(0.25), F.QUANTILES.index(0.75)
-MODEL_RGB = "77, 182, 255"  # the learned fan's brackets: a colour of their own, apart from the fog and the candles
+MODEL_RGB = theme.rgb(theme.INK)  # the learned fan's brackets: ink, told apart by shape - solid when recorded,
+                                  # dashed and hollow when recomputed from the bars stored now
 _NY = "America/New_York"
 _TF_MINUTES = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30}
 

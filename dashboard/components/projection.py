@@ -31,13 +31,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from dashboard import theme
+
 HORIZON_MINUTES = 15
 SEGMENTS = 5
 WEIGHTS = np.arange(1, SEGMENTS + 1, dtype=float)       # oldest to newest
 LABEL = "Projection trend"
 NOTE = ("Projection trend: TEMA 14 and EMA 14 averaged and extrapolated 15 minutes - a visual "
         "extrapolation, not a forecast and separate from the fan.")
-RGB = "0, 229, 255"                                      # cyan: apart from the fan, the brackets and the MA lines
+RGB = theme.rgb(theme.PROJECTION)                       # teal: apart from the fan, the brackets and the MA lines
 
 
 def _split(P: np.ndarray, u: float) -> np.ndarray:

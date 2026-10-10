@@ -52,6 +52,7 @@ from contracts import nq_prompt_v2 as defs
 from dashboard.components.fan import current_session
 from dashboard.components.lightweight_chart import LightweightChart
 from dashboard.components.preopen import frozen_preopen_spec
+from dashboard import theme
 from dashboard.jobs import RUNNER
 from database import journal_store as store
 from features import calendar as cal
@@ -62,17 +63,16 @@ from forecaster.outcome_display import p2_record
 from forecaster.preopen_display import p1_record
 from forecaster.rth_analogues import newest_bar_end, windows_over
 
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 _CELL = "px-2 py-1 text-xs"
-_STATUS_COLOR = {"issued": "#26a69a", "unavailable": "#787b86", "late": "#ffa726", "failed": "#ef5350",
-                 "invalid": "#ef5350"}
+_STATUS_COLOR = {"issued": theme.INK, "unavailable": theme.INK2, "late": theme.AMBER, "failed": theme.SIGNAL,
+                 "invalid": theme.SIGNAL}
 _FORECAST_FIELDS = set(range(25, 37)) | set(range(42, 46))
 _ARMS = {v: f"{ml.ARM_NAMES[a]} (arm {a})" for a, v in ml.ARMS.items()}
-# The arms on the grading radar: A, the benchmark, a dashed neutral grey; B, N and M the first three categorical slots
-# of the dark palette (validated all-pairs against #1c212e and #131722: CVD dE 9.4, normal-vision dE 20.9, >= 3:1).
-# P takes slot 4 (yellow): it fails the all-pairs gate against N's orange (validate_palette.py: normal-vision dE 10.6),
-# so it is used only where its label is shown beside it (the arm tiles), never in an overlaid chart.
-_ARM_COLOR = {"A": "#9598a1", "B": "#3987e5", "N": "#d95926", "M": "#199e70", "P": "#c98500"}
+# The arms (dashboard/theme.py): A, the benchmark, a dashed ink grey; B, N and M blue, amber and teal (validated
+# all-pairs against the sheet: CVD dE 11.0, normal-vision dE 19.3). P, plum, is at the CVD floor against B, so it is
+# used only where its label is shown beside it (the arm tiles), never in an overlaid chart.
+_ARM_COLOR = theme.ARM_COLOR
 _SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
           "direction_15m": "15-min direction", "session_type_rth": "Session type", "close_direction_rth": "RTH close",
           "first_level_tested": "First level"}
@@ -138,7 +138,7 @@ def _targets_grid(run: Dict[str, Any], title: str, over: Optional[Dict[str, str]
             note = (f" — its window had ended ({before} ET) when this run was issued: a record, not a forecast"
                     if before else f" — window over at {done} ET: observed, no longer a forecast" if done else "")
             ui.label(r["property"] + note
-                     ).classes(_CELL + " break-words").style(_MUTED + (";color:#ffa726" if done or before else ""))
+                     ).classes(_CELL + " break-words").style(_MUTED + (f";color:{theme.AMBER}" if done or before else ""))
             ui.label(r["class"] if r["status"] == "predicted" else f"{r['class']} - {r['reason']}").classes(
                 _CELL + " break-words")
             ui.label(", ".join(f"{k} {v}" for k, v in r["distribution"].items()) or "-").classes(
@@ -155,7 +155,7 @@ def _record_grid(snapshot, annotation, aset, run) -> None:
     ui.label(provenance).classes("text-xs").style(_MUTED)
     with ui.grid(columns="2.5rem minmax(0,1fr) minmax(0,1fr) minmax(0,2fr)").classes("w-full gap-x-2 gap-y-0"):
         for i, (prop, value, basis) in enumerate(rows, 1):
-            style = "background:rgba(41,98,255,0.10)" if i in _FORECAST_FIELDS else ""
+            style = "background:var(--tp-tint)" if i in _FORECAST_FIELDS else ""
             ui.label(str(i)).classes(_CELL).style(_MUTED + ";" + style)
             ui.label(prop).classes(_CELL).style(_MUTED + ";" + style)
             ui.label(value).classes(_CELL + " break-words").style(style)
@@ -222,7 +222,7 @@ class ForecastPanel:
                  f"experimental until a forward evaluation shows they improve on B. A historical replay is research "
                  f"on reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
                  f"hidden until you show them.").classes("text-sm").style(_MUTED)
-        with ui.card().classes("w-full gap-1").style("background:#1c212e"):
+        with ui.card().classes("w-full gap-1"):
             ui.label("Summary - from the stored numbers only: the forecast in force and why, every arm's "
                      "probabilities and the ML forecasts' differences from A and B, the reference levels, the "
                      "instruments used and what they showed at the cutoff").classes("text-xs").style(_MUTED)
@@ -230,25 +230,24 @@ class ForecastPanel:
         with ui.row().classes("w-full items-center gap-4"):
             self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
             ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
-        with ui.card().classes("w-full gap-3").style("background:#1c212e"):
+        with ui.card().classes("w-full gap-3"):
             with ui.row().classes("w-full items-center gap-3"):
                 self.arm_title = ui.label().classes("text-base font-medium")
                 ui.label("one tile per arm: the one shown below is highlighted - click another to show it").classes(
                     "text-xs").style(_MUTED)
             self.arm_row = ui.element("div").classes("w-full grid gap-3").style(
                 "grid-template-columns:repeat(5,minmax(0,1fr))")
-            ui.separator().style("background:#2a2e39")
+            ui.separator()
             self.grading = ui.column().classes("w-full gap-2")
         with ui.column().classes("w-full gap-3") as self.run_body:
             self.provenance = ui.column().classes("w-full gap-0")
             with ui.row().classes("w-full no-wrap gap-4 items-start"):
                 with ui.column().classes("grow gap-1 min-w-0"):
                     self.chart = LightweightChart(height=520)
-                with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
+                with ui.card().classes("w-[620px] shrink-0"):
                     self.targets = ui.column().classes("w-full gap-0")
             self.outcome = ui.column().classes("w-full gap-0")
-            with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full").style(
-                    "background:#1c212e"):
+            with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full"):
                 self.record = ui.column().classes("w-full gap-0")
 
     def _run_label(self, r: Dict[str, Any]) -> str:
@@ -321,8 +320,9 @@ class ForecastPanel:
                 tile = ui.element("div").classes("rounded px-3 py-2 flex flex-col gap-1"
                                                  + (" cursor-pointer" if mine else ""))
                 tile.style(f"border-top:3px {'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]};"
-                           f"background:{'rgba(41,98,255,0.16)' if is_shown else '#131722'};"
-                           f"outline:{'1px solid #2962ff' if is_shown else 'none'};{'' if mine else 'opacity:0.55'}")
+                           f"background:{'var(--tp-sheet)' if is_shown else 'var(--tp-paper)'};"
+                           f"outline:{'1.5px solid var(--tp-ink)' if is_shown else 'none'};"
+                           f"{'' if mine else 'opacity:0.55'}")
                 if mine:
                     tile.on("click", lambda a=arm: self.pick_arm(a))
                 with tile:
@@ -444,12 +444,11 @@ class ForecastPanel:
         with ui.row().classes("w-full no-wrap gap-4 items-start"):
             with ui.column().classes("grow gap-1 min-w-0"):
                 self.preview_chart = LightweightChart(height=520)
-            with ui.card().classes("w-[620px] shrink-0").style("background:#1c212e"):
+            with ui.card().classes("w-[620px] shrink-0"):
                 self.preview_arm = ui.toggle({v: _ARMS[v] for v in fc.RULE_ALGORITHMS}, value=fc.BASELINE_VERSION,
                                              on_change=lambda e: self._render_preview_run()).props("dense no-caps")
                 self.preview_targets = ui.column().classes("w-full gap-0")
-        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=False).classes("w-full").style(
-                "background:#1c212e"):
+        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=False).classes("w-full"):
             self.preview_record = ui.column().classes("w-full gap-0")
         self.preview = pv.load()
         self._render_preview()
@@ -470,7 +469,7 @@ class ForecastPanel:
                 ("Possible " if possible else "Not possible now: ") + self.panel.preview_why)
         if note != self.preview_note.text:
             self.preview_note.set_text(note)
-            self.preview_note.style(f"color:{'#26a69a' if possible else '#787b86'}")
+            self.preview_note.style(f"color:{theme.INK if possible else theme.INK2}")
 
     def _preview_run(self) -> Optional[Dict[str, Any]]:
         return next((r for r in (self.preview or {}).get("runs") or []
@@ -492,7 +491,7 @@ class ForecastPanel:
         scope = ("the whole pre-open" if r["complete"] else f"the pre-open so far, to the {r['cutoff_et']} cutoff")
         self.preview_status.set_content(
             f"<b>{r['session_date']}</b> as of {r['as_of_et']} - <span style='color:"
-            f"{'#26a69a' if r['complete'] else '#ffa726'}'>{scope}</span> <span style='{_MUTED}'>· data through "
+            f"{theme.INK if r['complete'] else theme.AMBER}'>{scope}</span> <span style='{_MUTED}'>· data through "
             f"{_et(r['data_through'])} · made {_et(r['made_at'])} ({age} min ago) · not stored</span>")
         payload = r["snapshot"]["payload"]
         missing = sorted(k for k, v in (payload.get("references") or {}).items()
@@ -582,7 +581,7 @@ class ForecastPanel:
                                 ui.label(f"{name} {100 * c['p']:.0f}%").classes("break-words")
                                 if c["agrees"] is False:
                                     ui.label(f"≠{BENCHMARK}").classes("text-[10px] px-1 rounded").style(
-                                        "border:1px solid #787b86;color:#d1d4dc").tooltip(
+                                        "border:1px solid var(--tp-ink2);color:var(--tp-ink)").tooltip(
                                         f"a different class from arm {BENCHMARK}'s")
         why = ("Show realised outcome to grade the arms against what happened." if not self.outcome_shown else
                "The realised outcome is recorded once the session is final, two hours after its close; then the "
@@ -628,22 +627,21 @@ class ForecastPanel:
                 "value": [round(100 * (v or 0), 1) for v in vals],
                 "symbol": "circle", "symbolSize": 8,
                 "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
-                "itemStyle": {"color": color, "borderColor": "#1c212e", "borderWidth": 2},
+                "itemStyle": {"color": color, "borderColor": theme.SHEET, "borderWidth": 2},
                 "areaStyle": {"color": color, "opacity": 0 if bench else 0.08}})
         series.append({"name": "chance", "value": [round(100 * c, 1) for c in chance],
-                       "symbol": "none", "lineStyle": {"width": 1, "type": "dotted", "color": "#5d606b"},
-                       "itemStyle": {"color": "#5d606b"}, "areaStyle": {"opacity": 0}})
+                       "symbol": "none", "lineStyle": {"width": 1, "type": "dotted", "color": theme.INK2},
+                       "itemStyle": {"color": theme.INK2}, "areaStyle": {"opacity": 0}})
         return {
             "backgroundColor": "transparent", "animation": False,
             "legend": {"top": 0, "left": "center", "itemWidth": 14, "itemHeight": 8, "itemGap": 12,
-                       "textStyle": {"color": "#b2b5be", "fontSize": 11}},
-            "tooltip": {"trigger": "item", "backgroundColor": "#1c212e", "borderColor": "#2a2e39",
-                        "textStyle": {"color": "#d1d4dc", "fontSize": 11}},
+                       "textStyle": {"color": theme.INK, "fontSize": 11}},
+            "tooltip": {"trigger": "item", **theme.ECHART_TOOLTIP},
             "radar": {"indicator": [{"name": _SHORT[t], "max": 100} for t in targets], "radius": "66%",
                       "center": ["50%", "56%"], "splitNumber": 4, "shape": "polygon",
-                      "axisName": {"color": "#b2b5be", "fontSize": 11},
-                      "splitLine": {"lineStyle": {"color": "#2a2e39", "width": 1}},
-                      "splitArea": {"show": False}, "axisLine": {"lineStyle": {"color": "#2a2e39"}}},
+                      "axisName": {"color": theme.INK2, "fontSize": 11},
+                      "splitLine": {"lineStyle": {"color": theme.RULE, "width": 1}},
+                      "splitArea": {"show": False}, "axisLine": {"lineStyle": {"color": theme.RULE}}},
             "series": [{"type": "radar", "data": series, "emphasis": {"lineStyle": {"width": 3}}}]}
 
     def _scorecard(self, g: Dict[str, Any]) -> None:
@@ -680,7 +678,7 @@ class ForecastPanel:
                         continue
                     with ui.row().classes(_CELL + " items-center gap-1 no-wrap"):
                         ui.icon("check_circle" if c["hit"] else "cancel", size="14px").style(
-                            f"color:{'#0ca30c' if c['hit'] else '#787b86'}")
+                            f"color:{theme.INK if c['hit'] else theme.INK2}")
                         ui.label(f"{100 * c['p']:.0f}%" + (" hit" if c["hit"] else ""))
         if g["ungraded"]:
             ui.label("not graded: " + ", ".join(f"{_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(

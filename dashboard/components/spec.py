@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from dashboard import theme
 from features.calculations import (
     TEMA_LENGTH,
     TEMA_SMOOTHING,
@@ -24,36 +25,37 @@ from features.calculations import (
     TRIGGER_SMOOTHING,
 )
 
-_UP = "rgba(38, 166, 154, 0.5)"
-_DOWN = "rgba(239, 83, 80, 0.5)"
+# Volume in ink, lighter under a hollow (up) candle than under a solid (down) one.
+_UP = theme.rgba(theme.INK, 0.2)
+_DOWN = theme.rgba(theme.INK, 0.38)
 
 # Bars outside the regular session (the 15 minutes either side of it) are drawn
 # muted: grey candles and volume on a grey background band.
-MUTED_CANDLE = "#6b6f7a"
-MUTED_VOLUME = "rgba(120, 123, 134, 0.35)"
-MUTED_BACKGROUND = "rgba(120, 123, 134, 0.14)"
+MUTED_CANDLE = theme.MUTED_CANDLE
+MUTED_VOLUME = theme.rgba(theme.INK2, 0.22)
+MUTED_BACKGROUND = theme.rgba(theme.INK2, 0.08)
 
 # Opening range: a grey box over its own minutes, then its high-low channel.
-OR_BOX = "rgba(150, 153, 164, 0.30)"
-OR_FILL = "rgba(38, 166, 154, 0.13)"
-OR_LINE = "#26a69a"
+OR_BOX = theme.rgba(theme.INK, 0.07)
+OR_FILL = theme.rgba(theme.INK, 0.04)
+OR_LINE = theme.INK2
 
 # Pre-open reference levels (features.calculations.pre_open_levels), in draw order.
 _REFERENCE_LEVELS = (
-    ("previous_rth_close", "Prev RTH Close", "#29b6f6", 2, 2),
-    ("overnight_high", "Overnight High", "#ffa726", 1, 1),
-    ("overnight_low", "Overnight Low", "#ffa726", 1, 1),
+    ("previous_rth_close", "Prev RTH Close", theme.PREV_RTH, 2, 2),
+    ("overnight_high", "Overnight High", theme.OVERNIGHT, 1, 1),
+    ("overnight_low", "Overnight Low", theme.OVERNIGHT, 1, 1),
 )
 
 # The session VWAP line (and the Review page's cutoff VWAP level).
-VWAP_COLOR = "#fdd835"
+VWAP_COLOR = theme.VWAP
 
 # Moving averages (features.calculations.calculate_moving_averages): (column, label,
 # colour, width), with the TradingView script's plot colours and widths.
 _MOVING_AVERAGES = (
-    ("tema", f"TEMA {TEMA_LENGTH} (SMA {TEMA_SMOOTHING})", "#9c27b0", 2),
-    ("ema_trend", f"EMA {TREND_EMA_LENGTH}", "#2962ff", 2),
-    ("ema_trigger", f"EMA {TRIGGER_EMA_LENGTH} (SMA {TRIGGER_SMOOTHING})", "#ff9800", 1),
+    ("tema", f"TEMA {TEMA_LENGTH} (SMA {TEMA_SMOOTHING})", theme.TEMA, 2),
+    ("ema_trend", f"EMA {TREND_EMA_LENGTH}", theme.EMA_TREND, 2),
+    ("ema_trigger", f"EMA {TRIGGER_EMA_LENGTH} (SMA {TRIGGER_SMOOTHING})", theme.EMA_TRIGGER, 1),
 )
 
 
@@ -130,7 +132,7 @@ def candle_points(df: pd.DataFrame) -> List[Dict[str, Any]]:
     ):
         point = {"time": int(time), "open": float(o), "high": float(h), "low": float(low), "close": float(c)}
         if muted:
-            point["color"] = point["wickColor"] = MUTED_CANDLE
+            point["color"] = point["borderColor"] = point["wickColor"] = MUTED_CANDLE
         out.append(point)
     return out
 

@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from collector.coverage import day_expectation, expected_trading_days
 from config import Config
+from dashboard import theme
 from database.queries import derive_day_status
 from features.session_windows import NY_TZ
 
@@ -41,14 +42,15 @@ MAX_WEEKS = 78            # about eighteen months; older weeks are not drawn
 RECENT_DAYS = 10          # the day dots: the last two weeks of trading days
 DAY_PITCH, DAY_GAP = 13, 18   # px per day dot, px between the weeks and the dots
 
-# (category, label, colour) - the category is the value the heatmap colours by.
+# (category, label, colour) - the category is the value the heatmap colours by: how much is stored is one grey
+# ramp, darkest when complete; a week with nothing stored is signal red, the one alarm on the map.
 BANDS = (
-    (5, "complete", "#26a69a"),
-    (4, "≥ 90 %", "#9ccc65"),
-    (3, "≥ 50 %", "#fdd835"),
-    (2, "> 0 %", "#ff9800"),
-    (1, "none", "#ef5350"),
-    (0, "no sessions yet", "#3a3f4b"),
+    (5, "complete", theme.INK2),
+    (4, "≥ 90 %", "#8C979E"),
+    (3, "≥ 50 %", "#B9C2BF"),
+    (2, "> 0 %", "#D9DFDC"),
+    (1, "none", theme.SIGNAL),
+    (0, "no sessions yet", "#EEF1EF"),
 )
 
 
@@ -205,12 +207,12 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
 
     def x_axis(labels, grid, interval):
         return {"type": "category", "data": labels, "gridIndex": grid,
-                "axisLabel": {"color": "#787b86", "fontSize": 9, ":interval": interval},
+                "axisLabel": {"color": theme.INK2, "fontSize": 9, ":interval": interval},
                 "axisLine": {"show": False}, "axisTick": {"show": False}, "splitArea": {"show": False}}
 
     def y_axis(grid, labelled):
         return {"type": "category", "data": list(symbols), "inverse": True, "gridIndex": grid,
-                "axisLabel": {"show": labelled, "color": "#b2b5be", "fontSize": 9},
+                "axisLabel": {"show": labelled, "color": theme.INK, "fontSize": 9},
                 "axisLine": {"show": False}, "axisTick": {"show": False}}
 
     grids = [{"left": 40, "right": 8 + (strip + DAY_GAP if days else 0), "top": 6, "bottom": 40}]
@@ -218,8 +220,8 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
     y_axes = [y_axis(0, True)]
     series: List[Dict[str, Any]] = [{
         "type": "heatmap", "data": week_points,
-        "itemStyle": {"borderColor": "#161a25", "borderWidth": 1},
-        "emphasis": {"itemStyle": {"borderColor": "#d1d4dc", "borderWidth": 1}},
+        "itemStyle": {"borderColor": theme.SHEET, "borderWidth": 1},
+        "emphasis": {"itemStyle": {"borderColor": theme.ARM_COLOR["B"], "borderWidth": 1}},
     }]
     if days:
         grids.append({"right": 8, "width": strip, "top": 6, "bottom": 40})
@@ -227,20 +229,18 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
         y_axes.append(y_axis(1, False))
         series.append({"type": "scatter", "data": day_points, "xAxisIndex": 1, "yAxisIndex": 1,
                        "symbol": "circle", "symbolSize": 7,
-                       "emphasis": {"itemStyle": {"borderColor": "#d1d4dc", "borderWidth": 1}}})
+                       "emphasis": {"itemStyle": {"borderColor": theme.ARM_COLOR["B"], "borderWidth": 1}}})
     return {
         "backgroundColor": "transparent",
         "animation": False,
         "grid": grids,
-        "tooltip": {"confine": True, "backgroundColor": "#1c212e", "borderColor": "#363a45",
-                    "textStyle": {"color": "#d1d4dc", "fontSize": 11},
-                    ":formatter": "p => p.data.tip"},
+        "tooltip": {"confine": True, **theme.ECHART_TOOLTIP, ":formatter": "p => p.data.tip"},
         "xAxis": x_axes,
         "yAxis": y_axes,
         "visualMap": {
             "type": "piecewise", "dimension": 2, "seriesIndex": 0, "orient": "horizontal", "left": "center",
             "bottom": 0, "itemWidth": 9, "itemHeight": 9, "itemGap": 8, "textGap": 3,
-            "textStyle": {"color": "#787b86", "fontSize": 9},
+            "textStyle": {"color": theme.INK2, "fontSize": 9},
             "pieces": [{"value": c, "label": lbl, "color": col} for c, lbl, col in BANDS],
         },
         "series": series,
@@ -254,12 +254,11 @@ def coverage_map(conn, symbols: Optional[List[str]] = None) -> None:
     symbols = symbols or Config.collect_symbols()
     data = coverage_weeks(conn, symbols)
     with ui.column().classes("gap-0"):
-        newest = f" · newest day {data['newest']:%a %Y-%m-%d}" if data["newest"] else ""
+        newest = f", newest {data['newest']:%a %d %b}" if data["newest"] else ""
         recent = f", then the last {len(data['days'])} days" if data["days"] else ""
-        ui.label(f"Database coverage by week{recent}{newest}").classes("text-xs uppercase tracking-wide").style(
-            "color:#787b86")
+        ui.label(f"Stored by week{recent}{newest}").classes("text-xs").style(theme.MUTED)
         if not data["weeks"]:
-            ui.label("No bars stored yet.").classes("text-xs").style("color:#787b86")
+            ui.label("No bars stored yet.").classes("text-xs").style(theme.MUTED)
             return
         height = 46 + 12 * len(symbols)
         ui.echart(chart_options(data)).style(f"width:{480 + DAY_PITCH * len(data['days']) + DAY_GAP}px;"

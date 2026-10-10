@@ -31,11 +31,12 @@ from urllib.parse import urlencode
 from nicegui import ui
 
 from contracts import nq_prompt_v2 as defs
+from dashboard import theme
 from dashboard.components import fan_experiment_panel
 from dashboard.components.session_bar import SessionBar
 from database import journal_store as store
 
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 _CELL = "px-2 py-1 text-xs"
 
 
@@ -106,7 +107,7 @@ class EvaluationPage:
         self.manifest.clear()
         with self.manifest:
             ui.label(f"{name}: {m['purpose']} - {m['purpose_note']}").classes("text-sm").style(
-                "color:#ffa726" if m["purpose"] == "development" else "")
+                "color:var(--tp-amber)" if m["purpose"] == "development" else "")
             ui.label(f"sessions {m['sessions']['from']} to {m['sessions']['to']}, {m['profile']}, "
                      f"{m['mode'].replace('_', ' ')}; arms " + ", ".join(f"{k} {v['algorithm']}"
                                                                         for k, v in m["arms"].items())

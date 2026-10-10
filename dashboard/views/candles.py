@@ -59,6 +59,7 @@ from nicegui import background_tasks, run, ui
 from config import Config
 from contracts import nq_prompt_v2 as defs
 from contracts import nq_rth as rth
+from dashboard import theme
 from dashboard.components import fan
 from dashboard.components import projection as proj
 from dashboard.components.lightweight_chart import LightweightChart
@@ -85,7 +86,7 @@ from forecaster.fan_benchmark import end_slot, slot_at, slot_instant
 # The two charts - the session and an analogue - show the same time of day.
 _SYNC_GROUP = "session-explorer"
 _EMPTY_SPEC = {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []}
-_MUTED = "color:#787b86"
+_MUTED = theme.MUTED
 
 # Minutes shown either side of the regular session, drawn muted.
 _EXTRA = pd.Timedelta(minutes=15)
@@ -897,7 +898,7 @@ class SessionExplorer:
                     "grow").props("dense")
                 ui.button(icon="chevron_right", on_click=lambda: self.step(1)).props(
                     'flat dense round aria-label="Next candle"').tooltip("Next candle")
-                self.as_of_label = ui.label().classes("text-sm font-mono whitespace-nowrap shrink-0")
+                self.as_of_label = ui.label().classes("tp-x text-sm font-bold whitespace-nowrap shrink-0")
                 self.live_button = ui.button("Live", icon="skip_next", on_click=self.go_live).props(
                     "flat dense no-caps").classes("shrink-0").tooltip("Back to the newest candle")
                 ui.switch("Show what followed", value=False, on_change=self.on_reveal).props("dense").classes(

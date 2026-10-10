@@ -14,10 +14,11 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from dashboard import theme
 from dashboard.components.spec import build_chart_spec
 from features.calculations import calculate_moving_averages, enrich_candle_timezones
 
-_PREV_RTH = "#29b6f6"
+_PREV_RTH = theme.PREV_RTH
 # The price-location levels as the pages name them, in P1's order.
 LEVEL_LABELS = {"prev_rth_high": "Prev RTH High", "prev_rth_low": "Prev RTH Low", "prev_rth_close": "Prev RTH Close",
                 "on_high": "ON High", "on_low": "ON Low"}
@@ -58,8 +59,8 @@ def frozen_preopen_spec(snapshot: Dict[str, Any]) -> Dict[str, Any]:
              {"key": "prev_rth_low", "label": "Prev RTH Low", "value": _ref(p, "prev_rth_low"), "color": _PREV_RTH,
               "dash": 2},
              {"key": "premarket_high", "label": "Premarket High", "value": frozen("premarket_high"),
-              "color": "#ab47bc", "dash": 1},
-             {"key": "premarket_low", "label": "Premarket Low", "value": frozen("premarket_low"), "color": "#ab47bc",
+              "color": theme.PREMARKET, "dash": 1},
+             {"key": "premarket_low", "label": "Premarket Low", "value": frozen("premarket_low"), "color": theme.PREMARKET,
               "dash": 1},
-             {"key": "vwap_frozen", "label": "VWAP (frozen)", "value": frozen("vwap"), "color": "#fdd835", "dash": 1}]
+             {"key": "vwap_frozen", "label": "VWAP (frozen)", "value": frozen("vwap"), "color": theme.VWAP, "dash": 1}]
     return build_chart_spec(bars, levels=levels, extra_levels=extra, show_vwap=False, fit=True)

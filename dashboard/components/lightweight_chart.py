@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional
 
 from nicegui.element import Element
 
+from dashboard import theme
+
 
 class LightweightChart(
     Element,
@@ -49,6 +51,7 @@ class LightweightChart(
         self._props["initial_spec"] = spec
         self._props["sync_group"] = sync_group
         self._props["sync_lead"] = sync_lead
+        self._props["theme"] = theme.CHART
         self.classes("w-full")
 
     def apply(self, spec: Dict[str, Any]) -> None:
