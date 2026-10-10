@@ -128,6 +128,33 @@ body {{ background:var(--tp-paper); color:var(--tp-ink); font-family:{FONT}; fon
 .tp-nav .q-btn.tp-active {{ border-bottom-color:var(--tp-ink); color:var(--tp-ink); }}
 :focus-visible {{ outline:2px solid {ARM_COLOR["B"]}; outline-offset:2px; }}
 
+/* Buttons: 6 px corners, no Material shadow; an outline in the rule colour. */
+.q-btn {{ border-radius:6px; }}
+.q-btn--standard:before {{ box-shadow:none; }}
+.q-btn--outline:before {{ border-color:var(--tp-rule); }}
+/* Segmented controls (ui.toggle): a tinted track, the chosen option a white pill. */
+.q-btn-toggle {{ background:var(--tp-tint); border-radius:8px; padding:2px; gap:2px; box-shadow:none; }}
+.q-btn-toggle .q-btn {{ border-radius:6px !important; color:var(--tp-ink2); padding:0 12px; }}
+.q-btn-toggle .q-btn.bg-primary {{ background:var(--tp-sheet) !important; color:var(--tp-ink) !important;
+  box-shadow:0 0 0 1px var(--tp-rule); }}
+/* Fields: outlined boxes on the sheet. */
+.q-field--outlined .q-field__control {{ border-radius:6px; background:var(--tp-sheet); }}
+.q-field--outlined .q-field__control:before {{ border-color:var(--tp-rule); }}
+/* Section panels (ui.expansion): the title in the expanded width, no icon. */
+.q-expansion-item__container > .q-item {{ padding:14px 18px; min-height:56px; }}
+.q-expansion-item__container > .q-item .q-item__label {{ font-size:19px; }}
+.q-expansion-item__content {{ padding:0 18px 16px; }}
+
+/* The session day as the page's heading (components/session_bar.py). */
+.tp-day {{ font-stretch:125%; font-size:30px; font-weight:720; letter-spacing:-0.02em; line-height:1.1;
+  cursor:pointer; white-space:nowrap; }}
+/* Keys, arm marks and probability bars (views/candles.py, views/forecast.py). */
+.tp-key {{ display:inline-flex; align-items:center; gap:6px; white-space:nowrap; font-size:12.5px; }}
+.tp-mark {{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px;
+  border-radius:12px; border:2px solid; font-weight:700; font-size:12px; box-sizing:border-box; flex:none; }}
+.tp-pbar {{ display:block; height:4px; border-radius:2px; background:var(--tp-tint); margin-top:4px; }}
+.tp-pbar > span {{ display:block; height:4px; border-radius:2px; }}
+
 /* The session timeline (components/session_timeline.py). */
 .tp-tl {{ position:relative; min-width:980px; height:150px; font-size:12.5px; line-height:1.3; }}
 .tp-tl > * {{ position:absolute; }}

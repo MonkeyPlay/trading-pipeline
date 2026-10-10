@@ -75,8 +75,8 @@ class EvaluationPage:
         self.cases: List[dict] = []
 
     def build(self) -> None:
-        with ui.column().classes("w-full px-4 pb-4 gap-3"):
-            ui.label("Evaluation").classes("text-2xl font-medium")
+        with ui.column().classes("w-full px-6 pt-4 pb-6 gap-3"):
+            ui.label("Evaluation").classes("tp-x text-3xl font-bold").style("letter-spacing:-0.02em")
             with ui.expansion("Intermarket fan experiment", value=True).classes("w-full"):
                 try:
                     fan_experiment_panel.render(self.conn)

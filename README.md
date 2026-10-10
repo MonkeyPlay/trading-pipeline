@@ -155,17 +155,18 @@ progress grows), analogues, the day's forecast runs and the preview; Evaluation'
 day; the header's bar count.
 
 **Session bar** (top of every page, [dashboard/components/session_bar.py](dashboard/components/session_bar.py)):
-three selectors, in order - the **session day** (a calendar, weeks from Monday, on which only
-the days with stored bars can be picked; the arrows either side step to the previous and the
-next of them), the **instrument** with bars that day (ES, NQ, ...), and the **contract**
-holding it (the one the collector made active that day first) - and the coverage map. The day
-is the one every page shows. A page opens on NQ's newest session, or on
+three selectors, in order - the **session day**, the page's heading ("Friday 9 October 2026",
+opening a calendar, weeks from Monday, on which only the days with stored bars can be picked;
+the arrows either side step to the previous and the next of them), the **instrument** with bars
+that day (ES, NQ, ...), and the **contract** holding it (the one the collector made active that
+day first) - and the coverage map. Under it the session timeline, then the page's own controls
+(on the Session Explorer the timeframe, Fit and Auto). The day is the one every page shows. A page opens on NQ's newest session, or on
 `?day=YYYY-MM-DD&symbol=NQ&contract=<id>`; the header's navigation carries the selection to
 the other page, and the address bar follows it, so a reload keeps it.
-**Database coverage by week** is a small map of what is stored: one cell per instrument and
-week, green when every scheduled trading day is complete, then light green (≥ 90 %), yellow
-(≥ 50 %), orange (> 0 %) and red (nothing), from the collector's day ledger; hover a cell for
-its day counts, and the title gives the newest stored day. Right of the weeks, the **last 10
+**Database coverage by week** is a compact map of what is stored over the last 16 weeks: one
+cell per instrument and week, darkest grey when every scheduled trading day is complete, then
+lighter greys (≥ 90 %, ≥ 50 %, > 0 %) and red (nothing), from the collector's day ledger; hover
+a cell for what it means and its day counts, and the title gives the newest stored day. Right of the weeks, the **last 10
 trading days** are one dot each, coloured by the same rule for that day alone; hover a dot for
 its status and bar count ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
 

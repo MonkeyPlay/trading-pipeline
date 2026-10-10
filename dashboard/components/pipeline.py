@@ -27,6 +27,7 @@ from forecaster.rth_analogues import due_window as rth_due
 _MUTED = theme.MUTED
 _PANEL = theme.PANEL
 _LOG_LINES = 1000         # lines the page's log holds; logs/pipeline_run.log has every line
+_JOB = "w-full items-start no-wrap gap-4 py-4 border-t"   # one job's row in the panel
 _OUTCOME_COLOR = {"running": theme.SIGNAL, "finished": theme.INK}
 
 COLLECTOR, FORECASTER, PREVIEW, LIVE = ("Collector", "Forecaster", "Forecast now", "Live pre-open forecast")
@@ -72,53 +73,68 @@ class PipelinePanel:
             self.spinner = ui.spinner(size="sm")
             self.button = ui.button("Update data", icon="sync", on_click=lambda: self.dialog.open()).props(
                 "outline no-caps").tooltip("Run the collector or the forecaster, and see their output")
-        with ui.dialog() as self.dialog, ui.card().classes("w-[64rem] max-w-full gap-3").style(f"background:{_PANEL}"):
-            with ui.row().classes("w-full items-center"):
-                ui.label("Update data").classes("text-lg font-medium")
-                ui.space()
+        with ui.dialog().props("position=right full-height") as self.dialog, ui.card().classes(
+                "w-[36rem] max-w-full h-full gap-4 p-6").style(f"background:{_PANEL};border-radius:10px 0 0 10px"):
+            with ui.row().classes("w-full items-start no-wrap gap-4"):
+                with ui.column().classes("grow gap-1"):
+                    ui.label("Update data").classes("tp-x text-xl font-bold")
+                    ui.label("One job runs at a time. It belongs to the dashboard, not this tab: closing the tab does "
+                             "not stop it.").classes("text-xs").style(_MUTED)
                 ui.button(icon="close", on_click=self.dialog.close).props('flat dense round aria-label="Close"')
-            with ui.grid(columns="12rem minmax(0,1fr)").classes("w-full items-center gap-x-4 gap-y-3"):
-                self.collect_button = ui.button("Run collector", icon="download", on_click=self.collect).props(
-                    "no-caps")
-                with ui.row().classes("w-full items-center gap-4 no-wrap"):
-                    ui.label(f"Fetches the missing 1-minute bars of every instrument from IB "
-                             f"({Config.IB_HOST}:{Config.IB_PORT}) over the days back, and again the recent days IB "
-                             f"may still revise - then runs the forecaster.").classes("text-sm grow").style(_MUTED)
-                    self.days = ui.number("Days back", value=5, min=1, max=460, step=1, format="%d").props(
-                        "dense").classes("w-20 shrink-0")
-                self.forecast_button = ui.button("Run forecaster", icon="insights", on_click=self.forecast).props(
-                    "no-caps")
-                ui.label("Brings the NQ journal up to date without IB: the event calendar and earnings, then a "
-                         "snapshot, structure annotation and analogue set for every session past its 09:29 ET "
-                         "cutoff - today's once its bars were fetched after the cutoff - and the baseline, prior and "
-                         "ML forecasts (historical replay), each stored once; outcomes once a session is final, two "
-                         "hours after its close."
-                         ).classes("text-sm").style(_MUTED)
-                self.preview_button = ui.button("Forecast now", icon="bolt", on_click=self.forecast_now).props(
-                    "no-caps")
-                with ui.column().classes("gap-0"):
-                    with ui.row().classes("items-baseline gap-2"):
+            # The job shown: how it stands, Stop, and its output.
+            with ui.column().classes("w-full gap-2 p-3 rounded-lg").style("background:var(--tp-tint)"):
+                with ui.row().classes("w-full items-center gap-3 no-wrap"):
+                    self.status = ui.html().classes("text-sm grow")
+                    self.stop_button = ui.button("Stop", icon="stop", on_click=self.stop).props(
+                        "outline no-caps color=negative")
+                self.log = ui.log(max_lines=_LOG_LINES).classes("w-full h-48 text-xs").style(
+                    "background:var(--tp-paper);color:var(--tp-ink);border-radius:6px;"
+                    "font-family:ui-monospace,monospace")
+                ui.label("Every run's output is also appended to logs/pipeline_run.log.").classes("text-xs").style(
+                    _MUTED)
+            # The jobs: what each does on the left, its button on the right.
+            with ui.column().classes("w-full gap-0"):
+                with ui.row().classes(_JOB):
+                    with ui.column().classes("grow gap-1 min-w-0"):
+                        ui.label("Collect bars from IB").classes("text-sm font-semibold")
+                        ui.label(f"Fetches the missing 1-minute bars of every instrument from IB "
+                                 f"({Config.IB_HOST}:{Config.IB_PORT}) over the days back, and again the recent days "
+                                 f"IB may still revise - then runs the forecaster.").classes("text-xs").style(_MUTED)
+                        self.days = ui.number("Days back", value=5, min=1, max=460, step=1, format="%d").props(
+                            "outlined dense stack-label").classes("w-28 mt-1")
+                    self.collect_button = ui.button("Run collector", icon="download", on_click=self.collect).props(
+                        "outline no-caps").classes("shrink-0")
+                with ui.row().classes(_JOB):
+                    with ui.column().classes("grow gap-1 min-w-0"):
+                        ui.label("Bring the journal up to date").classes("text-sm font-semibold")
+                        ui.label("Without IB: the event calendar and earnings, then a snapshot, structure annotation "
+                                 "and analogue set for every session past its 09:29 ET cutoff - today's once its bars "
+                                 "were fetched after the cutoff - and the baseline, prior and ML forecasts (historical "
+                                 "replay), each stored once; outcomes once a session is final, two hours after its "
+                                 "close.").classes("text-xs").style(_MUTED)
+                    self.forecast_button = ui.button("Run forecaster", icon="insights", on_click=self.forecast).props(
+                        "outline no-caps").classes("shrink-0")
+                with ui.row().classes(_JOB):
+                    with ui.column().classes("grow gap-1 min-w-0"):
+                        ui.label("Forecast now").classes("text-sm font-semibold")
                         ui.label("The next session's forecast from the data so far, at any time from its Globex open "
                                  "(18:00 ET the evening before): collects the latest bars, then forecasts in memory - "
                                  "a preview, never stored; the official forecast comes from the 09:31 ET snapshot."
-                                 ).classes("text-sm").style(_MUTED)
+                                 ).classes("text-xs").style(_MUTED)
+                        self.preview_note = ui.label().classes("text-xs")
                         ui.button("Show the preview", on_click=self._show_preview).props(
-                            "flat dense no-caps size=sm")
-                    self.preview_note = ui.label().classes("text-xs")
-                self.live_button = ui.button("Live forecast", icon="schedule", on_click=self.live).props("no-caps")
-                with ui.column().classes("gap-0"):
-                    ui.label("Captures today's NQ session live at the 09:29 ET cutoff and issues its forecasts, due "
-                             "by 09:29:50 ET (the database marks a later one late). Start it before the open, after "
-                             "collecting.").classes("text-sm").style(_MUTED)
-                    self.live_note = ui.label().classes("text-xs")
-            with ui.row().classes("w-full items-center gap-3"):
-                self.status = ui.html().classes("text-sm")
-                ui.space()
-                self.stop_button = ui.button("Stop", icon="stop", on_click=self.stop).props(
-                    "flat no-caps color=negative")
-            self.log = ui.log(max_lines=_LOG_LINES).classes("w-full h-96 text-xs").style(
-                "background:var(--tp-paper);color:var(--tp-ink);border-radius:6px;font-family:ui-monospace,monospace")
-            ui.label("Every run's output is also appended to logs/pipeline_run.log.").classes("text-xs").style(_MUTED)
+                            "flat dense no-caps size=sm").classes("self-start")
+                    self.preview_button = ui.button("Forecast now", icon="bolt", on_click=self.forecast_now).props(
+                        "outline no-caps").classes("shrink-0")
+                with ui.row().classes(_JOB):
+                    with ui.column().classes("grow gap-1 min-w-0"):
+                        ui.label("Live forecast").classes("text-sm font-semibold")
+                        ui.label("Captures today's NQ session live at the 09:29 ET cutoff and issues its forecasts, "
+                                 "due by 09:29:50 ET (the database marks a later one late). Start it before the open, "
+                                 "after collecting.").classes("text-xs").style(_MUTED)
+                        self.live_note = ui.label().classes("text-xs")
+                    self.live_button = ui.button("Live forecast", icon="schedule", on_click=self.live).props(
+                        "outline no-caps").classes("shrink-0")
         self._follow(self._latest())
         self._render()
         ui.timer(1.0, self.poll)

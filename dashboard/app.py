@@ -100,6 +100,7 @@ def chrome(active: str, conn, day: Optional[str] = None, symbol: Optional[str] =
         timeline = SessionTimeline(conn, bar)
         timeline.build()
         bar.on_change.append(lambda _what: timeline.refresh())
+    bar.build_tools()                                      # the page's controls, under the timeline
     panel.on_update.append(lambda: status.set_text(_db_status(conn)))
     panel.on_update.append(bar.reload)
     return panel, bar

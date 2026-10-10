@@ -116,6 +116,18 @@ def issue_timing(run: Dict[str, Any]) -> Tuple[str, Dict[str, str]]:
     return line, windows_over(day, at, [t for _, t in fc.FORECAST_TARGETS])
 
 
+def _arm_name(arm: str) -> str:
+    """'B' -> 'Baseline' (the contract's names, the first letter capitalised)."""
+    name = ml.ARM_NAMES[arm]
+    return name[:1].upper() + name[1:]
+
+
+def _mark(arm: str) -> None:
+    """The arm's mark where it is called: its letter in a ring of its colour, the benchmark's ring dashed."""
+    ui.label(arm).classes("tp-mark").style(
+        f"border-color:{_ARM_COLOR[arm]};border-style:{'dashed' if arm == BENCHMARK else 'solid'}")
+
+
 def _targets_grid(run: Dict[str, Any], title: str, over: Optional[Dict[str, str]] = None) -> None:
     """A run's per-target view where it is called: class, distribution and denominators; ``over`` - target -> the
     ET end of its window - marks the targets of a session in progress already observed; a target whose window had
@@ -201,7 +213,7 @@ class ForecastPanel:
 
     def build(self, view: Optional[str] = None) -> None:
         view = "preview" if view == "preview" else "stored"
-        self.box = ui.expansion("Forecast", icon="insights", value=True).classes("w-full")
+        self.box = ui.expansion("Forecast", value=True).classes("w-full")
         with self.box:
             with ui.tabs(value=view).props("dense no-caps inline-label align=left") as self.tabs:
                 ui.tab("stored", label="Stored runs", icon="inventory_2")
@@ -261,7 +273,7 @@ class ForecastPanel:
         never changes once stored) - after a job, which may have added runs.
         """
         self.day = day
-        self.box.text = f"Forecast of NQ {day}" if day else "Forecast"
+        self.box.text = "NQ forecast" if day else "Forecast"
         self.runs = store.list_forecast_runs(self.conn, day, day, profile=defs.DEFAULT_PROFILE) if day else []
         self.pick_day(self.run_select.value if keep else run_id)
 
@@ -310,32 +322,32 @@ class ForecastPanel:
     def _render_arms(self, day: str, runs: List[Dict[str, Any]]) -> None:
         """One tile per arm: whether it ran for the session (issued, failed or no run) and what it rests on; the
         arm shown below highlighted. A tile with runs shows that arm when clicked."""
-        shown = f"arm {self.arm} · {ml.ARM_NAMES[self.arm]}" if self.arm else "no run"
-        self.arm_title.set_text(f"Arms for {day} - shown: {shown}")
+        shown = f"arm {self.arm}, {ml.ARM_NAMES[self.arm]}" if self.arm else "no run"
+        self.arm_title.set_text(f"Arms for {day}: {shown} shown")
         self.arm_row.clear()
         with self.arm_row:
             for arm in ml.ARMS:
                 mine = [r for r in runs if ml.arm_of(r["algorithm_version"]) == arm]
                 is_shown = arm == self.arm
-                tile = ui.element("div").classes("rounded px-3 py-2 flex flex-col gap-1"
+                tile = ui.element("div").classes("rounded-lg px-3 py-2 flex gap-3 items-start"
                                                  + (" cursor-pointer" if mine else ""))
-                tile.style(f"border-top:3px {'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]};"
-                           f"background:{'var(--tp-sheet)' if is_shown else 'var(--tp-paper)'};"
+                tile.style(f"background:{'var(--tp-sheet)' if is_shown else 'var(--tp-paper)'};"
                            f"outline:{'1.5px solid var(--tp-ink)' if is_shown else 'none'};"
                            f"{'' if mine else 'opacity:0.55'}")
                 if mine:
                     tile.on("click", lambda a=arm: self.pick_arm(a))
                 with tile:
-                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                        ui.label(f"{arm} · {ml.ARM_NAMES[arm]}").classes("text-sm font-medium")
-                        if arm == BENCHMARK:
-                            ui.label("benchmark").classes("text-xs").style(_MUTED)
-                        ui.space()
-                        if is_shown:
-                            ui.badge("shown", color="primary")
-                    status, detail = self._arm_status(arm, mine, self.current.get(arm))
-                    ui.label(status).classes("text-xs")
-                    ui.label(detail).classes("text-xs break-words").style(_MUTED)
+                    _mark(arm)
+                    with ui.column().classes("gap-0 min-w-0"):
+                        with ui.row().classes("items-baseline gap-2 no-wrap"):
+                            ui.label(_arm_name(arm)).classes("text-sm font-semibold")
+                            if arm == BENCHMARK:
+                                ui.label("the benchmark").classes("text-xs").style(_MUTED)
+                            if is_shown:
+                                ui.label("shown").classes("text-xs font-semibold")
+                        status, detail = self._arm_status(arm, mine, self.current.get(arm))
+                        ui.label(status).classes("text-xs")
+                        ui.label(detail).classes("text-xs break-words").style(_MUTED)
 
     @staticmethod
     def _arm_status(arm: str, mine: List[Dict[str, Any]], current: Optional[Dict[str, Any]]):
@@ -561,10 +573,8 @@ class ForecastPanel:
                         a = g["arms"][arm]
                         with ui.column().classes(_CELL + " gap-0"):
                             with ui.row().classes("items-center gap-2 no-wrap"):
-                                ui.element("span").style(
-                                    f"display:inline-block;width:14px;height:0;border-top:2px "
-                                    f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
-                                ui.label(f"{arm} · {ml.ARM_NAMES[arm]}")
+                                _mark(arm)
+                                ui.label(_arm_name(arm)).classes("font-semibold")
                             ui.label("benchmark" if arm == BENCHMARK else
                                      f"same class as {BENCHMARK} on {a['agrees']} of {a['comparable']}").classes(
                                 "text-[10px]").style(_MUTED)
@@ -577,12 +587,17 @@ class ForecastPanel:
                                 continue
                             name = (defs.display(t, c["cls"], "predicted") if c["cls"] else
                                     "tie: " + " / ".join(defs.display(t, x, "predicted") for x in c["top"]))
-                            with ui.row().classes(_CELL + " items-center gap-1 no-wrap"):
-                                ui.label(f"{name} {100 * c['p']:.0f}%").classes("break-words")
-                                if c["agrees"] is False:
-                                    ui.label(f"≠{BENCHMARK}").classes("text-[10px] px-1 rounded").style(
-                                        "border:1px solid var(--tp-ink2);color:var(--tp-ink)").tooltip(
-                                        f"a different class from arm {BENCHMARK}'s")
+                            with ui.column().classes(_CELL + " gap-0"):
+                                with ui.row().classes("items-center gap-1 no-wrap"):
+                                    ui.label(name).classes("break-words")
+                                    if c["agrees"] is False:
+                                        ui.label(f"≠ {BENCHMARK}").classes("text-[10px] px-1 rounded").style(
+                                            "border:1px solid var(--tp-ink2);color:var(--tp-ink)").tooltip(
+                                            f"a different class from arm {BENCHMARK}'s")
+                                with ui.element("span").classes("tp-pbar w-full"):
+                                    ui.element("span").style(f"width:{100 * c['p']:.0f}%;"
+                                                             f"background:{_ARM_COLOR[arm]}")
+                                ui.label(f"{100 * c['p']:.0f} %").classes("text-[11px]").style(_MUTED)
         why = ("Show realised outcome to grade the arms against what happened." if not self.outcome_shown else
                "The realised outcome is recorded once the session is final, two hours after its close; then the "
                "arms are graded here.")
@@ -623,7 +638,7 @@ class ForecastPanel:
                 continue
             color, bench = _ARM_COLOR[arm], arm == BENCHMARK
             series.append({
-                "name": f"{arm} · {ml.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
+                "name": f"{arm}, {ml.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
                 "value": [round(100 * (v or 0), 1) for v in vals],
                 "symbol": "circle", "symbolSize": 8,
                 "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
@@ -654,9 +669,8 @@ class ForecastPanel:
             for arm in arms:
                 a = g["arms"][arm]
                 with ui.row().classes(_CELL + " items-center gap-2 no-wrap"):
-                    ui.element("span").style(f"display:inline-block;width:14px;height:0;border-top:2px "
-                                             f"{'dashed' if arm == BENCHMARK else 'solid'} {_ARM_COLOR[arm]}")
-                    ui.label(f"{arm} · {ml.ARM_NAMES[arm]}")
+                    _mark(arm)
+                    ui.label(_arm_name(arm))
                 ui.label(f"{a['hits']} of {a['graded']}").classes(_CELL)
                 ui.label("-" if a["mean_p"] is None else f"{100 * a['mean_p']:.0f}%").classes(_CELL)
                 vs = a["vs_benchmark"]

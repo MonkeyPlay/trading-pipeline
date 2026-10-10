@@ -10,7 +10,8 @@ On it sit the times the targets resolve - the 09:29 cutoff, the 09:30 open, the 
 10:30, and the close. A time the stored bars have passed is observed (solid); one only the clock has passed is
 waiting for its bars (red outline); the rest are ahead (grey outline).
 
-``refresh`` reads the newest bar again; a timer calls it every 30 seconds while the session is in progress.
+``refresh`` reads the newest bar of the selected contract again; a timer calls it every 30 seconds while the
+session is in progress.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import pytz
 from nicegui import ui
 
 from features import calendar as cal
-from forecaster.rth_analogues import newest_bar_end
+from forecaster.rth_analogues import utc
 
 NY = pytz.timezone("America/New_York")
 
@@ -101,14 +102,28 @@ class SessionTimeline:
         day = date.fromisoformat(self.bar.date)
         close = _close_minute(day)
         now = _minute(day, datetime.now(pytz.utc))
-        try:
-            end = newest_bar_end(self.conn, self.bar.date, self.bar.symbol or "NQ")
-        except Exception:
-            end = None
+        end = self._newest_bar_end()
         through = None if end is None else _minute(day, end)
         live = -360 <= now <= 1020                          # the session is in progress
         self.timer.active = live
         self.html.set_content(self._render(close, now if live else None, through))
+
+    def _newest_bar_end(self) -> Optional[datetime]:
+        """The end of the selected contract's newest stored 1-minute bar of the day (the one still forming
+        included), or None."""
+        contract = self.bar.contract
+        if contract is None:
+            return None
+        try:
+            row = self.conn.execute(
+                "SELECT max(timestamp_utc) FROM bars WHERE contract_id = %s AND trading_day = %s "
+                "AND interval = '1m' AND price_type = 'TRADES';", (int(contract["contract_id"]), self.bar.date),
+            ).fetchone()
+        except Exception:                                 # the timeline never breaks the page
+            return None
+        if row is None or row[0] is None:
+            return None
+        return utc(row[0]) + timedelta(minutes=1)
 
     def _render(self, close: int, now: Optional[float], through: Optional[float]) -> str:
         x = lambda minute: f"{_position(minute, close):.2f}%"   # noqa: E731

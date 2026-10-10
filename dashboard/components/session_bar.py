@@ -2,12 +2,13 @@
 """
 The session selection at the top of every page, and the day every page shows.
 
-Three selectors pick it, in this order: the session day - a calendar on which
-only the days with stored bars can be picked, with buttons stepping to the
-previous and the next of them - then an instrument with bars that day (ES, NQ,
-...), then one of its contracts holding the day (the one active that day
-first). Right of them the page's own controls (``tools``), then the database
-coverage map.
+Three selectors pick it, in this order: the session day - the page's heading,
+opening a calendar on which only the days with stored bars can be picked, with
+buttons stepping to the previous and the next of them - then an instrument with
+bars that day (ES, NQ, ...), then one of its contracts holding the day (the one
+active that day first). Right of them the database coverage map. The page's own
+controls go in ``tools``, a row ``build_tools`` draws where it is called (under
+the session's timeline).
 
 The selection travels with the page: ``?day=&symbol=&contract=`` opens a page
 on it (the header's navigation carries it from page to page), and the address
@@ -23,6 +24,7 @@ the database read again after a job: ``reload``).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
@@ -62,6 +64,14 @@ def day_contracts(conn, symbol: str, day: str) -> List[Any]:
 
 def contract_label(contract) -> str:
     return f"{contract['symbol']} {contract['expiry']}"
+
+
+def long_day(day: Optional[str]) -> str:
+    """'2026-10-09' -> 'Friday 9 October 2026', the session bar's heading."""
+    if not day:
+        return ""
+    d = date.fromisoformat(day)
+    return f"{d:%A} {d.day} {d:%B %Y}"
 
 
 def _int(value) -> Optional[int]:
@@ -226,8 +236,8 @@ class SessionBar:
             self._syncing = False
 
     def _mark_day(self) -> None:
-        """The day field shows the selected day; the step buttons stop at the oldest and the newest day."""
-        self.date_field.value = self.date
+        """The heading shows the selected day; the step buttons stop at the oldest and the newest day."""
+        self.date_field.set_text(long_day(self.date))
         i = self.days.index(self.date) if self.date in self.days else None
         self.older_button.set_enabled(i is not None and i + 1 < len(self.days))
         self.newer_button.set_enabled(i is not None and i > 0)
@@ -250,40 +260,44 @@ class SessionBar:
         symbols = self._choose_symbol()
         contract_options = self._choose_contract(keep=contract if day in days else None)
 
-        with ui.row().classes("w-full items-center gap-4 px-4 pt-4"):
+        with ui.row().classes("w-full items-center gap-x-7 gap-y-3 px-6 pt-5"):
             self._build_day_picker(days)
             self.symbol_select = ui.select(
                 symbols, value=self.symbol, label="Instrument", on_change=self.on_symbol,
-            ).classes("w-32")
+            ).props("outlined dense stack-label").classes("w-28")
             self.contract_select = ui.select(
                 contract_options, value=int(self.contract["contract_id"]) if self.contract is not None else None,
                 label="Contract", on_change=self.on_contract,
-            ).classes("w-44")
-            self.tools = ui.row().classes("items-center gap-4")
+            ).props("outlined dense stack-label").classes("w-44")
             ui.space()
             self.coverage = ui.element("div")
             with self.coverage:
                 coverage_map(self.conn)
 
+    def build_tools(self) -> None:
+        """The row for the page's own controls (``tools``), where it is called - under the session's timeline."""
+        if self.date is not None:
+            self.tools = ui.row().classes("w-full items-center gap-x-4 gap-y-2 px-6 pt-1")
+
     def _build_day_picker(self, days: List[str]) -> None:
         """
-        The session day: a field opening a calendar (weeks from Monday) on
-        which only ``days`` can be picked, between buttons stepping to the
-        previous and the next of them.
+        The session day as the page's heading, opening a calendar (weeks from
+        Monday) on which only ``days`` can be picked, between buttons stepping
+        to the previous and the next of them.
         """
         self.days = days
-        with ui.row().classes("items-center gap-0 no-wrap"):
+        with ui.row().classes("items-center gap-1 no-wrap"):
             self.older_button = ui.button(icon="chevron_left", on_click=lambda: self.step_day(1)).props(
-                'flat dense round aria-label="Previous session"').tooltip("Previous session")
-            with ui.input("Session day (NY trading day)", value=self.date).props("readonly").classes(
-                    "w-48") as self.date_field:
+                'flat round aria-label="Previous session"').tooltip("Previous session")
+            with ui.label().classes("tp-day").props('role="button" tabindex="0"') as self.date_field:
                 with ui.menu() as self.date_menu:
                     self.date_picker = ui.date(self.date, on_change=self.on_date).props("first-day-of-week=1")
                     self._set_day_options()
-                with self.date_field.add_slot("append"):
-                    ui.icon("event").classes("cursor-pointer")
+            self.date_field.tooltip("Pick a session day")
             self.newer_button = ui.button(icon="chevron_right", on_click=lambda: self.step_day(-1)).props(
-                'flat dense round aria-label="Next session"').tooltip("Next session")
+                'flat round aria-label="Next session"').tooltip("Next session")
+            ui.button(icon="event", on_click=self.date_menu.open).props(
+                'flat round aria-label="Pick a session day"').tooltip("Pick a session day")
         self._mark_day()
 
     def _set_day_options(self) -> None:

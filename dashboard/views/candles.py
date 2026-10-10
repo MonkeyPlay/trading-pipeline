@@ -351,20 +351,27 @@ class SessionPane:
 def _status_badge(conn, pane: SessionPane) -> None:
     """The pane's bar count, or how much of its session is stored when incomplete."""
     if not pane.has_bars:
-        ui.badge("no data", color="red")
+        ui.label("No bars stored").classes("text-sm").style(f"color:{theme.SIGNAL}")
         return
     row = get_session_day(conn, pane.contract["contract_id"], pane.date)
     if row is not None and row["status"] != "COMPLETE":
-        ui.badge(
-            f"{row['status']} — {row['bar_count']}/{row['expected_bar_count'] or '?'} bars",
-            color="orange",
-        ).tooltip("Re-run the collector to complete this session.")
+        ui.label(
+            f"{row['status'].capitalize()}: {row['bar_count']} of {row['expected_bar_count'] or '?'} bars",
+        ).classes("text-sm").style(f"color:{theme.AMBER}").tooltip("Re-run the collector to complete this session.")
     else:
-        ui.badge(f"{len(pane.day_df):,} bars", color="green")
+        ui.label(f"{len(pane.day_df):,} bars").classes("text-sm").style(_MUTED)
 
 
 def _caption(day: str, contract) -> str:
-    return f"{pd.Timestamp(day):%a} {day}" + (f" · {contract_label(contract)}" if contract is not None else "")
+    ts = pd.Timestamp(day)
+    return f"{ts:%a} {ts.day} {ts:%b %Y}" + (f", {contract_label(contract)}" if contract is not None else "")
+
+
+def _key(text: str, swatch: str) -> None:
+    """One entry of a chart's key: a swatch drawn by ``swatch`` (inline CSS), then what it means."""
+    with ui.element("span").classes("tp-key").style(_MUTED):
+        ui.element("span").style(f"display:inline-block;{swatch}")
+        ui.label(text)
 
 
 class SessionExplorer:
@@ -482,22 +489,22 @@ class SessionExplorer:
             self._syncing = False
         self.preopen_box.set_visibility(mode == "preopen")
         self.rth_box.set_visibility(mode == "rth")
-        title = f"Analogues of {day}" if symbol == defs.SYMBOL else "Analogues"
+        title = "Analogues"
         if symbol != defs.SYMBOL:
             members = preopen
         elif mode == "rth":
             members = moving
             if self.rth.aset is not None:
                 a = self.rth.aset
-                title += (f" · RTH set: first {a['elapsed_minutes']} min, data through "
+                title += (f", RTH set: first {a['elapsed_minutes']} min, data through "
                           f"{ra.utc(a['cutoff_at']).astimezone(cal.NY_TZ):%H:%M} ET")
             else:
-                title += " · RTH set: none yet"
+                title += ", RTH set: none yet"
         else:
             members = preopen
-            title += " · pre-open set (saved)"
+            title += ", pre-open set (saved)"
             if self.analogues.preview is not None:
-                title += f" · preview as of {self.analogues.preview['as_of_et']}"
+                title += f", preview as of {self.analogues.preview['as_of_et']}"
         self.analogue_box.text = title
         before = self.members.get(self.analogue) if self.analogue else None
         self.members = {m["snapshot_id"]: m for m in members}
@@ -551,7 +558,7 @@ class SessionExplorer:
                 _status_badge(self.conn, self.mirror)
                 if matched:
                     end = session_window(day)["open"] + pd.Timedelta(minutes=int(matched))
-                    ui.label(f"matched 09:30–{end:%H:%M} · grey: what followed, never matched").classes(
+                    ui.label(f"Matched 09:30 to {end:%H:%M}; grey: what followed, never matched").classes(
                         "text-xs whitespace-nowrap").style(_MUTED)
         self.mirror_note.text = "" if member is not None else (self.analogues.reason or "No analogue to show.")
         self.mirror_note.set_visibility(member is None)
@@ -670,6 +677,7 @@ class SessionExplorer:
     def _sync_playback(self) -> None:
         """The playback row: shown for the current session, its slider over the candles drawn so far."""
         self.playback.set_visibility(self.live)
+        self.notes.set_visibility(self.live)
         if not self.live:
             return
         rows = window_bars(self.main.day_df, self.bar.date, self.timeframe, full_day=True)
@@ -792,9 +800,9 @@ class SessionExplorer:
         on = AUTO.on
         if on != self._auto_shown:
             self._auto_shown = on
-            self.auto_button.props(remove="outline color=grey" if on else "color=positive",
-                                   add="color=positive" if on else "outline color=grey")
-            self.auto_button.set_text("Auto: on" if on else "Auto")
+            self.auto_button.props(remove="outline" if on else "unelevated",
+                                   add="unelevated" if on else "outline")
+            self.auto_button.set_text("Auto: on, every minute" if on else "Auto")
         status = AUTO.status(datetime.now(timezone.utc))
         if status != self.auto_tip.text:
             self.auto_tip.set_text(status)
@@ -854,24 +862,25 @@ class SessionExplorer:
         with self.bar.tools:
             ui.toggle(
                 ["1m", "5m", "15m", "30m"], value="1m", on_change=self.on_timeframe,
-            ).props("dense")
+            ).props("no-caps unelevated")
             ui.button("Fit", icon="fit_screen", on_click=self.fit).props(
-                "flat dense no-caps").tooltip("Show the whole window of both sessions")
+                "outline no-caps").tooltip("Show the whole window of both sessions")
             self.auto_button = ui.button("Auto", icon="autorenew", on_click=self.toggle_auto).props(
-                "dense no-caps outline color=grey")
+                "no-caps outline")
             with self.auto_button:
                 self.auto_tip = ui.tooltip("")
             self._auto_shown: Optional[bool] = None
             self._auto_state()
             ui.timer(1.0, self._auto_state)
 
-        with ui.column().classes("w-full px-4 pb-4 gap-3"):
-            self._build_playback()
+        with ui.column().classes("w-full px-6 pb-6 gap-3"):
+            self._build_notes()
             self._build_charts()
-            self.analogue_box = ui.expansion("Analogues", icon="compare", value=True).classes("w-full")
+            self._build_playback()
+            self.analogue_box = ui.expansion("Analogues", value=True).classes("w-full")
             with self.analogue_box:
                 self.mode_toggle = ui.toggle({"preopen": "Pre-open set (saved)", "rth": "RTH set (evolving)"},
-                                             value="preopen", on_change=self.on_mode).props("dense no-caps")
+                                             value="preopen", on_change=self.on_mode).props("no-caps unelevated")
                 with ui.column().classes("w-full gap-3") as self.preopen_box:
                     self.analogues.build()
                 with ui.column().classes("w-full gap-3") as self.rth_box:
@@ -887,11 +896,27 @@ class SessionExplorer:
         if run_id or view:
             self.forecast.scroll_into_view()
 
+    def _build_notes(self) -> None:
+        """Above the charts, for the current session: what the fan and the projection trend show, and the key to
+        the fan's marks - how likely (the fog) and where each came from (recorded or recomputed)."""
+        with ui.column().classes("w-full gap-1") as self.notes:
+            with ui.row().classes("w-full items-baseline gap-x-5 gap-y-1"):
+                self.fan_note = ui.label().classes("text-sm grow").style(f"{_MUTED};max-width:80ch")
+                _key("Fan, darker is likelier", f"width:12px;height:12px;border-radius:2px;"
+                                                f"background:{theme.rgba(theme.INK, 0.3)}")
+                _key("Learned fan, recorded", f"width:8px;height:12px;border:1.5px solid {theme.INK};"
+                                              f"box-sizing:border-box")
+                _key("Learned fan, recomputed", f"width:8px;height:12px;border:1.5px dashed {theme.INK};"
+                                                f"box-sizing:border-box")
+            self.projection_note = ui.label().classes("text-xs").style(f"color:rgb({proj.RGB})")
+        self.notes.set_visibility(False)
+
     def _build_playback(self) -> None:
-        """The current session's playback: back through its candles with the fan as it stood at each."""
-        with ui.column().classes("w-full gap-0") as self.playback:
+        """The current session's playback, under the charts: back through its candles with the fan as it stood at
+        each."""
+        with ui.card().classes("w-full px-3 py-1 gap-0") as self.playback:
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                ui.label("Playback").classes("text-sm").style(_MUTED)
+                ui.label("Playback").classes("text-sm font-semibold")
                 ui.button(icon="chevron_left", on_click=lambda: self.step(-1)).props(
                     'flat dense round aria-label="Previous candle"').tooltip("Previous candle")
                 self.slider = ui.slider(min=0, max=1, step=1, value=1, on_change=self.on_playback).classes(
@@ -909,24 +934,24 @@ class SessionExplorer:
                     "whitespace-nowrap shrink-0").tooltip("TEMA 14 and EMA 14 averaged and extrapolated 15 minutes "
                                                           "from the last candle shown - a visual extrapolation, not a "
                                                           "forecast")
-            self.fan_note = ui.label().classes("text-xs").style(_MUTED)
-            self.projection_note = ui.label().classes("text-xs").style(f"color:rgb({proj.RGB})")
         self.playback.set_visibility(False)
 
     def _build_charts(self) -> None:
-        """The selected session on the left, one of its analogues on the right, linked by time of day."""
-        with ui.grid(columns=2).classes("w-full gap-3"):
-            with ui.column().classes("min-w-0 gap-1"):
-                with ui.row().classes("w-full h-10 items-center gap-3 no-wrap"):
-                    self.main_caption = ui.label().classes("text-sm whitespace-nowrap")
+        """The selected session on the left, one of its analogues on the right - two thirds and a third, each in
+        its own panel - linked by time of day."""
+        with ui.element("div").classes("w-full grid gap-3").style(
+                "grid-template-columns:minmax(0,2fr) minmax(0,1fr)"):
+            with ui.card().classes("min-w-0 gap-1 p-3"):
+                with ui.row().classes("w-full min-h-10 items-center gap-3 no-wrap"):
+                    self.main_caption = ui.label().classes("text-sm font-semibold whitespace-nowrap")
                     self.status = ui.row().classes("items-center gap-2")
                 self.main.chart = LightweightChart(height=620, sync_group=_SYNC_GROUP, sync_lead=True)
-            with ui.column().classes("min-w-0 gap-1"):
-                with ui.row().classes("w-full h-10 items-center gap-3 no-wrap"):
+            with ui.card().classes("min-w-0 gap-1 p-3"):
+                with ui.row().classes("w-full min-h-10 items-center gap-x-3 gap-y-1"):
                     self.analogue_select = ui.select(
                         {}, label="Analogue", on_change=self.on_analogue,
-                    ).props("dense options-dense").classes("w-60")
-                    self.mirror_status = ui.row().classes("items-center gap-3 no-wrap")
+                    ).props("outlined dense options-dense stack-label").classes("w-56")
+                    self.mirror_status = ui.row().classes("items-center gap-x-3 gap-y-0")
                 with ui.element("div").classes("relative w-full"):
                     self.mirror.chart = LightweightChart(height=620, sync_group=_SYNC_GROUP)
                     self.mirror_note = ui.label().classes(
