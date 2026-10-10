@@ -42,6 +42,7 @@ stored. ``reload`` reads the preview again; a Forecast now job switches to its t
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from fractions import Fraction
 from typing import Any, Dict, List, Optional, Tuple
 
 from nicegui import ui
@@ -213,7 +214,7 @@ class ForecastPanel:
 
     def build(self, view: Optional[str] = None) -> None:
         view = "preview" if view == "preview" else "stored"
-        self.box = ui.expansion("Forecast", value=True).classes("w-full")
+        self.box = ui.expansion("Forecast", value=True).classes("min-w-0").style("flex:6 1 600px")
         with self.box:
             with ui.tabs(value=view).props("dense no-caps inline-label align=left") as self.tabs:
                 ui.tab("stored", label="Stored runs", icon="inventory_2")
@@ -226,41 +227,47 @@ class ForecastPanel:
                     self._build_preview()
 
     def _build_stored(self) -> None:
-        ui.label(f"Forecasts of the session day's NQ session from each run's frozen evidence, by arm: A the prior "
-                 f"({fc.PRIOR_VERSION}, the earlier sessions alone, the benchmark); B the baseline "
-                 f"({fc.BASELINE_VERSION}, the rule-based analogues smoothed with the prior); N and M the "
-                 f"scikit-learn models of the 15-minute direction ({ml.ML_NQ_VERSION} from NQ's own features, "
-                 f"{ml.ML_MULTI_VERSION} with ES, RTY, VIX, the 10-year yield and the dollar besides) - "
-                 f"experimental until a forward evaluation shows they improve on B. A historical replay is research "
-                 f"on reconstructed evidence, never a timely live forecast. The realised outcome and the grading stay "
-                 f"hidden until you show them.").classes("text-sm").style(_MUTED)
-        with ui.card().classes("w-full gap-1"):
-            ui.label("Summary - from the stored numbers only: the forecast in force and why, every arm's "
-                     "probabilities and the ML forecasts' differences from A and B, the reference levels, the "
-                     "instruments used and what they showed at the cutoff").classes("text-xs").style(_MUTED)
+        with ui.row().classes("w-full items-center gap-3"):
+            self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).props(
+                "outlined dense stack-label").classes("grow min-w-[16rem] max-w-[30rem]")
+            ui.space()
+            self.outcome_button = ui.button("Show the realised outcome", on_click=self.toggle_outcome).props(
+                "unelevated no-caps")
+        self.arm_title = ui.label().classes("text-sm").style(_MUTED)
+        self.arm_row = ui.element("div").classes("w-full grid gap-1 p-1 rounded-lg").props(
+            'role="group" aria-label="Arm shown"').style(
+            "grid-template-columns:repeat(auto-fill,minmax(190px,1fr));background:var(--tp-tint)")
+        self.grading = ui.column().classes("w-full gap-3")
+        with ui.expansion("The day's summary", value=False).classes("w-full"):
+            ui.label(f"Forecasts of the session day's NQ session from each run's frozen evidence, by arm: A the prior "
+                     f"({fc.PRIOR_VERSION}, the earlier sessions alone, the benchmark); B the baseline "
+                     f"({fc.BASELINE_VERSION}, the rule-based analogues smoothed with the prior); N and M the "
+                     f"scikit-learn models of the 15-minute direction ({ml.ML_NQ_VERSION} from NQ's own features, "
+                     f"{ml.ML_MULTI_VERSION} with ES, RTY, VIX, the 10-year yield and the dollar besides) - "
+                     f"experimental until a forward evaluation shows they improve on B. A historical replay is "
+                     f"research on reconstructed evidence, never a timely live forecast. The realised outcome and the "
+                     f"grading stay hidden until you show them.").classes("text-sm").style(_MUTED)
+            ui.label("From the stored numbers only: the forecast in force and why, every arm's probabilities and the "
+                     "ML forecasts' differences from A and B, the reference levels, the instruments used and what "
+                     "they showed at the cutoff").classes("text-xs").style(_MUTED)
             self.summary = ui.column().classes("w-full gap-0")
-        with ui.row().classes("w-full items-center gap-4"):
-            self.run_select = ui.select({}, label="Run", on_change=lambda e: self.show(e.value)).classes("w-[30rem]")
-            ui.switch("Show realised outcome", value=False, on_change=self.toggle_outcome)
-        with ui.card().classes("w-full gap-3"):
-            with ui.row().classes("w-full items-center gap-3"):
-                self.arm_title = ui.label().classes("text-base font-medium")
-                ui.label("one tile per arm: the one shown below is highlighted - click another to show it").classes(
-                    "text-xs").style(_MUTED)
-            self.arm_row = ui.element("div").classes("w-full grid gap-3").style(
-                "grid-template-columns:repeat(5,minmax(0,1fr))")
-            ui.separator()
-            self.grading = ui.column().classes("w-full gap-2")
-        with ui.column().classes("w-full gap-3") as self.run_body:
-            self.provenance = ui.column().classes("w-full gap-0")
-            with ui.row().classes("w-full no-wrap gap-4 items-start"):
-                with ui.column().classes("grow gap-1 min-w-0"):
-                    self.chart = LightweightChart(height=520)
-                with ui.card().classes("w-[620px] shrink-0"):
-                    self.targets = ui.column().classes("w-full gap-0")
-            self.outcome = ui.column().classes("w-full gap-0")
-            with ui.expansion("P1 record (47 fields)", icon="list_alt", value=True).classes("w-full"):
-                self.record = ui.column().classes("w-full gap-0")
+        with ui.expansion("The run in full", value=False, on_value_change=self._run_opened).classes(
+                "w-full") as self.run_body:
+            with ui.column().classes("w-full gap-3"):
+                self.provenance = ui.column().classes("w-full gap-0")
+                with ui.row().classes("w-full gap-4 items-start"):
+                    with ui.column().classes("grow gap-1 min-w-[320px]"):
+                        self.chart = LightweightChart(height=520)
+                    with ui.card().classes("w-full max-w-[620px]"):
+                        self.targets = ui.column().classes("w-full gap-0")
+                self.outcome = ui.column().classes("w-full gap-0")
+                with ui.expansion("P1 record (47 fields)", value=True).classes("w-full"):
+                    self.record = ui.column().classes("w-full gap-0")
+
+    def _run_opened(self, event) -> None:
+        """The run's chart is drawn again when its section opens: a chart laid out while hidden has no width."""
+        if event.value and self.run is not None:
+            self.chart.apply(frozen_preopen_spec(self.snapshot))
 
     def _run_label(self, r: Dict[str, Any]) -> str:
         arm = _ARMS.get(r["algorithm_version"], r["algorithm_version"])
@@ -320,22 +327,24 @@ class ForecastPanel:
         self.pick_day()
 
     def _render_arms(self, day: str, runs: List[Dict[str, Any]]) -> None:
-        """One tile per arm: whether it ran for the session (issued, failed or no run) and what it rests on; the
-        arm shown below highlighted. A tile with runs shows that arm when clicked."""
+        """One tile per arm: what it rests on and whether it ran for the session (issued, failed or no run); the
+        arm shown below raised. A tile with runs shows that arm when clicked."""
         shown = f"arm {self.arm}, {ml.ARM_NAMES[self.arm]}" if self.arm else "no run"
-        self.arm_title.set_text(f"Arms for {day}: {shown} shown")
+        self.arm_title.set_text(f"Arms for {day}: {shown} shown. Click another to show it.")
         self.arm_row.clear()
         with self.arm_row:
             for arm in ml.ARMS:
                 mine = [r for r in runs if ml.arm_of(r["algorithm_version"]) == arm]
                 is_shown = arm == self.arm
-                tile = ui.element("div").classes("rounded-lg px-3 py-2 flex gap-3 items-start"
+                tile = ui.element("div").classes("rounded-md px-3 py-2 flex gap-3 items-start"
                                                  + (" cursor-pointer" if mine else ""))
-                tile.style(f"background:{'var(--tp-sheet)' if is_shown else 'var(--tp-paper)'};"
-                           f"outline:{'1.5px solid var(--tp-ink)' if is_shown else 'none'};"
-                           f"{'' if mine else 'opacity:0.55'}")
+                tile.props(f'role="button" tabindex="0" aria-pressed="{str(is_shown).lower()}"')
+                tile.style("background:var(--tp-sheet);outline:1px solid var(--tp-ink);"
+                           "box-shadow:inset 0 -3px 0 var(--tp-ink)" if is_shown else
+                           f"background:transparent;{'' if mine else 'opacity:0.55'}")
                 if mine:
                     tile.on("click", lambda a=arm: self.pick_arm(a))
+                    tile.on("keydown.enter", lambda a=arm: self.pick_arm(a))
                 with tile:
                     _mark(arm)
                     with ui.column().classes("gap-0 min-w-0"):
@@ -343,11 +352,9 @@ class ForecastPanel:
                             ui.label(_arm_name(arm)).classes("text-sm font-semibold")
                             if arm == BENCHMARK:
                                 ui.label("the benchmark").classes("text-xs").style(_MUTED)
-                            if is_shown:
-                                ui.label("shown").classes("text-xs font-semibold")
                         status, detail = self._arm_status(arm, mine, self.current.get(arm))
-                        ui.label(status).classes("text-xs")
                         ui.label(detail).classes("text-xs break-words").style(_MUTED)
+                        ui.label(status).classes("text-xs break-words")
 
     @staticmethod
     def _arm_status(arm: str, mine: List[Dict[str, Any]], current: Optional[Dict[str, Any]]):
@@ -371,8 +378,12 @@ class ForecastPanel:
                     (mine[0]["failure_reason"] or "")[:110])
         return "no run for this session", "Update data, Run forecaster"
 
-    def toggle_outcome(self, event) -> None:
-        self.outcome_shown = bool(event.value)
+    def toggle_outcome(self) -> None:
+        self.outcome_shown = not self.outcome_shown
+        self.outcome_button.set_text("Hide the realised outcome" if self.outcome_shown else
+                                     "Show the realised outcome")
+        self.outcome_button.props(remove="unelevated" if self.outcome_shown else "outline",
+                                  add="outline" if self.outcome_shown else "unelevated")
         self._render_outcome()
         self._render_grading()
 
@@ -453,14 +464,14 @@ class ForecastPanel:
                  "differ from the official forecast, which comes from the 09:31 ET snapshot (Stored runs)."
                  ).classes("text-sm").style(_MUTED)
         self.preview_meta = ui.column().classes("w-full gap-0")
-        with ui.row().classes("w-full no-wrap gap-4 items-start"):
-            with ui.column().classes("grow gap-1 min-w-0"):
+        with ui.row().classes("w-full gap-4 items-start"):
+            with ui.column().classes("grow gap-1 min-w-[320px]"):
                 self.preview_chart = LightweightChart(height=520)
-            with ui.card().classes("w-[620px] shrink-0"):
+            with ui.card().classes("w-full max-w-[620px]"):
                 self.preview_arm = ui.toggle({v: _ARMS[v] for v in fc.RULE_ALGORITHMS}, value=fc.BASELINE_VERSION,
                                              on_change=lambda e: self._render_preview_run()).props("dense no-caps")
                 self.preview_targets = ui.column().classes("w-full gap-0")
-        with ui.expansion("P1 record (47 fields)", icon="list_alt", value=False).classes("w-full"):
+        with ui.expansion("P1 record (47 fields)", value=False).classes("w-full"):
             self.preview_record = ui.column().classes("w-full gap-0")
         self.preview = pv.load()
         self._render_preview()
@@ -533,170 +544,177 @@ class ForecastPanel:
 
     def _render_grading(self) -> None:
         """
-        The arms of the session side by side (forecaster/grading.py): before the outcome is shown and recorded,
-        their forecasts - how sure each arm is of its predicted class, against the benchmark; with it, their
-        grades - the probability each gave what happened, hits, and the difference to the benchmark.
+        The arms of the session side by side (forecaster/grading.py): how sure each arm is of its predicted class
+        against the benchmark - or, with the realised outcome shown, what each gave to what happened - then every
+        class of the arm shown, and with the outcome the grading.
         """
         self.grading.clear()
         with self.grading:
             if not self.current:
-                ui.label("No issued forecast to compare for this session.").classes("text-xs").style(_MUTED)
+                ui.label("No issued forecast to compare for this session.").classes("text-sm").style(_MUTED)
                 return
             first = next(iter(self.current.values()))
             outcome = (store.latest_outcome(self.conn, first["snapshot_id"], first["label_version"])
                        if self.outcome_shown else None)
-            if outcome is not None:
-                self._render_scored(outcome)
-            else:
-                self._render_compared()
+            if self.outcome_shown and outcome is None:
+                ui.label("No realised outcome recorded yet: it is recorded once the session is final, two hours "
+                         "after its close.").classes("text-sm").style(_MUTED)
+            compared = compare(self.current)
+            graded = grade(self.current, outcome["labels"]) if outcome is not None else None
+            if not compared["targets"]:
+                ui.label("No arm forecast any target for this session.").classes("text-sm").style(_MUTED)
+                return
+            with ui.element("div").classes("w-full flex flex-wrap gap-3 items-start"):
+                with ui.card().classes("gap-2 p-4 min-w-0").style("flex:5 1 380px"):
+                    self._render_sureness(compared, graded)
+                with ui.card().classes("gap-1 p-4 min-w-0").style("flex:6 1 420px"):
+                    self._render_classes(graded)
+            if graded is not None:
+                with ui.card().classes("w-full gap-2 p-4"):
+                    self._grading_table(graded, outcome)
 
-    def _render_compared(self) -> None:
-        g = compare(self.current)
-        ui.label(f"Forecasts compared: how sure each arm is of its predicted class, against the benchmark (arm "
-                 f"{BENCHMARK})").classes("text-sm font-medium")
-        if not g["targets"]:
-            ui.label("No arm forecast any target for this session.").classes("text-xs").style(_MUTED)
-            return
-        targets = [t for _, t in g["targets"]]
-        with ui.row().classes("w-full no-wrap gap-6 items-start"):
-            if len(targets) >= 3:
-                ui.echart(self._radar_options(targets, {a: [x["cells"][t]["p"] for t in targets]
-                                                        for a, x in g["arms"].items()},
-                                              [g["chance"][t] for t in targets])).style(
-                    "width:540px;height:460px").classes("shrink-0")
-            with ui.column().classes("grow gap-1 min-w-0 max-w-[60rem]"):
-                arms = list(g["arms"])
-                with ui.grid(columns=f"minmax(0,1.1fr) repeat({len(arms)}, minmax(0,1fr))").classes(
-                        "w-full gap-x-3 gap-y-1"):
-                    ui.label("target").classes(_CELL).style(_MUTED)
-                    for arm in arms:
-                        a = g["arms"][arm]
-                        with ui.column().classes(_CELL + " gap-0"):
-                            with ui.row().classes("items-center gap-2 no-wrap"):
-                                _mark(arm)
-                                ui.label(_arm_name(arm)).classes("font-semibold")
-                            ui.label("benchmark" if arm == BENCHMARK else
-                                     f"same class as {BENCHMARK} on {a['agrees']} of {a['comparable']}").classes(
-                                "text-[10px]").style(_MUTED)
-                    for _, t in g["targets"]:
-                        ui.label(_SHORT[t]).classes(_CELL).style(_MUTED)
-                        for arm in arms:
-                            c = g["arms"][arm]["cells"][t]
-                            if c["p"] is None:
-                                ui.label("-").classes(_CELL).style(_MUTED).tooltip(c.get("why") or "")
-                                continue
-                            name = (defs.display(t, c["cls"], "predicted") if c["cls"] else
-                                    "tie: " + " / ".join(defs.display(t, x, "predicted") for x in c["top"]))
-                            with ui.column().classes(_CELL + " gap-0"):
-                                with ui.row().classes("items-center gap-1 no-wrap"):
-                                    ui.label(name).classes("break-words")
-                                    if c["agrees"] is False:
-                                        ui.label(f"≠ {BENCHMARK}").classes("text-[10px] px-1 rounded").style(
-                                            "border:1px solid var(--tp-ink2);color:var(--tp-ink)").tooltip(
-                                            f"a different class from arm {BENCHMARK}'s")
-                                with ui.element("span").classes("tp-pbar w-full"):
-                                    ui.element("span").style(f"width:{100 * c['p']:.0f}%;"
-                                                             f"background:{_ARM_COLOR[arm]}")
-                                ui.label(f"{100 * c['p']:.0f} %").classes("text-[11px]").style(_MUTED)
-        why = ("Show realised outcome to grade the arms against what happened." if not self.outcome_shown else
-               "The realised outcome is recorded once the session is final, two hours after its close; then the "
-               "arms are graded here.")
-        ui.label(f"Each axis: the probability an arm gives its own predicted class (the top of a tie). Arm "
-                 f"{BENCHMARK}, the earlier-session prior, is the benchmark (dashed); chance is 1 / the number of "
-                 f"classes (dotted). Higher is surer, not better - only the outcome says which was right. "
-                 f"{why}").classes("text-[10px]").style(_MUTED)
-
-    def _render_scored(self, outcome: Dict[str, Any]) -> None:
-        g = grade(self.current, outcome["labels"])
-        ui.label(f"Graded against the realised outcome (revision {outcome['outcome_revision']}): the probability "
-                 f"each arm gave what happened").classes("text-sm font-medium")
-        targets = [t for _, t in g["targets"]]
-        with ui.row().classes("w-full no-wrap gap-6 items-start"):
-            if len(targets) >= 3:
-                ui.echart(self._radar_options(targets, {a: [x["cells"][t]["p"] for t in targets]
-                                                        for a, x in g["arms"].items()},
-                                              [g["chance"][t] for t in targets])).style(
-                    "width:540px;height:460px").classes("shrink-0")
-            with ui.column().classes("grow gap-2 min-w-0 max-w-[52rem]"):
-                self._scorecard(g)
-        ui.label(f"p(realised): the probability the arm gave the class that happened; a hit: its predicted class "
-                 f"was it. Arm {BENCHMARK} (the earlier-session prior) is the benchmark; chance is 1 / the number of "
-                 f"classes. The radar draws only the arms that forecast every target - the ML arms (N, M, P) cover "
-                 f"the 15-minute direction alone, so their numbers are in the table. One session is a view, not a "
-                 f"score - experiments score many (Evaluation).").classes(
-            "text-[10px]").style(_MUTED)
-
-    def _radar_options(self, targets: List[str], values: Dict[str, List[Optional[float]]],
-                       chance: List[float]) -> Dict[str, Any]:
-        """A radar over ``targets`` (0-100 %): one polygon per arm that forecast every target, the benchmark
-        dashed, chance dotted. The ML arms forecast direction_15m only: a missing axis is never drawn as 0, so they
-        are left to the table (which also keeps the radar within the three categorical colours that stay apart for
-        every pair)."""
-        series = []
-        for arm, vals in values.items():
-            if any(v is None for v in vals):
-                continue
-            color, bench = _ARM_COLOR[arm], arm == BENCHMARK
-            series.append({
-                "name": f"{arm}, {ml.ARM_NAMES[arm]}" + (" (benchmark)" if bench else ""),
-                "value": [round(100 * (v or 0), 1) for v in vals],
-                "symbol": "circle", "symbolSize": 8,
-                "lineStyle": {"width": 2, "color": color, "type": "dashed" if bench else "solid"},
-                "itemStyle": {"color": color, "borderColor": theme.SHEET, "borderWidth": 2},
-                "areaStyle": {"color": color, "opacity": 0 if bench else 0.08}})
-        series.append({"name": "chance", "value": [round(100 * c, 1) for c in chance],
-                       "symbol": "none", "lineStyle": {"width": 1, "type": "dotted", "color": theme.INK2},
-                       "itemStyle": {"color": theme.INK2}, "areaStyle": {"opacity": 0}})
-        return {
-            "backgroundColor": "transparent", "animation": False,
-            "legend": {"top": 0, "left": "center", "itemWidth": 14, "itemHeight": 8, "itemGap": 12,
-                       "textStyle": {"color": theme.INK, "fontSize": 11}},
-            "tooltip": {"trigger": "item", **theme.ECHART_TOOLTIP},
-            "radar": {"indicator": [{"name": _SHORT[t], "max": 100} for t in targets], "radius": "66%",
-                      "center": ["50%", "56%"], "splitNumber": 4, "shape": "polygon",
-                      "axisName": {"color": theme.INK2, "fontSize": 11},
-                      "splitLine": {"lineStyle": {"color": theme.RULE, "width": 1}},
-                      "splitArea": {"show": False}, "axisLine": {"lineStyle": {"color": theme.RULE}}},
-            "series": [{"type": "radar", "data": series, "emphasis": {"lineStyle": {"width": 3}}}]}
-
-    def _scorecard(self, g: Dict[str, Any]) -> None:
-        """Per arm: hits, mean p(realised) and its difference to the benchmark; then per target each arm's
-        p(realised) with a hit or a miss, under the realised class."""
-        arms = list(g["arms"])
-        with ui.grid(columns="minmax(0,1.6fr) repeat(3, minmax(0,1fr))").classes("w-full gap-x-3 gap-y-1"):
-            for head in ("arm", "hits", "mean p(realised)", f"vs arm {BENCHMARK}"):
-                ui.label(head).classes(_CELL).style(_MUTED)
+    def _render_sureness(self, compared: Dict[str, Any], graded: Optional[Dict[str, Any]]) -> None:
+        """Per target a 0-100 % track: each arm's dot (its letter in its colour) at the probability it gives its own
+        predicted class - with the outcome, the class that happened, hollow when it predicted another - arm A's
+        dashed tick, chance dotted."""
+        source = graded or compared
+        ui.label("What each arm gave to what happened" if graded else "How sure each arm is").classes(
+            "tp-x text-lg font-bold")
+        ui.label("Each dot is the probability the arm gave the class that happened. Solid: its prediction was that "
+                 "class. Further right is better." if graded else
+                 "Each dot is the probability an arm gives its own predicted class (the top of a tie). Further right "
+                 "is surer, not more right: only the outcome says which was right.").classes("text-xs").style(_MUTED)
+        arms = [a for a in ml.ARMS if a in source["arms"]]
+        with ui.row().classes("items-center gap-x-4 gap-y-1"):
             for arm in arms:
+                with ui.element("span").classes("tp-key"):
+                    if arm == BENCHMARK:
+                        ui.element("span").style(f"height:16px;border-left:2px dashed {_ARM_COLOR[arm]}")
+                    else:
+                        ui.element("span").style(f"width:12px;height:12px;border-radius:6px;"
+                                                 f"background:{_ARM_COLOR[arm]}")
+                    ui.label(f"{arm}, {ml.ARM_NAMES[arm]}")
+            with ui.element("span").classes("tp-key"):
+                ui.element("span").style("height:16px;border-left:2px dotted var(--tp-ink2)")
+                ui.label("Chance")
+            if graded:
+                with ui.element("span").classes("tp-key"):
+                    ui.element("span").style("width:12px;height:12px;border-radius:6px;box-sizing:border-box;"
+                                             "border:2.5px solid var(--tp-ink2)")
+                    ui.label("Hollow: predicted another class")
+        for _, t in source["targets"]:
+            bench = source["arms"].get(BENCHMARK, {}).get("cells", {}).get(t)
+            others = [a for a in arms if a != BENCHMARK and source["arms"][a]["cells"][t]["p"] is not None]
+            classes = len(defs.TARGETS[t]["labels"]) if t in defs.TARGETS else None
+            with ui.element("div").classes("tp-dotrow"):
+                with ui.column().classes("gap-0"):
+                    ui.label(_SHORT[t]).classes("text-sm font-semibold")
+                    if classes:
+                        ui.label(f"{classes} classes").classes("text-xs").style(_MUTED)
+                with ui.element("div").classes("tp-track"):
+                    ui.element("span").classes("tp-chance").style(f"left:{100 * source['chance'][t]:.1f}%")
+                    if bench and bench["p"] is not None:
+                        ui.element("span").classes("tp-bench").style(f"left:{100 * bench['p']:.1f}%").tooltip(
+                            f"{BENCHMARK}, {ml.ARM_NAMES[BENCHMARK]}: {100 * bench['p']:.0f} %")
+                        ui.label(BENCHMARK).classes("tp-bench-label").style(f"left:{100 * bench['p']:.1f}%")
+                    for i, arm in enumerate(others):
+                        c = source["arms"][arm]["cells"][t]
+                        offset = (i - (len(others) - 1) / 2) * 9
+                        miss = graded is not None and not c["hit"]
+                        if graded:
+                            what = defs.display(t, graded["realised"][t])
+                            tip = f"{arm}, {ml.ARM_NAMES[arm]}: {100 * c['p']:.0f} % for {what}, what happened"
+                        else:
+                            name = (defs.display(t, c["cls"], "predicted") if c["cls"] else
+                                    "a tie: " + " / ".join(defs.display(t, x, "predicted") for x in c["top"]))
+                            tip = f"{arm}, {ml.ARM_NAMES[arm]}: {name} {100 * c['p']:.0f} %"
+                        ui.label(arm).classes("tp-dot" + (" miss" if miss else "")).style(
+                            f"left:{100 * c['p']:.1f}%;margin-top:{offset - 9:.0f}px;--c:{_ARM_COLOR[arm]}"
+                        ).tooltip(tip)
+        with ui.element("div").classes("tp-dotrow").style("border-top:0;min-height:18px"):
+            ui.label("")
+            with ui.element("div").classes("tp-axis"):
+                for v in (0, 25, 50, 75, 100):
+                    ui.label(f"{v} %").style(f"left:{v}%" + (";transform:translateX(-100%)" if v == 100 else
+                                                             "" if v == 0 else ";transform:translateX(-50%)"))
+
+    def _render_classes(self, graded: Optional[Dict[str, Any]]) -> None:
+        """Every class of the arm shown, per target: a bar of its probability - the strongest, its prediction, in
+        the arm's colour - with arm A's probability for the class as a tick, and what happened when shown."""
+        arm = self.arm
+        run = self.current.get(arm) if arm else None
+        bench = self.current.get(BENCHMARK) if arm != BENCHMARK else None
+        with ui.row().classes("items-center gap-2 no-wrap"):
+            if arm:
+                _mark(arm)
+            ui.label(f"{_arm_name(arm)}, every class" if arm else "Every class").classes("tp-x text-lg font-bold")
+        ui.label(f"Each bar is the probability arm {arm} gives the class; the strongest is its prediction."
+                 + (f" The tick on each bar is arm {BENCHMARK}'s probability for the same class." if bench else "")
+                 ).classes("text-xs").style(_MUTED)
+        if run is None:
+            ui.label("No issued run of this arm for the session.").classes("text-sm").style(_MUTED)
+            return
+        for _, t in fc.FORECAST_TARGETS:
+            p = (run.get("predictions") or {}).get(t) or {}
+            dist = p.get("distribution")
+            if not dist:
+                continue
+            values = {c: float(Fraction(v)) for c, v in dist.items()}
+            top = max(values.values())
+            predicted = p.get("predicted_label") if p.get("status") == "predicted" else None
+            bdist = ((bench or {}).get("predictions") or {}).get(t, {}) or {}
+            bdist = bdist.get("distribution") or {}
+            realised = graded["realised"].get(t) if graded else None
+            spec = defs.TARGETS.get(t, {})
+            with ui.column().classes("w-full gap-1 pt-2 mt-1").style("border-top:1px solid var(--tp-rule)"):
+                with ui.row().classes("items-baseline gap-3"):
+                    ui.label(_SHORT[t]).classes("text-sm font-semibold")
+                    if spec.get("window_et"):
+                        ui.label(f"{spec['window_et'][0]} to {spec['window_et'][1]}").classes("text-xs").style(_MUTED)
+                for cls in spec.get("labels") or list(values):
+                    v = values.get(cls, 0.0)
+                    strongest = cls == predicted or (predicted is None and v == top)
+                    with ui.element("div").classes("tp-crow text-xs"):
+                        with ui.row().classes("items-center gap-1 no-wrap min-w-0"):
+                            ui.label(defs.display(t, cls, "predicted")).classes(
+                                "truncate" + (" font-semibold" if strongest else ""))
+                            if realised == cls:
+                                ui.label("✓ Happened").classes("tp-happened")
+                        with ui.element("span").classes("tp-cbar"):
+                            ui.element("span").style(
+                                f"width:{100 * v:.1f}%;background:{_ARM_COLOR[arm] if strongest else theme.INK2};"
+                                f"opacity:{1 if strongest else 0.38}")
+                            if bdist:
+                                ui.element("span").classes("tp-ctick").style(
+                                    f"left:{100 * float(Fraction(bdist.get(cls, '0'))):.1f}%")
+                        ui.label(f"{100 * v:.0f} %").classes("text-right")
+
+    def _grading_table(self, g: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+        """Per arm: hits, mean p(realised) and its difference to the benchmark."""
+        ui.label("Grading for this session").classes("tp-x text-lg font-bold")
+        ui.label(f"Against the realised outcome (revision {outcome['outcome_revision']}). One session says little on "
+                 f"its own: the registered experiments on the Evaluation page are the evidence. A hit is a predicted "
+                 f"class that happened.").classes("text-xs").style(_MUTED)
+        rule = "border-top:1px solid var(--tp-rule)"
+        with ui.grid(columns="minmax(0,1.6fr) repeat(3, minmax(0,1fr))").classes("w-full gap-x-3 gap-y-0"):
+            for head in ("Arm", "Hits", "Mean p(realised)", f"Against {BENCHMARK}"):
+                ui.label(head).classes("text-xs py-1").style(_MUTED)
+            for arm in [a for a in ml.ARMS if a in g["arms"]]:
                 a = g["arms"][arm]
-                with ui.row().classes(_CELL + " items-center gap-2 no-wrap"):
+                with ui.row().classes("items-center gap-2 no-wrap py-2").style(rule):
                     _mark(arm)
                     ui.label(_arm_name(arm))
-                ui.label(f"{a['hits']} of {a['graded']}").classes(_CELL)
-                ui.label("-" if a["mean_p"] is None else f"{100 * a['mean_p']:.0f}%").classes(_CELL)
+                with ui.row().classes("items-baseline gap-1 py-2").style(rule):
+                    ui.label(str(a["hits"])).classes("tp-x text-base font-bold")
+                    ui.label(f"of {a['graded']}").style(_MUTED)
+                ui.label("-" if a["mean_p"] is None else f"{100 * a['mean_p']:.1f} %").classes("py-2").style(rule)
                 vs = a["vs_benchmark"]
-                ui.label("benchmark" if arm == BENCHMARK else "-" if vs is None else
-                         f"{'+' if vs >= 0 else '−'}{abs(100 * vs):.0f} pts").classes(_CELL).style(
-                    _MUTED if arm == BENCHMARK or vs is None else "")
-        targets = g["targets"]
-        with ui.grid(columns=f"minmax(0,1.3fr) repeat({len(arms)}, minmax(0,1fr))").classes(
-                "w-full gap-x-3 gap-y-0 mt-2"):
-            ui.label("target - realised").classes(_CELL).style(_MUTED)
-            for arm in arms:
-                ui.label(f"arm {arm}").classes(_CELL).style(_MUTED)
-            for name, t in targets:
-                ui.label(f"{_SHORT[t]} - {defs.display(t, g['realised'][t])}").classes(_CELL + " break-words")
-                for arm in arms:
-                    c = g["arms"][arm]["cells"][t]
-                    if c["p"] is None:
-                        ui.label("-").classes(_CELL).style(_MUTED).tooltip(c.get("why") or "")
-                        continue
-                    with ui.row().classes(_CELL + " items-center gap-1 no-wrap"):
-                        ui.icon("check_circle" if c["hit"] else "cancel", size="14px").style(
-                            f"color:{theme.INK if c['hit'] else theme.INK2}")
-                        ui.label(f"{100 * c['p']:.0f}%" + (" hit" if c["hit"] else ""))
+                ui.label("Benchmark" if arm == BENCHMARK else "-" if vs is None else
+                         f"{'+' if vs >= 0 else '−'}{abs(100 * vs):.1f} points").classes("py-2").style(
+                    rule + (f";{_MUTED}" if arm == BENCHMARK or vs is None else ""))
         if g["ungraded"]:
-            ui.label("not graded: " + ", ".join(f"{_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(
-                "text-[10px]").style(_MUTED)
+            ui.label("Not graded: " + ", ".join(f"{_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(
+                "text-xs").style(_MUTED)
 
     def _render_outcome(self) -> None:
         self.outcome.clear()

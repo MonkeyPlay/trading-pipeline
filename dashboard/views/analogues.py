@@ -38,6 +38,7 @@ from nicegui import ui
 from contracts import nq_preopen as pre
 from contracts import nq_prompt_v2 as defs
 from dashboard import theme
+from dashboard.components import paths
 from dashboard.components.preopen import LEVEL_LABELS
 from database import journal_store as store
 from features import calendar as cal
@@ -47,7 +48,7 @@ from forecaster.rth_analogues import windows_over
 from matching.structural import features
 
 _MUTED = theme.MUTED
-_CELL = "px-2 py-1 text-xs whitespace-nowrap"
+_CELL = "px-2 py-1 text-xs break-words"
 _WRAP = "px-2 py-1 text-xs whitespace-normal break-words"
 _MATCH, _MISMATCH, _PARTIAL, _NONE = (theme.AGREE, theme.DIFFER, theme.PARTLY, theme.NOT_COMPARABLE)
 _FEATURE_LABEL = {f: f"vs {LEVEL_LABELS[f[len('price:'):]]}" if f.startswith("price:") else f
@@ -236,7 +237,8 @@ class AnaloguesPanel:
         target_annotation = self._target_annotation()
         target_values = features(target_annotation) if target_annotation else {}
         with self.table:
-            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:var(--tp-rule)"):
+            with ui.grid(columns=f"minmax(150px,1.3fr) repeat({1 + len(members)}, minmax(110px,1fr))").classes(
+                    "gap-px").style("background:var(--tp-rule)"):
                 ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
                 ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:var(--tp-sheet)")
                 for m in members:
@@ -246,6 +248,23 @@ class AnaloguesPanel:
                 for m in members:
                     ui.label(f"{float(m['similarity']):.1f}% / {float(m['comparable_weight']):.0f}%").classes(
                         _CELL).style("background:var(--tp-sheet)")
+                # The premarket each session had, against the target's; the opening after it - the analogue's
+                # outcome - only once the outcomes are shown.
+                ui.label("Premarket path" + (", then the opening" if self.outcomes_shown else "")).classes(
+                    _CELL).style(f"background:var(--tp-sheet);{_MUTED}")
+                target_path = paths.change(paths.closes(self.conn, self.day, paths.PREMARKET,
+                                                        paths.PREMARKET_MINUTES))
+                ui.html(paths.sparkline(target_path, label=f"The premarket of {self.day}")).classes(
+                    "px-2 py-1").style("background:var(--tp-sheet)")
+                for m in members:
+                    premarket = paths.closes(self.conn, m["session_date"], paths.PREMARKET, paths.PREMARKET_MINUTES)
+                    base = next((v for v in premarket if v is not None), None)
+                    opening = (paths.change(paths.closes(self.conn, m["session_date"], paths.OPEN,
+                                                         paths.OPENING_MINUTES), base)
+                               if self.outcomes_shown else [])
+                    ui.html(paths.sparkline(target_path, paths.change(premarket, base), opening,
+                                            label=f"The premarket of {m['session_date']} against the target's")
+                            ).classes("px-2 py-1").style("background:var(--tp-sheet)")
                 for feature, weight in pre.MATCH_WEIGHTS.items():
                     ui.label(f"{_FEATURE_LABEL[feature]} ({float(weight):g}%)").classes(_CELL).style(
                         f"background:var(--tp-sheet);{_MUTED}")
@@ -276,6 +295,7 @@ class AnaloguesPanel:
             ui.label("Blue: same value; red: different; amber: partly similar (Chop Score); grey: not "
                      "comparable. Click an analogue's date to chart it beside the session.").classes(
                 "text-xs mt-1").style(_MUTED)
+            ui.label(paths.KEY).classes("text-xs").style(_MUTED)
         if self.outcomes_shown:
             self._render_frequencies(aset)
         self.mark(self.chosen)

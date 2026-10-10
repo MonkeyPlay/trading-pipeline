@@ -877,15 +877,18 @@ class SessionExplorer:
             self._build_notes()
             self._build_charts()
             self._build_playback()
-            self.analogue_box = ui.expansion("Analogues", value=True).classes("w-full")
-            with self.analogue_box:
-                self.mode_toggle = ui.toggle({"preopen": "Pre-open set (saved)", "rth": "RTH set (evolving)"},
-                                             value="preopen", on_change=self.on_mode).props("no-caps unelevated")
-                with ui.column().classes("w-full gap-3") as self.preopen_box:
-                    self.analogues.build()
-                with ui.column().classes("w-full gap-3") as self.rth_box:
-                    self.rth.build()
-            self.forecast.build(view)
+            # The analogues and the forecast side by side (five to six), one above the other on a narrow screen.
+            with ui.element("div").classes("w-full flex flex-wrap gap-3 items-start"):
+                self.analogue_box = ui.expansion("Analogues", value=True).classes("min-w-0").style(
+                    "flex:5 1 560px")
+                with self.analogue_box:
+                    self.mode_toggle = ui.toggle({"preopen": "Pre-open set (saved)", "rth": "RTH set (evolving)"},
+                                                 value="preopen", on_change=self.on_mode).props("no-caps unelevated")
+                    with ui.column().classes("w-full gap-3") as self.preopen_box:
+                        self.analogues.build()
+                    with ui.column().classes("w-full gap-3") as self.rth_box:
+                        self.rth.build()
+                self.forecast.build(view)
 
         if self.bar.contract is None:
             ui.notify("No contract holds bars for the selected day.", type="warning")

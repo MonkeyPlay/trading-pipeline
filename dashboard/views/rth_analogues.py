@@ -43,12 +43,13 @@ from nicegui import ui
 from contracts import nq_prompt_v2 as defs
 from contracts import nq_rth as rth
 from dashboard import theme
+from dashboard.components import paths
 from database import journal_store as store
 from features import calendar as cal
 from forecaster import rth_analogues as ra
 
 _MUTED = theme.MUTED
-_CELL = "px-2 py-1 text-xs whitespace-nowrap"
+_CELL = "px-2 py-1 text-xs break-words"
 _GOOD, _BAD, _PARTIAL, _NONE = (theme.AGREE, theme.DIFFER, theme.PARTLY, theme.NOT_COMPARABLE)
 _CHOSEN = "bg-primary text-white"
 FOLLOW = "follow"
@@ -329,7 +330,8 @@ class RthAnaloguesPanel:
             return
         members = aset["members"]
         with self.table:
-            with ui.grid(columns=2 + len(members)).classes("gap-px").style("background:var(--tp-rule)"):
+            with ui.grid(columns=f"minmax(150px,1.3fr) repeat({1 + len(members)}, minmax(110px,1fr))").classes(
+                    "gap-px").style("background:var(--tp-rule)"):
                 ui.label("").classes(_CELL).style("background:var(--tp-sheet)")
                 ui.label(f"target {self.day}").classes(_CELL + " font-medium").style("background:var(--tp-sheet)")
                 for m in members:
@@ -339,6 +341,20 @@ class RthAnaloguesPanel:
                 for m in members:
                     ui.label(f"{float(m['similarity']):.1f}% / {float(m['comparable_weight']):.0f}%").classes(
                         _CELL).style("background:var(--tp-sheet)")
+                # The matched minutes from the open, against the target's, then the 15 that followed.
+                n = int(aset["elapsed_minutes"])
+                ui.label(f"Path: the first {n} min, then {paths.FOLLOWING_MINUTES}").classes(_CELL).style(
+                    f"background:var(--tp-sheet);{_MUTED}")
+                target_path = paths.change(paths.closes(self.conn, self.day, paths.OPEN, n))
+                ui.html(paths.sparkline(target_path, label=f"The first {n} minutes of {self.day}")).classes(
+                    "px-2 py-1").style("background:var(--tp-sheet)")
+                for m in members:
+                    path = paths.change(paths.closes(self.conn, m["session_date"], paths.OPEN,
+                                                     n + paths.FOLLOWING_MINUTES))
+                    ui.html(paths.sparkline(target_path, path[:n], path[n:],
+                                            label=f"The first {n} minutes of {m['session_date']} against the "
+                                                  f"target's, then the next {paths.FOLLOWING_MINUTES}")
+                            ).classes("px-2 py-1").style("background:var(--tp-sheet)")
                 for group, names in rth.GROUPS.items():
                     ui.label(group).classes(_CELL + " font-medium").style("background:var(--tp-tint);color:var(--tp-ink)")
                     for _ in range(1 + len(members)):
@@ -363,6 +379,7 @@ class RthAnaloguesPanel:
                      "sessions before. In brackets the feature's score: blue 0.75 or more, red 0.25 or less, amber "
                      "between, grey not comparable. Click a date to chart that analogue beside the session.").classes(
                 "text-xs mt-1").style(_MUTED)
+            ui.label(paths.KEY).classes("text-xs").style(_MUTED)
         self.mark(self.chosen)
 
     def _date_button(self, member: Dict[str, Any]) -> Any:

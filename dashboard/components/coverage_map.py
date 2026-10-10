@@ -39,8 +39,9 @@ from database.queries import derive_day_status
 from features.session_windows import NY_TZ
 
 MAX_WEEKS = 78            # about eighteen months; older weeks are not drawn
-SHOWN_WEEKS = 16          # the session bar's compact map: the last four months
-CELL = 11                 # px per week column and per instrument row
+SHOWN_WEEKS = 32          # the session bar's compact map: the last seven months or so
+CELL = 11                 # px per week column
+ROW = 6                   # px per instrument row: a wide, low strip
 RECENT_DAYS = 10          # the day dots: the last two weeks of trading days
 DAY_PITCH, DAY_GAP = 13, 18   # px per day dot, px between the weeks and the dots
 
@@ -214,7 +215,7 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
 
     def y_axis(grid, labelled):
         return {"type": "category", "data": list(symbols), "inverse": True, "gridIndex": grid,
-                "axisLabel": {"show": labelled, "color": theme.INK, "fontSize": 8, "interval": 0},
+                "axisLabel": {"show": labelled, "color": theme.INK, "fontSize": 7, "interval": 0, "lineHeight": 7},
                 "axisLine": {"show": False}, "axisTick": {"show": False}}
 
     grids = [{"left": 34, "right": 8 + (strip + DAY_GAP if days else 0), "top": 2, "bottom": 18}]
@@ -230,7 +231,7 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
         x_axes.append(x_axis([f"{d:%m-%d}" for d in days], 1, f"(i) => {week_ends}.includes(i)"))
         y_axes.append(y_axis(1, False))
         series.append({"type": "scatter", "data": day_points, "xAxisIndex": 1, "yAxisIndex": 1,
-                       "symbol": "circle", "symbolSize": 6,
+                       "symbol": "circle", "symbolSize": 5,
                        "emphasis": {"itemStyle": {"borderColor": theme.ARM_COLOR["B"], "borderWidth": 1}}})
     return {
         "backgroundColor": "transparent",
@@ -251,7 +252,7 @@ def chart_options(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def coverage_map(conn, symbols: Optional[List[str]] = None) -> None:
-    """Draws the compact map - the last ``SHOWN_WEEKS`` weeks, ``CELL`` px a cell - where it is called."""
+    """Draws the compact map - the last ``SHOWN_WEEKS`` weeks, ``CELL`` x ``ROW`` px a cell - where it is called."""
     from nicegui import ui
 
     symbols = symbols or Config.collect_symbols()
@@ -264,4 +265,4 @@ def coverage_map(conn, symbols: Optional[List[str]] = None) -> None:
             ui.label("No bars stored yet.").classes("text-xs").style(theme.MUTED)
             return
         width = 42 + CELL * len(data["weeks"]) + (DAY_GAP + DAY_PITCH * len(data["days"]) if data["days"] else 0)
-        ui.echart(chart_options(data)).style(f"width:{width}px;height:{20 + CELL * len(symbols)}px")
+        ui.echart(chart_options(data)).style(f"width:{width}px;height:{20 + ROW * len(symbols)}px")

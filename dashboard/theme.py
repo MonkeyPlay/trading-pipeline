@@ -155,6 +155,31 @@ body {{ background:var(--tp-paper); color:var(--tp-ink); font-family:{FONT}; fon
 .tp-pbar {{ display:block; height:4px; border-radius:2px; background:var(--tp-tint); margin-top:4px; }}
 .tp-pbar > span {{ display:block; height:4px; border-radius:2px; }}
 
+/* The forecast arms (views/forecast.py): how sure each arm is - a 0-100 % track per target, each arm a dot with its
+   letter, arm A a dashed tick, chance dotted - and every class of the arm shown, arm A's probability a tick. */
+.tp-dotrow {{ width:100%; display:grid; grid-template-columns:120px minmax(0,1fr); gap:12px; align-items:center; min-height:48px;
+  border-top:1px solid var(--tp-rule); }}
+.tp-track {{ position:relative; height:44px; }}
+.tp-track::before {{ content:""; position:absolute; left:0; right:0; top:50%; border-top:1px solid var(--tp-rule); }}
+.tp-chance {{ position:absolute; top:8px; bottom:8px; border-left:2px dotted var(--tp-ink2); opacity:.7; }}
+.tp-bench {{ position:absolute; top:4px; bottom:4px; border-left:2px dashed var(--tp-ink2); }}
+.tp-bench-label {{ position:absolute; top:-8px; margin-left:4px; font-size:11px; font-weight:600; color:var(--tp-ink2); }}
+.tp-dot {{ position:absolute; top:50%; width:18px; height:18px; margin-left:-9px; border-radius:9px; display:flex;
+  align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--tp-sheet);
+  background:var(--c); box-shadow:0 0 0 2px var(--tp-sheet); box-sizing:border-box; }}
+.tp-dot.miss {{ background:var(--tp-sheet); border:2.5px solid var(--c); color:var(--tp-ink); }}
+.tp-axis {{ position:relative; height:16px; font-size:11px; color:var(--tp-ink2); }}
+.tp-axis > div {{ position:absolute; top:0; white-space:nowrap; }}
+.tp-crow {{ width:100%; display:grid; grid-template-columns:minmax(110px,190px) minmax(80px,1fr) 40px; gap:10px;
+  align-items:center; min-height:22px; }}
+.tp-cbar {{ position:relative; height:10px; border-radius:3px; background:var(--tp-tint); }}
+.tp-cbar > span:first-child {{ position:absolute; left:0; top:0; bottom:0; border-radius:3px; }}
+.tp-ctick {{ position:absolute; top:-3px; bottom:-3px; border-left:2px solid var(--tp-ink); }}
+.tp-happened {{ display:inline-flex; align-items:center; font-size:11px; font-weight:650; padding:0 6px;
+  border-radius:4px; background:var(--tp-ink); color:var(--tp-sheet); line-height:17px; white-space:nowrap; }}
+/* Path charts in the analogue tables (components/paths.py). */
+.tp-path {{ display:block; width:100%; height:40px; }}
+
 /* The session timeline (components/session_timeline.py). */
 .tp-tl {{ position:relative; min-width:980px; height:150px; font-size:12.5px; line-height:1.3; }}
 .tp-tl > * {{ position:absolute; }}

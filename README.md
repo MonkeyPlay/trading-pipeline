@@ -163,7 +163,7 @@ day first) - and the coverage map. Under it the session timeline, then the page'
 (on the Session Explorer the timeframe, Fit and Auto). The day is the one every page shows. A page opens on NQ's newest session, or on
 `?day=YYYY-MM-DD&symbol=NQ&contract=<id>`; the header's navigation carries the selection to
 the other page, and the address bar follows it, so a reload keeps it.
-**Database coverage by week** is a compact map of what is stored over the last 16 weeks: one
+**Database coverage by week** is a wide, low map of what is stored over the last 32 weeks: one
 cell per instrument and week, darkest grey when every scheduled trading day is complete, then
 lighter greys (≥ 90 %, ≥ 50 %, > 0 %) and red (nothing), from the collector's day ledger; hover
 a cell for what it means and its day counts, and the title gives the newest stored day. Right of the weeks, the **last 10
@@ -251,10 +251,15 @@ Pages:
     prices, drawn the same way - the same window, timeframe and indicators. The two charts are
     linked by time of day: scrolling or zooming either moves the other. An RTH analogue's
     candles after the matched minutes are drawn grey: what it did next is shown, never matched.
-  - **Analogues** (below the charts): two sets, switched between with **Pre-open set (saved)** /
-    **RTH set (evolving)**. Until the session's first RTH set is stored the pre-open set shows;
-    from then the RTH set. An update keeps the analogue being compared when the new set still
-    holds it, and both charts' zoom.
+  - **Analogues** (below the charts, beside the forecast - one above the other on a narrow
+    screen): two sets, switched between with **Pre-open set (saved)** / **RTH set (evolving)**.
+    Until the session's first RTH set is stored the pre-open set shows; from then the RTH set. An
+    update keeps the analogue being compared when the new set still holds it, and both charts'
+    zoom. Each table has a **path** row ([dashboard/components/paths.py](dashboard/components/paths.py)):
+    per analogue a small chart of its 1-minute closes in percent from the window's first minute,
+    on one scale with the target session's (dashed) - for the RTH set the matched minutes from
+    the open, then the 15 that followed in grey; for the pre-open set the premarket (08:00 to
+    09:30), and the first half hour after the open only once its outcomes are shown.
   - **RTH set** ([dashboard/views/rth_analogues.py](dashboard/views/rth_analogues.py),
     [docs/rth_analogues.md](docs/rth_analogues.md)): the earlier sessions whose first n minutes
     from the 09:30 open most resemble this one's first n - "RTH analogues — first 23 minutes —
@@ -293,7 +298,7 @@ Pages:
     shown, by its id: provenance, the chart drawn from the snapshot's frozen bars, per-target
     distributions with their denominators, P1's 47 fields, and the realised outcome only when
     asked for; see [docs/nq_prompt_v2.md](docs/nq_prompt_v2.md#stage-3-deterministic-forecasts-guideline-revision-2).
-    **Summary** (at the top): the forecast in force and why, every arm's probabilities with
+    **Summary** (folded under the arms): the forecast in force and why, every arm's probabilities with
     the ML forecasts' differences from A and B, the reference levels and their distances, the
     instruments the multi-instrument model used and what they showed - stored numbers only
     ([forecaster/forecast_summary.py](forecaster/forecast_summary.py)). **Arms for the day**: one
@@ -301,12 +306,15 @@ Pages:
     multi-instrument, pooled; experimental) - saying whether it ran (issued, unavailable and why,
     failed, no run), whether a run is a reconstruction (issued after its replay deadline, the
     cutoff + 35 minutes: never in force, never a forward case) and what it rests on; the arm
-    shown is highlighted and a click shows another. Below the tiles a radar compares the arms that forecast every target with the benchmark
-    (arm A dashed, chance dotted) ([forecaster/grading.py](forecaster/grading.py)): before the
-    outcome, how sure each arm is of its predicted class per target, with a table of the classes
-    marking each that differs from arm A's; with the realised outcome shown and recorded, the
-    grading - the probability each arm gave what happened, hits, mean p(realised) and the
-    difference to arm A.
+    shown is raised and a click shows another. Below the tiles ([forecaster/grading.py](forecaster/grading.py)):
+    **How sure each arm is** - per target a 0-100 % track, each arm a dot with its letter at the
+    probability it gives its own predicted class, arm A a dashed tick, chance dotted - and **every
+    class** of the arm shown, a bar of each class's probability (its prediction in the arm's
+    colour) with arm A's probability for the class as a tick. **Show the realised outcome** turns
+    the dots into the probability each arm gave what happened (hollow where it predicted another
+    class), marks the class that happened, and adds the grading: hits, mean p(realised) and the
+    difference to arm A. The day's summary and the run in full (provenance, the frozen chart,
+    per-target denominators, P1's 47 fields, the realised outcome) are folded below.
     **Forecast now**: the latest preview (its own button, as in Update data) - as of when, how
     complete its pre-open is, what is not known yet, its analogues, both arms and the 47 fields;
     never stored ([forecaster/preview.py](forecaster/preview.py)).
