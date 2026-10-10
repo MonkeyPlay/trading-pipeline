@@ -91,6 +91,32 @@ def _judge(row: Dict[str, Any], inst, day: date) -> tuple:
     return status, min(0.99, *shares)
 
 
+def stored_days(conn, symbols: Sequence[str], oldest: Optional[date] = None) -> Dict[tuple, Dict[str, Any]]:
+    """
+    ``{(symbol, day): row}`` - every stored 1-minute day of ``symbols`` (from ``oldest`` when given) in the
+    collector's day ledger, judged by its current rule (``_judge``): the row with its ``status`` (COMPLETE,
+    PARTIAL or EMPTY) and ``score`` (1, the share stored, 0). Where several contracts hold a day, the best counts.
+    """
+    rows = conn.execute(
+        "SELECT c.symbol, s.trading_day, s.price_type, s.status, s.bar_count, s.expected_bar_count, "
+        "       s.rth_bar_count, s.open_bar_count "
+        "FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
+        "WHERE s.interval = '1m' AND c.symbol = ANY(%s) AND s.trading_day >= %s;",
+        (list(symbols), oldest or date(1990, 1, 1)),
+    ).fetchall()
+    best: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        r = dict(zip(r.keys(), r))
+        inst = Config.instrument(r["symbol"])
+        if inst is not None and r["price_type"] != inst.what_to_show:
+            continue
+        key = (r["symbol"], _day(r["trading_day"]))
+        status, score = _judge(r, inst, key[1])
+        if key not in best or score > best[key]["score"]:
+            best[key] = {**r, "status": status, "score": score}
+    return best
+
+
 def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
                    max_weeks: int = MAX_WEEKS) -> Dict[str, Any]:
     """
@@ -106,24 +132,7 @@ def coverage_weeks(conn, symbols: Sequence[str], today: Optional[date] = None,
     this_monday = today - timedelta(days=today.weekday())
     oldest = this_monday - timedelta(weeks=max_weeks - 1)
 
-    rows = conn.execute(
-        "SELECT c.symbol, s.trading_day, s.price_type, s.status, s.bar_count, s.expected_bar_count, "
-        "       s.rth_bar_count, s.open_bar_count "
-        "FROM session_days s JOIN contracts c ON c.contract_id = s.contract_id "
-        "WHERE s.interval = '1m' AND c.symbol = ANY(%s) AND s.trading_day >= %s;",
-        (list(symbols), oldest),
-    ).fetchall()
-
-    best: Dict[tuple, Dict[str, Any]] = {}
-    for r in rows:
-        r = dict(zip(r.keys(), r))
-        inst = Config.instrument(r["symbol"])
-        if inst is not None and r["price_type"] != inst.what_to_show:
-            continue
-        key = (r["symbol"], _day(r["trading_day"]))
-        status, score = _judge(r, inst, key[1])
-        if key not in best or score > best[key]["score"]:
-            best[key] = {**r, "status": status, "score": score}
+    best = stored_days(conn, symbols, oldest)
 
     if not best:
         return {"weeks": [], "symbols": list(symbols), "cells": {}, "newest": None, "days": [], "day_cells": {}}

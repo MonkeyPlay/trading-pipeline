@@ -12,14 +12,14 @@ a job ends, every page that saw it running reloads what it shows from the databa
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
 from config import Config
 from dashboard import theme
-from dashboard.jobs import (RUNNER, Job, collector_command, forecaster_command, live_command, live_window,
-                            preview_command, rth_command)
+from dashboard.jobs import (RUNNER, Job, collector_command, collector_window_command, forecaster_command,
+                            live_command, live_window, preview_command, rth_command)
 from features import calendar as cal
 from forecaster.preview import PreviewUnavailable, preview_target
 from forecaster.rth_analogues import due_window as rth_due
@@ -161,6 +161,15 @@ class PipelinePanel:
         if rth_due(datetime.now(timezone.utc)):
             steps.append(("rth", rth_command("manual")))
         self._start("collector", COLLECTOR, steps)
+
+    def collect_gaps(self, gaps: List[Dict[str, Any]]) -> None:
+        """The gaps the Stored data panel ticked (dashboard/components/stored_data.py): the collector once per gap -
+        its instruments over its days only - then the journal once, and the panel opened on their output."""
+        steps = [(f"collector {','.join(g['symbols'])} {g['start']}..{g['end']}",
+                  collector_window_command(g["symbols"], g["start"], g["end"], journal=False)) for g in gaps]
+        steps.append(("forecaster", forecaster_command()))
+        self._start("collector", f"{COLLECTOR}: {len(gaps)} gap{'' if len(gaps) == 1 else 's'}", steps)
+        self.dialog.open()
 
     def forecast(self) -> None:
         self._start("forecaster", FORECASTER, [("forecaster", forecaster_command())])

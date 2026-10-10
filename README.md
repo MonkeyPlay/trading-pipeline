@@ -149,7 +149,7 @@ One job runs at a time (a job can have steps: Forecast now collects, then previe
 page shows it and its output, the header shows its name and running time, closing the tab
 does not stop it (**Stop** interrupts it as Ctrl-C would), and the output is appended to
 `logs/pipeline_run.log`. When it ends, the pages that saw it running read the database
-again in place: the session bar's calendar and coverage map (showing the newest session, it
+again in place: the session bar's calendar and stored data (showing the newest session, it
 moves on to a newer one), then the page - the Session Explorer's session (a session still in
 progress grows), analogues, the day's forecast runs and the preview; Evaluation's cases of the
 day; the header's bar count.
@@ -159,27 +159,42 @@ three selectors, in order - the **session day**, the page's heading ("Friday 9 O
 opening a calendar, weeks from Monday, on which only the days with stored bars can be picked;
 the arrows either side step to the previous and the next of them), the **instrument** with bars
 that day (ES, NQ, ...), and the **contract** holding it (the one the collector made active that
-day first) - and the coverage map. Under it the session timeline, then the page's own controls
+day first) - and the stored data. Under it the session timeline, then the page's own controls
 (on the Session Explorer the timeframe, Fit and Auto). The day is the one every page shows. A page opens on NQ's newest session, or on
 `?day=YYYY-MM-DD&symbol=NQ&contract=<id>`; the header's navigation carries the selection to
 the other page, and the address bar follows it, so a reload keeps it.
-**Database coverage by week** is a wide, low map of what is stored over the last 32 weeks: one
-cell per instrument and week, darkest grey when every scheduled trading day is complete, then
-lighter greys (≥ 90 %, ≥ 50 %, > 0 %) and red (nothing), from the collector's day ledger; hover
-a cell for what it means and its day counts, and the title gives the newest stored day. Right of the weeks, the **last 10
-trading days** are one dot each, coloured by the same rule for that day alone; hover a dot for
-its status and bar count ([dashboard/components/coverage_map.py](dashboard/components/coverage_map.py)).
+**Stored data** ([dashboard/components/stored_data.py](dashboard/components/stored_data.py)) is one
+low strip for every trading day since the first instrument was collected, from the collector's day
+ledger judged by its current rule: a cell per week for the history, a cell per day for the **last 20
+trading days**, each the worst of its instruments - grey when complete, then yellow, orange and brown
+(≥ 90 %, ≥ 50 %, < 50 % stored) and red (nothing stored); a day before an instrument was first
+collected counts as not collected yet, never as missing. Its line says how many instruments since
+when, how many of the last 20 days are short and how many older gaps there are. **Details** opens
+the panel: the **gaps to fill**, merged into runs across instruments and newest first, as a
+checklist - the ones under 90 % stored or in the last 20 days ticked - with **Collect N gaps
+again**, which runs the collector for the ticked instruments and days only (`--symbol`, `--start`,
+`--end`, no trailing refresh), then the forecaster, as one job in Update data; and **by instrument**,
+grouped as target futures, intermarket context and research datasets, a strip per instrument with
+its share stored.
 
 Pages:
 
 - **Evaluation** (`/evaluation`, [dashboard/views/evaluation.py](dashboard/views/evaluation.py)) —
-  first the **intermarket fan experiment**: the frozen learned fan and where it draws, its
-  sealed holdout's one scoring per horizon, and the forward record per rule version (the marks
-  expected and what became of them, the issues by class, the latest with their latency).
-  Then the registered P1 experiments (guideline stage 4): each manifest, its stored scorings (paired arm
-  differences with intervals, every target, where the differences sit) and its frozen cases,
-  each linked to its forecast run in the Session Explorer. Under the manifest, the **session
-  day** in the experiment: inside its sessions or not, and per arm its frozen case.
+  what every result is (a registered definition first, then one scoring), then two sheets. The
+  **intermarket fan experiment**: its question and where the frozen model draws, a rail of where
+  it stands (registered, development checks, frozen, the holdout scored once, the forward
+  record), the holdout as a **forest plot** - per horizon model minus fan_rw_v2 as a share of
+  v2's CRPS with its 95 % interval, solid where it clears zero, the primary tinted - beside what
+  else the stored result shows (where in the day the gain sits, how concentrated it is, how the
+  90 % bands covered), and the forward record under the current rules (the marks the calendar
+  expected and what became of them, the issues by class, the median time from mark to issue
+  against the live deadline with the feed's part hatched); the tables behind it in an
+  expansion. The **P1 experiments** (guideline stage 4): pick a registered experiment and one of
+  its scorings for its **decision** on the primary target and a forest plot of every target's
+  paired Brier difference with its reading, then the **session day** in the experiment (inside
+  its sessions or not, and per arm its frozen case), and in expansions the manifest, coverage
+  and every target, where the differences sit, reliability and the frozen cases, each linked
+  to its forecast run in the Session Explorer.
 - **Session Explorer** (`/`, [dashboard/views/candles.py](dashboard/views/candles.py)) — built
   around the first hour: the session the bar selects, its analogues and its forecast.
   - **Chart:** the day's regular session with **15 minutes either side** is loaded - 09:15 to

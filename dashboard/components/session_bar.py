@@ -6,7 +6,7 @@ Three selectors pick it, in this order: the session day - the page's heading,
 opening a calendar on which only the days with stored bars can be picked, with
 buttons stepping to the previous and the next of them - then an instrument with
 bars that day (ES, NQ, ...), then one of its contracts holding the day (the one
-active that day first). Right of them the database coverage map. The page's own
+active that day first). Right of them the stored data (stored_data.py). The page's own
 controls go in ``tools``, a row ``build_tools`` draws where it is called (under
 the session's timeline).
 
@@ -31,7 +31,7 @@ from urllib.parse import urlencode
 from nicegui import ui
 
 from config import Config
-from dashboard.components.coverage_map import coverage_map
+from dashboard.components.stored_data import StoredData
 from database.queries import contracts_for_day, list_contracts, list_session_days, symbols_with_day
 
 # The instrument a page opens on; its current contract is preselected.
@@ -100,7 +100,8 @@ class SessionBar:
         # Set while the selectors are updated from code, so their change events
         # do not reload the page once per control.
         self._syncing = False
-        self.tools = None                          # the page's own controls, right of the selectors
+        self.tools = None                          # the page's own controls, under the session's timeline
+        self.collect_gaps: Optional[Callable[[List[Dict[str, Any]]], Any]] = None   # set by the page's header
 
     def _target_symbols(self) -> List[str]:
         """
@@ -200,7 +201,7 @@ class SessionBar:
     def reload(self) -> None:
         """
         Reads the stored sessions again, after a job ran: the day calendar and
-        the coverage map. Showing the newest session, the bar moves on to a
+        the stored data. Showing the newest session, the bar moves on to a
         newer one when there is one (``"day"``); otherwise the same day and
         contract stay (``"data"``).
         """
@@ -219,9 +220,7 @@ class SessionBar:
         self._mark_day()
         contract = None if moved or self.contract is None else int(self.contract["contract_id"])
         self._sync_selectors(keep_contract=contract)
-        self.coverage.clear()
-        with self.coverage:
-            coverage_map(self.conn)
+        self.stored.refresh()
         self._changed("day" if moved else "data")
 
     # ------------------------------------------------------------------
@@ -243,7 +242,7 @@ class SessionBar:
         self.newer_button.set_enabled(i is not None and i > 0)
 
     def build(self) -> None:
-        """The selectors, the page's tools and the coverage map - or, without any session, a note."""
+        """The selectors and the stored data - or, without any session, a note."""
         days = list_session_days(self.conn, self.symbols)
         if not days:
             with ui.card().classes("w-full"):
@@ -270,9 +269,8 @@ class SessionBar:
                 label="Contract", on_change=self.on_contract,
             ).props("outlined dense stack-label").classes("w-44")
             ui.space()
-            self.coverage = ui.element("div")
-            with self.coverage:
-                coverage_map(self.conn)
+            self.stored = StoredData(self.conn, collect=lambda gaps: self.collect_gaps and self.collect_gaps(gaps))
+            self.stored.build()
 
     def build_tools(self) -> None:
         """The row for the page's own controls (``tools``), where it is called - under the session's timeline."""

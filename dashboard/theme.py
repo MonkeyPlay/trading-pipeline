@@ -177,8 +177,72 @@ body {{ background:var(--tp-paper); color:var(--tp-ink); font-family:{FONT}; fon
 .tp-ctick {{ position:absolute; top:-3px; bottom:-3px; border-left:2px solid var(--tp-ink); }}
 .tp-happened {{ display:inline-flex; align-items:center; font-size:11px; font-weight:650; padding:0 6px;
   border-radius:4px; background:var(--tp-ink); color:var(--tp-sheet); line-height:17px; white-space:nowrap; }}
+/* The stored-data panel's instrument rows (components/stored_data.py). */
+.tp-sd-row {{ display:grid; grid-template-columns:170px minmax(0,1fr) 64px; gap:12px; align-items:center;
+  min-height:19px; }}
 /* Path charts in the analogue tables (components/paths.py). */
 .tp-path {{ display:block; width:100%; height:40px; }}
+
+/* The Evaluation page (views/evaluation.py): its sections, the fan experiment's rail and forward record
+   (components/fan_experiment_panel.py) and the forest plots (components/forest.py). */
+.tp-small {{ font-size:12.5px; }}
+.tp-onpage {{ display:flex; gap:16px; margin-top:8px; }}
+.tp-onpage a, .tp-sec a {{ color:var(--tp-ink); }}
+.tp-onpage a:hover {{ color:{ARM_COLOR["B"]}; }}
+.tp-sec {{ width:100%; box-sizing:border-box; padding:22px; display:flex; flex-direction:column; gap:18px;
+  background:var(--tp-sheet); border:1px solid var(--tp-rule); border-radius:10px; scroll-margin-top:72px; }}
+.tp-sec h2 {{ margin:0; font-size:21px; font-weight:700; letter-spacing:-0.01em; font-stretch:125%; line-height:1.2; }}
+.tp-sec h3 {{ margin:0; font-size:16px; font-weight:700; line-height:1.3; }}
+.tp-sec p {{ margin:0; }}
+.tp-well {{ padding:14px 16px; border-radius:8px; background:var(--tp-paper); }}
+.tp-ruled {{ border-top:1px solid var(--tp-rule); padding-top:16px; }}
+.tp-notes {{ margin:0; padding-left:18px; display:flex; flex-direction:column; gap:8px; }}
+.tp-sec .q-expansion-item.tp-inner {{ background:transparent; border:0; border-top:1px solid var(--tp-rule);
+  border-radius:0; }}
+.tp-sec .tp-inner .q-expansion-item__container > .q-item {{ padding:10px 0; min-height:44px; }}
+.tp-sec .tp-inner .q-expansion-item__container > .q-item .q-item__label {{ font-size:15px; font-stretch:100%; }}
+.tp-sec .tp-inner .q-expansion-item__content {{ padding:0 0 12px; }}
+.tp-rail {{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr));
+  gap:16px 0; }}
+.tp-step {{ display:flex; flex-direction:column; gap:2px; position:relative; padding:22px 14px 0 0; }}
+.tp-step::before {{ content:""; position:absolute; top:6px; left:0; right:0; height:2px; background:var(--tp-ink); }}
+.tp-step.now::before, .tp-step.todo::before {{ background:var(--tp-rule); }}
+.tp-stepdot {{ position:absolute; top:0; left:0; width:14px; height:14px; border-radius:7px; background:var(--tp-ink);
+  box-sizing:border-box; }}
+.tp-step.now .tp-stepdot {{ background:var(--tp-sheet); border:3px solid var(--tp-ink); }}
+.tp-step.todo .tp-stepdot {{ background:var(--tp-sheet); border:2px solid var(--tp-rule); }}
+.tp-step.todo strong {{ color:var(--tp-ink2); }}
+.tp-forest .tp-frow {{ display:grid; grid-template-columns:var(--cols); gap:14px; align-items:center; min-height:38px;
+  padding:0 10px; border-radius:6px; }}
+.tp-forest .tp-frow.primary {{ background:var(--tp-tint); }}
+.tp-forest .tp-frow.head {{ min-height:24px; }}
+.tp-forest .tp-frow.foot {{ min-height:22px; }}
+.tp-fbar {{ position:relative; height:30px; }}
+.tp-fbar .zero {{ position:absolute; top:0; bottom:0; border-left:1px solid var(--tp-ink2); }}
+.tp-ivl {{ position:absolute; top:50%; height:6px; margin-top:-3px; border-radius:3px; box-sizing:border-box; }}
+.tp-ivl.solid {{ background:var(--tp-ink); }}
+.tp-ivl.open {{ border:1.5px solid var(--tp-ink2); background:var(--tp-sheet); }}
+.tp-pt {{ position:absolute; top:50%; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:5px;
+  background:var(--tp-ink); box-shadow:0 0 0 2px var(--tp-sheet); }}
+.tp-frow.primary .tp-pt {{ box-shadow:0 0 0 2px var(--tp-tint); }}
+.tp-faxis {{ position:relative; height:18px; }}
+.tp-faxis span {{ position:absolute; transform:translateX(-50%); white-space:nowrap; }}
+.tp-fsides {{ display:flex; justify-content:space-between; }}
+.tp-fwd {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:16px; margin-top:12px; }}
+.tp-dl {{ margin:0; display:grid; grid-template-columns:1fr auto; gap:4px 12px; }}
+.tp-dl dd {{ margin:0; text-align:right; }}
+.tp-dl .strong {{ font-weight:650; }}
+.tp-kbar {{ display:grid; grid-template-columns:104px minmax(0,1fr) 28px; gap:10px; align-items:center; }}
+.tp-kbar > span:last-child {{ text-align:right; }}
+.tp-kbar .track {{ height:8px; border-radius:3px; background:var(--tp-tint); }}
+.tp-kbar .track > span {{ display:block; height:8px; border-radius:3px; background:var(--tp-ink); }}
+.tp-lat {{ position:relative; height:18px; margin:12px 0 6px; border-radius:4px; background:var(--tp-tint);
+  overflow:hidden; }}
+.tp-lat > span {{ position:absolute; top:0; bottom:0; }}
+.tp-lat .feed {{ left:0; opacity:.55;
+  background:repeating-linear-gradient(135deg, var(--tp-signal) 0 2px, transparent 2px 6px); }}
+.tp-lat .own {{ background:var(--tp-ink); }}
+.tp-lat .dl {{ top:-2px; bottom:-2px; border-left:2px solid var(--tp-ink); }}
 
 /* The session timeline (components/session_timeline.py). */
 .tp-tl {{ position:relative; min-width:980px; height:150px; font-size:12.5px; line-height:1.3; }}

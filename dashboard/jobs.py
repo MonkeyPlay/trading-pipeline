@@ -107,6 +107,15 @@ def collector_command(days: int, trailing_refresh: bool = True, workers: int = 1
             + (["--workers", str(int(workers))] if workers > 1 else []))
 
 
+def collector_window_command(symbols: List[str], start, end, journal: bool = True) -> List[str]:
+    """The collector for ``symbols`` over the trading days ``start`` to ``end`` only (a gap the Stored data panel
+    picked): their missing and incomplete days, no refetch of complete ones; ``journal`` brings the NQ journal up
+    to date after it."""
+    return ([sys.executable, "-m", "collector.ib_collector", "--symbol", ",".join(symbols), "--start", str(start),
+             "--end", str(end), "--no-trailing-refresh", "--host", Config.IB_HOST, "--port", str(Config.IB_PORT),
+             "--client-id", str(Config.IB_CLIENT_ID)] + ([] if journal else ["--no-journal"]))
+
+
 def forecaster_command() -> List[str]:
     return [sys.executable, "-m", "collector.ib_collector", "--journal-only"]
 

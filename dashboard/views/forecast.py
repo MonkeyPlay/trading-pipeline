@@ -74,9 +74,10 @@ _ARMS = {v: f"{ml.ARM_NAMES[a]} (arm {a})" for a, v in ml.ARMS.items()}
 # all-pairs against the sheet: CVD dE 11.0, normal-vision dE 19.3). P, plum, is at the CVD floor against B, so it is
 # used only where its label is shown beside it (the arm tiles), never in an overlaid chart.
 _ARM_COLOR = theme.ARM_COLOR
-_SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
-          "direction_15m": "15-min direction", "session_type_rth": "Session type", "close_direction_rth": "RTH close",
-          "first_level_tested": "First level"}
+# The targets' short names, here and on the Evaluation page.
+TARGET_SHORT = {"opening_bias_30m": "30-min bias", "first_move_5m": "First move", "opening_type_15m": "Opening type",
+                "direction_15m": "15-min direction", "session_type_rth": "Session type",
+                "close_direction_rth": "RTH close", "first_level_tested": "First level"}
 _EMPTY_SPEC = {"candles": [], "volume": [], "series": {}, "bands": {}, "legend": []}
 
 
@@ -608,7 +609,7 @@ class ForecastPanel:
             classes = len(defs.TARGETS[t]["labels"]) if t in defs.TARGETS else None
             with ui.element("div").classes("tp-dotrow"):
                 with ui.column().classes("gap-0"):
-                    ui.label(_SHORT[t]).classes("text-sm font-semibold")
+                    ui.label(TARGET_SHORT[t]).classes("text-sm font-semibold")
                     if classes:
                         ui.label(f"{classes} classes").classes("text-xs").style(_MUTED)
                 with ui.element("div").classes("tp-track"):
@@ -668,7 +669,7 @@ class ForecastPanel:
             spec = defs.TARGETS.get(t, {})
             with ui.column().classes("w-full gap-1 pt-2 mt-1").style("border-top:1px solid var(--tp-rule)"):
                 with ui.row().classes("items-baseline gap-3"):
-                    ui.label(_SHORT[t]).classes("text-sm font-semibold")
+                    ui.label(TARGET_SHORT[t]).classes("text-sm font-semibold")
                     if spec.get("window_et"):
                         ui.label(f"{spec['window_et'][0]} to {spec['window_et'][1]}").classes("text-xs").style(_MUTED)
                 for cls in spec.get("labels") or list(values):
@@ -713,7 +714,7 @@ class ForecastPanel:
                          f"{'+' if vs >= 0 else '−'}{abs(100 * vs):.1f} points").classes("py-2").style(
                     rule + (f";{_MUTED}" if arm == BENCHMARK or vs is None else ""))
         if g["ungraded"]:
-            ui.label("Not graded: " + ", ".join(f"{_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(
+            ui.label("Not graded: " + ", ".join(f"{TARGET_SHORT[t]} ({why})" for _, t, why in g["ungraded"])).classes(
                 "text-xs").style(_MUTED)
 
     def _render_outcome(self) -> None:

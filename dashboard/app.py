@@ -95,6 +95,7 @@ def chrome(active: str, conn, day: Optional[str] = None, symbol: Optional[str] =
         panel.show_preview = lambda: ui.navigate.to(f"/?{bar.query()}&view=preview")
         panel.build()
         status = ui.label(_db_status(conn)).classes("text-xs").style(theme.MUTED)
+    bar.collect_gaps = panel.collect_gaps                  # the Stored data panel's gaps, collected again
     bar.build()
     if bar.date is not None:                               # the session's timeline, under the bar
         timeline = SessionTimeline(conn, bar)
