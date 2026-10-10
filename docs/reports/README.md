@@ -6,6 +6,9 @@
 | `experiment_<name>.md` / `.csv` | A registered forecast experiment (guideline stage 4): coverage, the primary paired difference with its bootstrap interval, every target per arm, where the differences sit (class, month, volatility), reliability; per case and target in the CSV | `scripts/nq_journal.py experiment-score --name <name>` |
 | `ml_pooled_split_v1.md`, `ml_pooled_split_v1/` | The pooled model's inner tuning split corrected (session dates, embargo, NQ objective) and the affected development results rerun before / after; ml_study_v1's files hashed and left unchanged | `scripts/ml_pooled_split.py all` |
 | `ml_development_dates.md` / `.json` | The ML development comparison under the session-date tuning split (`ml_development.md` is the 2026-10-09 run, reproducible with `--legacy-row-split`) | `scripts/nq_journal.py ml-dev-eval` |
+| `ml_bundle_eval_v1.md`, `ml_bundle_eval_v1/` | The seven-target bundles' development evaluation: per target and arm against A and B, symmetric comparators, ablations, claims at the Bonferroni level, sample sizes (not run yet) | `scripts/nq_journal.py ml-bundle-eval predict`, then `score` |
+| `ml_bundle_forward_proposal.md` | An unregistered proposal for a prospective test of the bundles: claims, multiplicity, timing, sample sizes | - |
+| `deployment_plan_ml_bundles.md` | The deployment plan for the ML redesign (no migration; shadow bundles; rollback) | - |
 | `label_disagreement_v5_vs_nq_v2.md` / `.csv` | The old v5 labels (`nq_labels_v5_candidate`) against the NQ-v2 labels, session by session, with the definition behind every difference (guideline stage 1E) | `scripts/label_disagreement_report.py` |
 
 ## Regenerating the disagreement report

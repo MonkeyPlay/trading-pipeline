@@ -34,10 +34,12 @@ BENCHMARK = "A"
 
 
 def current_runs(runs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Per arm letter the newest issued run of ``runs`` (one session's, newest first)."""
+    """Per arm key the newest issued run of ``runs`` (one session's, newest first) - A, B, the v1 models and the
+    seven-target bundles (contracts/nq_ml_bundle.display_arms)."""
+    from contracts import nq_ml_bundle as mb
     out: Dict[str, Dict[str, Any]] = {}
     for r in runs:
-        arm = ml.arm_of(r["algorithm_version"])
+        arm = mb.display_arm_of(r["algorithm_version"])
         if arm and arm not in out and r["lifecycle_status"] == "issued":
             out[arm] = r
     return out

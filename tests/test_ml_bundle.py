@@ -8,7 +8,6 @@ snapshots, outcomes and A/B runs - in a disposable PostgreSQL + TimescaleDB data
 (TEST_DATABASE_URL), which they RESET, and train the bundles into a temporary directory.
 """
 
-import math
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from fractions import Fraction
@@ -181,6 +180,37 @@ def test_first_level_candidates_the_contract_rules_out_get_exactly_zero():
     assert P[0, j] == 0.0 and abs(P.sum() - 1) < 1e-12 and (np.delete(P[0], j) > 0).all()
     ex = mbun.exact(P[0], mb.CLASSES["first_level_tested"])
     assert ex["premarket_high"] == "0/1000000" and sum(Fraction(v) for v in ex.values()) == 1
+
+
+def test_exact_fractions_never_break_a_tie_or_move_a_structural_zero():
+    """A symmetric head's equal bullish and bearish probabilities stay exactly equal (an ambiguous prediction, never a
+    class made by rounding); a zero stays zero; the fractions sum to 1 and stay within a millionth or two."""
+    from forecaster import ml_bundle as mbun
+    cls = mb.CLASSES["direction_15m"]
+    tie = mbun.exact([0.4013605442176871, 0.4013605442176871, 0.19727891156462582], cls)
+    assert tie["bullish"] == tie["bearish"] and sum(Fraction(v) for v in tie.values()) == 1
+    low = mbun.exact([0.1, 0.1, 0.8], cls)
+    assert low["bullish"] == low["bearish"] and sum(Fraction(v) for v in low.values()) == 1
+    assert mbun.exact([1, 1, 1], cls) == {c: "1/3" for c in cls}          # all tied: exact thirds
+    assert mbun.exact([0.5, 0.5, 0.0], cls) == {"bullish": "1/2", "bearish": "1/2", "neutral_band": "0/1000000"}
+    rng = np.random.default_rng(0)
+    for _ in range(2000):
+        k = int(rng.integers(2, 11))
+        p = rng.dirichlet(np.ones(k))
+        if rng.random() < 0.3:
+            p[int(rng.integers(0, k))] = 0.0
+        if rng.random() < 0.3 and k >= 3:
+            p[1] = p[0]
+        p = p / p.sum()
+        names = [str(i) for i in range(k)]
+        ex = mbun.exact(p, names)
+        f = [Fraction(ex[n]) for n in names]
+        assert sum(f) == 1 and all(x >= 0 for x in f)
+        assert all((f[i] == 0) == (p[i] == 0) for i in range(k))
+        assert max(abs(float(f[i]) - p[i]) for i in range(k)) <= 2.5e-6
+        top = [i for i in range(k) if p[i] == p.max()]
+        assert len({f[i] for i in top}) == 1                    # the top tie (the predicted class) never broken
+        assert max(f) == f[top[0]]
 
 
 def test_a_pooled_head_without_enough_other_market_rows_is_never_shown_as_pooled():
@@ -558,3 +588,61 @@ def test_the_bundle_evaluation_freezes_predictions_then_scores_every_target_agai
         f.write("{}\n")
     with pytest.raises(RuntimeError, match="changed after the predict stage"):
         ev.score(conn, out, None, progress=lambda *a: None)
+
+
+@needs_db
+def test_the_summary_and_grading_show_every_bundle_target_apart_from_the_forecast_in_force(world):
+    from database import journal_store as store
+    from forecaster import forecast_summary as fsum
+    from forecaster import ml_bundle_service as mbs
+    from forecaster.grading import compare, current_runs
+    conn = world["conn"]
+    day = world["pool"][-1]
+    snap = _snap(conn, day)
+    for v in mb.VERSIONS.values():
+        mbs.issue(conn, snap, ml.PROFILE, "historical_replay", v)
+    s = fsum.build(conn, day)
+    assert set(s["bundles"]) == {"N7", "M7", "P7"}
+    for arm, b in s["bundles"].items():
+        assert b["shadow"] and set(b["targets"]) == set(mb.TARGETS) and b["sha256"]
+        for t, e in b["targets"].items():
+            if e["probabilities"]:
+                assert set(e["probabilities"]) == set(mb.CLASSES[t]) and e["label_coverage"]["labelled"] > 0
+                if "A" in s["arms"] and (store.get_forecast_run(conn, next(
+                        r["run_id"] for r in store.list_forecast_runs(conn, day, day, ml.PROFILE, "historical_replay")
+                        if r["algorithm_version"] == fc.PRIOR_VERSION))["predictions"].get(t) or {}).get(
+                        "distribution"):
+                    assert set(e["minus_A_pp"]) == set(mb.CLASSES[t])
+            else:
+                assert e["reason"]
+    assert all(v["source"] in (None, "B (analogues)", "A (frequencies)") for v in s["sources"].values())
+    text = " ".join(fsum.lines(s))
+    assert "N7 ML NQ-only (7 targets, shadow) [shadow: model output only, never in force]" in text
+    runs = store.list_forecast_runs(conn, day, day, ml.PROFILE)
+    cur = current_runs(runs)
+    issued = {mb.display_arm_of(r["algorithm_version"]) for r in runs if r["lifecycle_status"] == "issued"}
+    assert {"N7", "M7", "P7"} & issued <= set(cur)
+    full = {a: store.get_forecast_run(conn, r["run_id"]) for a, r in cur.items()}
+    cmp = compare(full)
+    assert all(set(cmp["arms"][a]["cells"]) == set(mb.TARGETS) for a in cmp["arms"])
+
+
+@needs_db
+def test_the_release_check_verifies_bundle_artifacts_and_registered_definitions(world, capsys, tmp_path, monkeypatch):
+    import importlib.util
+    import shutil
+    from forecaster import ml_model as mm
+    spec = importlib.util.spec_from_file_location("release_check", os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "release_check.py"))
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    assert rc.check_artifacts(DSN) == 0
+    out = capsys.readouterr().out
+    assert all(f"{v}: " in out and "= registered" in out for v in mb.VERSIONS.values())
+    root = str(tmp_path / "models")
+    shutil.copytree(world["root"], root)
+    with open(os.path.join(root, mb.VERSIONS["M"], "bundle.joblib"), "ab") as f:
+        f.write(b"tampered")
+    monkeypatch.setattr(mm, "MODELS_DIR", root)
+    assert rc.check_artifacts(DSN) == 1
+    assert "nq_ml_bundle_multi_v1: bundle.joblib hashes to" in capsys.readouterr().out

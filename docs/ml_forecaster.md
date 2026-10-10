@@ -187,6 +187,10 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
   instruments, loaded in parallel threads. The prediction itself takes milliseconds, and one
   build serves all three models.
 
+**Seven targets.** These v1 models forecast direction_15m only. The seven-target bundles - three arms
+with a head per P1 target, in shadow beside them - are [ml_bundles.md](ml_bundles.md); they do not
+change these models, their artifacts or `p1_ml_forward_v2`.
+
 **Why the models look like A** is the subject of a separate study,
 [reports/ml_study.md](reports/ml_study.md) (`ml_study_v1`, `scripts/ml_study.py`). It covers:
 
@@ -256,7 +260,12 @@ commit, deployed, which puts it first in the delivery order.
 
 - **Auto:** each journal step issues the ML forecasts of every snapshot after the models'
   training window ([forecaster/ml_service.py](../forecaster/ml_service.py)).
-  - **When:** once the context instruments' cutoff bars are in, or 30 minutes after the cutoff.
+  - **When:** each model once its own inputs are ready. N and P read NQ's own data (already in the
+    snapshot, which waited for NQ's cutoff bar), so they issue at once, from NQ-only features; M waits
+    until the context instruments' cutoff bars are in, or 30 minutes after the cutoff. One model's
+    wait or exception never holds up another (2026-10-10 review; before it every model waited for
+    the context bars). N's and P's probabilities are unchanged by this - their features are NQ's
+    own - but their runs' evidence now lists only NQ under the instruments.
   - **How often:** once per snapshot, profile, mode and artifact; a repeat returns the stored
     run.
   - **Outcomes:** issued; unavailable with the reason (in-sample, no T, a required instrument

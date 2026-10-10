@@ -46,6 +46,19 @@ ARM_OF = {v: k for k, v in VERSIONS.items()}
 DISPLAY_ARMS = {"N7": VERSIONS["N"], "M7": VERSIONS["M"], "P7": VERSIONS["P"]}
 DISPLAY_NAMES = {"N7": "ML NQ-only, 7 targets", "M7": "ML multi-instrument, 7 targets",
                  "P7": "ML pooled, 7 targets"}
+DISPLAY_ALL_NAMES = {**ml.ARM_NAMES, **DISPLAY_NAMES}
+
+
+def display_arms() -> Dict[str, str]:
+    """Every arm the Forecast page and the grading show: A, B, the v1 models and the bundles (arm key -> version)."""
+    return {**ml.ARMS, **DISPLAY_ARMS}
+
+
+def display_arm_of(algorithm: str):
+    """The display arm key of an algorithm version (A, B, N, M, P, N7, M7, P7), None for another."""
+    return next((a for a, v in display_arms().items() if v == algorithm), None)
+
+
 ARM_LABELS = {VERSIONS["N"]: "ML NQ-only (7 targets, shadow)", VERSIONS["M"]: "ML multi-instrument (7 targets, shadow)",
               VERSIONS["P"]: "ML pooled NQ+ES+RTY (7 targets, shadow)"}
 PROBABILITY_DENOMINATOR = ml.PROBABILITY_DENOMINATOR

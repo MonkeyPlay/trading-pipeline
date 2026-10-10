@@ -11,9 +11,11 @@ it found and exits non-zero when the deployment must not go ahead:
   writers     Auto mode's lock (data/auto_mode.lock) is not held; no dashboard, collector, journal, fan or study
               process runs from the production checkout; no other database connection is active or idle in a
               transaction (idle connections are listed, not refused)
-  artifacts   every ML model the code knows (contracts/nq_ml.ALGORITHMS): its file hashes to its manifest's sha256,
-              which equals its registered definition's; the forward evaluation in force (contracts/nq_ml.FORWARD)
-              pins exactly these artifacts and this feature version
+  artifacts   every ML model the code knows (contracts/nq_ml.ALGORITHMS) and every seven-target bundle
+              (contracts/nq_ml_bundle.VERSIONS): its file hashes to its manifest's sha256, which equals its registered
+              definition's; every ML definition already registered (features, schemas, market labels, algorithms)
+              has the code's definition hash; the forward evaluation in force (contracts/nq_ml.FORWARD) pins exactly
+              these artifacts and this feature version
   schema      the database's schema version against the code's latest migration: newer refuses (older code);
               older lists the pending migrations a deployment would apply
 """
@@ -146,6 +148,33 @@ def check_artifacts(db: str) -> int:
                                 f"{((reg.get('artifact') or {}).get('sha256') or '?')[:12]}")
             else:
                 print(f"{version}: {sha[:12]} = manifest" + (" = registered" if reg is not None else " (not registered)"))
+        from contracts import nq_ml_bundle as mb
+        from forecaster import ml_bundle as mbun
+        for version in mb.VERSIONS.values():
+            man = mbun.manifest(version)
+            reg = registered(version)
+            path = os.path.join(mbun.artifact_dir(version), "bundle.joblib")
+            if man is None or not os.path.exists(path):
+                if reg is not None:              # shadow: nothing depends on it, so a removal is noted, not refused
+                    print(f"{version}: registered but not installed in {mm.MODELS_DIR} - a shadow bundle, no "
+                          "forecast or registered evaluation depends on it (stopped by removing its artifact?)")
+                else:
+                    print(f"{version}: no artifact, not registered - nothing to check")
+                continue
+            sha = _sha(path)
+            if sha != man["sha256"]:
+                problems.append(f"{version}: bundle.joblib hashes to {sha[:12]}, its manifest says {man['sha256'][:12]}")
+            elif reg is not None and (reg.get("artifact") or {}).get("sha256") != sha:
+                problems.append(f"{version}: installed {sha[:12]} is not the registered "
+                                f"{((reg.get('artifact') or {}).get('sha256') or '?')[:12]}")
+            else:
+                print(f"{version}: {sha[:12]} = manifest" + (" = registered" if reg is not None else " (not registered)"))
+        for rec in mm.records() + mbun.records():         # a registered definition never changes under its name
+            row = c.execute("SELECT definition_hash FROM journal.definition_versions WHERE version = %s;",
+                            (rec["version"],)).fetchone()
+            if row is not None and row[0] != rec["definition_hash"]:
+                problems.append(f"{rec['version']}: the code's definition hashes to {rec['definition_hash'][:12]}, the "
+                                f"registered one to {row[0][:12]} - a changed definition needs a new name")
         forward = registered(ml.FORWARD["name"])
         if forward is not None:
             for arm, pin in (forward.get("pins") or {}).items():

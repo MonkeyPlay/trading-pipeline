@@ -427,7 +427,7 @@ def _iv(iv) -> str:
 
 
 def markdown(res: Dict[str, Any], manifest: Dict[str, Any]) -> str:
-    lv95, lvb = "0.9500", f"{BONFERRONI:.4f}"
+    lv95 = "0.9500"
     lines = [f"# Seven-target ML bundles: development evaluation ({VERSION})", "",
              "**Development data, not a test.** Every session was inspected before. A claim met here is a candidate "
              "for a separately reviewed prospective protocol (ml_bundle_forward_proposal.md), never a promotion.", "",

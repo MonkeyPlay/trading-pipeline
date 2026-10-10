@@ -34,7 +34,6 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from contracts import nq_forecast as fc

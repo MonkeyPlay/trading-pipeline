@@ -38,6 +38,8 @@ SIGNAL = "#C8321F"    # now, waiting for bars, anything that costs money
 AMBER = "#A35A00"     # a warning that is not an error (late, development data)
 
 ARM_COLOR = {"A": INK2, "B": "#3346B8", "N": "#A35A00", "M": "#00806A", "P": "#8E3A8A"}
+# The seven-target bundles share their arm's hue; their two-character marks (N7, M7, P7) tell them apart.
+ARM_COLOR.update({"N7": ARM_COLOR["N"], "M7": ARM_COLOR["M"], "P7": ARM_COLOR["P"]})
 
 # Lines on the chart. The moving averages keep the TradingView script's hues (TEMA purple, the trend EMA blue,
 # the trigger EMA orange), darkened to read on paper; the levels keep theirs (previous session sky, overnight

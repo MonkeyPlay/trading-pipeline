@@ -380,13 +380,34 @@ def brier(P: np.ndarray, y: Sequence[str], classes: Sequence[str]) -> np.ndarray
 
 
 def exact(probs: Sequence[float], classes: Sequence[str]) -> Dict[str, str]:
-    """``{class: "n/1000000"}`` summing exactly to 1; the largest class takes the rounding remainder, an exact zero stays
+    """``{class: "n/1000000"}`` summing exactly to 1, without ever breaking a tie or creating a class: every class gets
+    floor(p x 1,000,000) and the remaining units go one each to the classes with the largest fractional parts - a
+    group of exactly equal probabilities only as a whole (equal probabilities keep equal fractions, so an exact tie
+    stays an ambiguous prediction); what no whole group can take goes to the smallest non-zero classes outside the
+    top. Every possible class tied: exactly 1/k each. An exact zero (a class the label contract rules out) stays
     zero."""
     d = mb.PROBABILITY_DENOMINATOR
     p = np.clip(np.asarray(probs, dtype=float), 0, None)
     p = p / p.sum()
-    units = [int(round(x * d)) for x in p]
-    units[int(np.argmax(p))] += d - sum(units)
+    positive = [j for j in range(len(p)) if p[j] > 0]
+    if len({float(p[j]) for j in positive}) == 1:              # every possible class tied: exactly 1/k each
+        return {c: (f"1/{len(positive)}" if p[j] > 0 else f"0/{d}") for j, c in enumerate(classes)}
+    units = [int(math.floor(x * d)) for x in p]
+    rem = d - sum(units)
+    groups: Dict[float, List[int]] = {}
+    for j, x in enumerate(p):
+        if x > 0:
+            groups.setdefault(float(x), []).append(j)
+    for value in sorted(groups, key=lambda v: (-(v * d - math.floor(v * d)), -v)):
+        if rem >= len(groups[value]):
+            for j in groups[value]:
+                units[j] += 1
+            rem -= len(groups[value])
+    if rem:
+        top = groups[max(groups)]
+        rest = sorted((j for j in positive if j not in top), key=lambda j: (p[j], j))
+        for k in range(rem):
+            units[rest[k % len(rest)]] += 1
     return {c: f"{u}/{d}" for c, u in zip(classes, units)}
 
 

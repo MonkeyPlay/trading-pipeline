@@ -6,7 +6,8 @@ in a NiceGUI dashboard drawn with TradingView's Lightweight Charts. Besides Inte
 Brokers, one outside service is used, by the NQ pre-open journal
 ([docs/nq_prompt_v2.md](docs/nq_prompt_v2.md)): SEC EDGAR, for the earnings filings behind
 Event Risk. Everything else - including the scikit-learn forecaster of NQ's 15-minute
-direction ([docs/ml_forecaster.md](docs/ml_forecaster.md)) - is computed locally.
+direction ([docs/ml_forecaster.md](docs/ml_forecaster.md)) and the seven-target ML bundles in
+shadow ([docs/ml_bundles.md](docs/ml_bundles.md)) - is computed locally.
 
 Twelve instruments are collected out of the box:
 
@@ -318,7 +319,8 @@ Pages:
     instruments the multi-instrument model used and what they showed - stored numbers only
     ([forecaster/forecast_summary.py](forecaster/forecast_summary.py)). **Arms for the day**: one
     tile per arm - A prior (the benchmark), B baseline, N, M and P the ML forecasts (NQ-only,
-    multi-instrument, pooled; experimental) - saying whether it ran (issued, unavailable and why,
+    multi-instrument, pooled; experimental), N7, M7 and P7 the seven-target bundles (one head per
+    P1 target; shadow: shown, never in force) - saying whether it ran (issued, unavailable and why,
     failed, no run), whether a run is a reconstruction (issued after its replay deadline, the
     cutoff + 35 minutes: never in force, never a forward case) and what it rests on; the arm
     shown is raised and a click shows another. Below the tiles ([forecaster/grading.py](forecaster/grading.py)):
@@ -661,7 +663,7 @@ name contains `test`; they reset it).
 | [dashboard/](dashboard/) | NiceGUI app: the session bar on every page, Session Explorer (with the analogues and the forecast), Evaluation; the Lightweight Charts component; Update data (the collector, forecaster and live capture as jobs) |
 | [scripts/](scripts/) | The journal CLI, the fan CLI, daily runner, DB backup, report generators |
 | [tests/](tests/) | Pure and database tests for all of the above |
-| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [the NQ direction forecaster](docs/ml_forecaster.md), [reports](docs/reports/) |
+| [docs/](docs/) | [Data store & incremental collection](docs/data_store.md), [the NQ prompt-v2 journal](docs/nq_prompt_v2.md), [the benchmark fan](docs/fan.md), [the intermarket fan experiment](docs/fan_experiment.md), [the direction experiment](docs/fan_direction.md), [Conditional EMA Direction](docs/fan_cond_ema.md), [Intermarket Direction](docs/fan_im_direction.md), [first-hit probabilities](docs/fan_first_hit.md), [RTH analogues](docs/rth_analogues.md), [the NQ direction forecaster](docs/ml_forecaster.md), [the seven-target ML bundles](docs/ml_bundles.md), [reports](docs/reports/) |
 
 ## Database
 

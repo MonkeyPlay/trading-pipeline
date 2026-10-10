@@ -16,7 +16,12 @@ did not produce.
                      with their market times and ages, what was observed in each (its
                      moves in its own units), the data cutoff, the issue times, the model
                      versions and artifact hashes, and for every target the source of the
-                     forecast shown - the ML forecast covers direction_15m only, B the rest
+                     forecast shown - the ML forecast covers direction_15m only, B the rest;
+                     and the seven-target bundles (contracts/nq_ml_bundle.py, shadow): per
+                     bundle and target its status or reason, probabilities, class, head
+                     family and differences from A and B in percentage points, the first
+                     level's frozen price and the artifact - model output only, kept apart
+                     from the forecast in force (a bundle is never a source)
   lines(summary)     the same as plain sentences - each states a measurement or a stored
                      field, never a cause
 """
@@ -29,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from contracts import nq_forecast as fc
 from contracts import nq_ml as ml
+from contracts import nq_ml_bundle as mb
 from contracts import nq_prompt_v2 as defs
 from database import journal_store as store
 from features import calendar as cal
@@ -106,6 +112,7 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
         src = (delivery["algorithm"] if covered and t == ml.TARGET else
                fc.BASELINE_VERSION if "B" in runs else fc.PRIOR_VERSION if "A" in runs else None)
         out["sources"][t] = {"source": ml.ARM_LABELS.get(src) if src else None, "window": WINDOW[t]}
+    out["bundles"] = _bundles(conn, day, profile, mode, runs)
     if "B" in runs:
         refs = (runs["B"].get("outputs") or {}).get("reference_targets") or {}
         t = ((runs["B"].get("evidence") or {}).get("thresholds") or {}).get("T")
@@ -123,6 +130,37 @@ def build(conn, day: str, profile: str = ml.PROFILE, mode: str = "historical_rep
                               for s, st in (ev.get("instruments") or {}).items()}
         out["observed"] = ev.get("observations")
         out["as_of"] = ev.get("as_of")
+    return out
+
+
+def _bundles(conn, day: str, profile: str, mode: str, runs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """The newest run of each seven-target bundle (shadow): per target status, class, probabilities, reason, head
+    family and differences from A's and B's distributions of the same target."""
+    out: Dict[str, Any] = {}
+    for r in store.list_forecast_runs(conn, day, day, profile, mode):     # newest first within the session
+        arm = mb.display_arm_of(r["algorithm_version"])
+        if arm not in mb.DISPLAY_ARMS or arm in out:
+            continue
+        run = store.get_forecast_run(conn, r["run_id"])
+        heads = (run.get("outputs") or {}).get("heads") or {}
+        targets = {}
+        for t in mb.TARGETS:
+            p = (run.get("predictions") or {}).get(t) or {}
+            d = _dist(run, t)
+            e = {"status": p.get("status", "missing"), "class": p.get("predicted_label"), "probabilities": d,
+                 "reason": p.get("reason"), "family": (heads.get(t) or {}).get("family"),
+                 "label_coverage": None if not p else {"labelled": p.get("eligible"),
+                                                       "without_label": p.get("without_label")}}
+            for base in ("A", "B"):
+                bd = _dist(runs.get(base), t)
+                if d and bd:
+                    e[f"minus_{base}_pp"] = {c: round(100 * (d[c] - bd[c]), 1) for c in mb.CLASSES[t]}
+            targets[t] = e
+        out[arm] = {"version": run["algorithm_version"], "label": mb.ARM_LABELS[run["algorithm_version"]],
+                    "status": run["lifecycle_status"], "reason": run["failure_reason"],
+                    "issued_at": _et(run["issued_at"]), "reconstruction": ml.reconstruction(run), "shadow": True,
+                    "sha256": ((run.get("outputs") or {}).get("model") or {}).get("sha256"),
+                    "first_level_price": (run.get("outputs") or {}).get("first_level_price"), "targets": targets}
     return out
 
 
@@ -185,4 +223,24 @@ def lines(s: Dict[str, Any]) -> List[str]:
     covered = [t for t, v in s["sources"].items() if v["source"]]
     if covered:
         out.append("Sources: " + "; ".join(f"{t} - {s['sources'][t]['source']}" for t in covered) + ".")
+    for arm, b in (s.get("bundles") or {}).items():
+        head = (f"{arm} {b['label']} [shadow: model output only, never in force]"
+                + (" [reconstruction: issued after the replay deadline]" if b["reconstruction"] else ""))
+        if b["status"] != "issued":
+            out.append(f"{head}: {b['status']}" + (f" - {b['reason']}" if b["reason"] else "") + ".")
+            continue
+        parts = []
+        for t, e in b["targets"].items():
+            if not e["probabilities"]:
+                parts.append(f"{t} unavailable ({str(e['reason']).split(':')[0]})")
+                continue
+            top = max(e["probabilities"], key=e["probabilities"].get)
+            txt = f"{t} {defs.display(t, top, 'predicted')} {100 * e['probabilities'][top]:.0f} %"
+            if e.get("minus_A_pp"):
+                txt += f" ({e['minus_A_pp'][top]:+.1f} pp vs A"
+                txt += f", {e['minus_B_pp'][top]:+.1f} pp vs B)" if e.get("minus_B_pp") else ")"
+            parts.append(txt + (f" [{e['family']}]" if e.get("family") else ""))
+        out.append(f"{head}: " + "; ".join(parts) + (f"; first level price {b['first_level_price']}"
+                                                     if b.get("first_level_price") is not None else "")
+                   + f"; issued {b['issued_at']}; artifact {str(b['sha256'])[:12]}.")
     return out

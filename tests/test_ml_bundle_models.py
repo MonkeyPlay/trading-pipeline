@@ -7,7 +7,6 @@ a planted transferable signal helps P. These verify capability on synthetic data
 """
 
 import io
-import json
 import math
 from datetime import date, timedelta
 
