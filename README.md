@@ -708,7 +708,8 @@ arms (A grey and dashed, B blue, N amber, M teal, P plum) and the levels. Proven
 page: observed is solid, recorded a solid line, recomputed dashed and hollow, a forecast grey fog, and a time
 the clock has passed but the delayed feed has not is hatched red. Every colour is named in `theme.py`; the
 pages use them as CSS variables (`var(--tp-ink)`), the charts as the values (`theme.CHART`). The typeface,
-Archivo, comes from Google Fonts; offline the pages fall back to the system sans. Under the session bar,
+Archivo, is vendored at `dashboard/static/fonts` (SIL Open Font License, `OFL.txt` beside it) and served by
+the dashboard itself, so the pages still load nothing from the network. Under the session bar,
 the **session timeline** ([dashboard/components/session_timeline.py](dashboard/components/session_timeline.py))
 runs from the 18:00 Globex open to the close: how far the stored bars reach, the clock while the session is in
 progress, and which targets are observed, waiting for their bars or still forecasts.

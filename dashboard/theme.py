@@ -17,6 +17,8 @@ Candles are ink: an up bar hollow, a down bar solid, which leaves colour free fo
 
 from __future__ import annotations
 
+import os
+
 # ---------------------------------------------------------------------------
 # Palette (day). Muted text is 5.8:1 on paper; the arm colours were validated
 # with the dataviz palette checks against SHEET: B, N and M all pairs (worst
@@ -59,8 +61,11 @@ NOT_COMPARABLE = "rgba(78, 92, 102, 0.08)"
 
 FONT = "'Archivo', 'Segoe UI', system-ui, sans-serif"
 # Archivo carries a width axis: expanded (125 %) for dates, times and titles, semi-condensed (85 %) for dense
-# tables. Fetched from Google Fonts; offline, the page falls back to the system sans.
-FONT_URL = "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap"
+# tables. Its variable font (weight 100-900, width 62-125 %) is vendored in static/fonts under the SIL Open Font
+# License 1.1 (OFL.txt beside it) and served by the dashboard itself at FONT_ROUTE (app.py), so the pages load
+# nothing from the network.
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
+FONT_ROUTE = "/static/fonts"
 
 # Inline-style snippets for the pages.
 MUTED = "color:var(--tp-ink2)"
@@ -99,6 +104,8 @@ CHART = {
 ECHART_TOOLTIP = {"backgroundColor": SHEET, "borderColor": RULE, "textStyle": {"color": INK, "fontSize": 11}}
 
 _CSS = f"""
+@font-face {{ font-family:'Archivo'; src:url('{FONT_ROUTE}/Archivo-Variable.woff2') format('woff2');
+  font-weight:100 900; font-stretch:62% 125%; font-style:normal; font-display:swap; }}
 :root {{
   --tp-paper:{PAPER}; --tp-sheet:{SHEET}; --tp-ink:{INK}; --tp-ink2:{INK2}; --tp-rule:{RULE};
   --tp-tint:{TINT}; --tp-signal:{SIGNAL}; --tp-amber:{AMBER};
@@ -154,8 +161,6 @@ def apply() -> None:
     """The theme for the page being built: fonts, the CSS variables and Quasar's brand colours."""
     from nicegui import ui
 
-    ui.add_head_html(f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-                     f'<link rel="stylesheet" href="{FONT_URL}">')
     ui.add_css(_CSS)
     ui.colors(primary=INK, secondary=INK2, accent=ARM_COLOR["B"], dark=INK, positive=ARM_COLOR["M"],
               negative=SIGNAL, info=ARM_COLOR["B"], warning=AMBER)

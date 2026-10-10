@@ -35,6 +35,9 @@ from dashboard.views.forecast import run_day
 from database.connection import describe_dsn, get_db_connection, init_database
 from database.migrations import get_user_version
 
+# The vendored typeface (dashboard/theme.py), served by the dashboard itself.
+app.add_static_files(theme.FONT_ROUTE, theme.FONT_DIR)
+
 _connection = None
 
 
