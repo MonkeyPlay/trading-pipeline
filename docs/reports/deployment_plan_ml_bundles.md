@@ -3,12 +3,12 @@
 Prepared 2026-10-10 for a later, separately undertaken deployment. **Nothing has been deployed.** It replaces no
 part of [deployment_plan_2026-10-10.md](deployment_plan_2026-10-10.md), whose record of the 0031 deployment stands.
 
-**What this deploys** (four reviewable commits on `claude/eager-ritchie-xgxvch`, see the final handoff for IDs):
+**What this deploys** (four reviewable commits on `claude/eager-ritchie-xgxvch`, on top of `539685e`):
 
-1. the session-date tuning split (`forecaster/ml_split.py`) and the corrected study `ml_pooled_split_v1`;
-2. the seven-target bundles' infrastructure: registry, own-market labels, heads, service, per-arm scheduling;
-3. their model experiments and the development evaluation `ml_bundle_eval_v1`;
-4. the Forecast page, the summary and the release checks for them; documentation.
+1. `8c403a4` the session-date tuning split (`forecaster/ml_split.py`) and the corrected study `ml_pooled_split_v1`;
+2. `d2abe52` the seven-target bundles' infrastructure: registry, own-market labels, heads, service, per-arm scheduling;
+3. `44b035e` their model experiments and the development evaluation `ml_bundle_eval_v1`;
+4. `41e3444` the Forecast page, the summary and the release checks for them; documentation.
 
 **What it does not deploy:** no promotion, no change to the delivery order (B in force, A the benchmark), no new
 forward registration, no change to `p1_ml_forward_v2`, its artifacts, runs or deliveries.
