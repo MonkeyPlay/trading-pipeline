@@ -1,31 +1,70 @@
 -- database/rollback/0031_rth_session_down.sql
 -- EMERGENCY ONLY - not a migration (the runner reads database/migrations/ only; migrations are forward-only).
--- Takes the schema from v31 back to v30 so that revision 900f3cb starts again, and ONLY while nothing uses 0031:
--- no full-session (nq_match_rth_v3) set, no recorded miss, no rth_session_v1 forecast - i.e. after the deployment
--- and before the first RTH issue (Monday 2026-10-12, 09:31 ET). Once v3 rows exist the journal's append-only
--- triggers keep them, and the way back is the pre-deployment backup (docs/reports/deployment_plan_2026-10-10.md).
+-- Takes the schema from v31 back to exactly v30, so that revision 900f3cb (schema v30, the same ML artifacts) starts
+-- again - and only while no row needs v31. Which rows those are is decided here from the data, never from the
+-- calendar: it refuses when any of these exist, whoever wrote them (Auto, a manual issue, a backfill or a test):
+--
+--   journal.rth_analogue_sets     a set of a version other than nq_match_rth_v1/v2, one past 60 minutes, or any set
+--                                 stored since 0031 - its trigger stamps issue_class on every new row, first-hour
+--                                 sets included - or carrying one of 0031's timing columns
+--   journal.rth_issue_misses      any row (the table goes)
+--   journal.rth_eval_forecasts    a forecast of an evaluation other than rth_continuation_v1/v2 and
+--                                 rth_operational_v1, one past 60 minutes, or a second horizon of one key - the v30
+--                                 unique constraint would reject it
+--   journal.rth_eval_results      a result of such an evaluation
+--
+-- Members of a refused set and forecasts built on it are covered by the set. Definitions registered by the v31 code
+-- (nq_match_rth_v3, rth_session_v1) are append-only history: they stay, reported, and refuse nothing - the v30 code
+-- never reads them.
+--
+-- Stop every writer first (scripts/release_check.py writers). One transaction: every table it reads or alters is
+-- locked before the check (a writer cannot add a row between the check and the change); any failure leaves the
+-- database exactly as it was.
 --
 --   docker exec -i trading_pipeline-timescaledb-1 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --       < database/rollback/0031_rth_session_down.sql
---
--- One transaction: it refuses (and changes nothing) when 0031 is in use or the database is not at v31.
 
 BEGIN;
+SET LOCAL lock_timeout = '10s';
+LOCK TABLE journal.rth_analogue_sets, journal.rth_analogue_members, journal.rth_eval_forecasts,
+           journal.rth_eval_results, journal.rth_issue_misses, schema_migrations IN ACCESS EXCLUSIVE MODE;
 
 DO $$
+DECLARE
+    v INTEGER;
+    sets BIGINT;
+    misses BIGINT;
+    forecasts BIGINT;
+    results BIGINT;
+    keys BIGINT;
+    defs TEXT;
 BEGIN
-    IF (SELECT max(version) FROM schema_migrations) <> 31 THEN
-        RAISE EXCEPTION 'the database is not at schema v31: nothing to undo';
+    SELECT max(version) INTO v FROM schema_migrations;
+    IF v IS DISTINCT FROM 31 THEN
+        RAISE EXCEPTION 'the database is at schema v%, not v31: nothing to undo', v;
     END IF;
-    IF EXISTS (SELECT 1 FROM journal.rth_analogue_sets
-                WHERE matcher_version NOT IN ('nq_match_rth_v1', 'nq_match_rth_v2') OR elapsed_minutes > 60
-                   OR issue_class IS NOT NULL OR session_minutes IS NOT NULL)
-       OR EXISTS (SELECT 1 FROM journal.rth_issue_misses)
-       OR EXISTS (SELECT 1 FROM journal.rth_eval_forecasts
-                   WHERE evaluation_version NOT IN ('rth_continuation_v1', 'rth_continuation_v2', 'rth_operational_v1')
-                      OR elapsed_minutes > 60) THEN
-        RAISE EXCEPTION '0031 is in use (full-session sets, misses or rth_session_v1 forecasts exist): restore the '
-                        'pre-deployment backup instead';
+    SELECT count(*) INTO sets FROM journal.rth_analogue_sets
+     WHERE matcher_version NOT IN ('nq_match_rth_v1', 'nq_match_rth_v2') OR elapsed_minutes > 60
+        OR issue_class IS NOT NULL OR session_minutes IS NOT NULL OR computation_started_at IS NOT NULL
+        OR confirmed_by_start IS NOT NULL OR confirmed_received_at IS NOT NULL;
+    SELECT count(*) INTO misses FROM journal.rth_issue_misses;
+    SELECT count(*) INTO forecasts FROM journal.rth_eval_forecasts
+     WHERE evaluation_version NOT IN ('rth_continuation_v1', 'rth_continuation_v2', 'rth_operational_v1')
+        OR elapsed_minutes > 60;
+    SELECT count(*) INTO results FROM journal.rth_eval_results
+     WHERE evaluation_version NOT IN ('rth_continuation_v1', 'rth_continuation_v2', 'rth_operational_v1');
+    SELECT count(*) INTO keys FROM (SELECT 1 FROM journal.rth_eval_forecasts
+                                     GROUP BY evaluation_version, symbol, session_date, elapsed_minutes
+                                    HAVING count(*) > 1) k;
+    IF sets + misses + forecasts + results + keys > 0 THEN
+        RAISE EXCEPTION '0031 is in use: % set(s) only v31 can hold, % miss(es), % forecast(s) and % result(s) of a '
+                        'new evaluation, % key(s) the v30 constraint would reject - nothing changed; restore the '
+                        'pre-deployment backup instead', sets, misses, forecasts, results, keys;
+    END IF;
+    SELECT string_agg(version, ', ' ORDER BY version) INTO defs FROM journal.definition_versions
+     WHERE version IN ('nq_match_rth_v3', 'rth_session_v1');
+    IF defs IS NOT NULL THEN
+        RAISE NOTICE 'kept (append-only history, unused by the v30 code): definitions %', defs;
     END IF;
 END
 $$;

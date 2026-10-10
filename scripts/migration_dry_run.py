@@ -11,8 +11,9 @@ Inside the transaction: every table's rows before, the pending migration files (
 database's current version, their Python hooks included), every table's rows after. Reported per table: rows
 removed, added or changed - a row is compared on the columns it had before, so a new column is reported as such,
 not as a changed row. Market-data tables are compared by count and an order-independent hash sum. Then ROLLBACK,
-and a check that the schema version and the table list are what they were. Nothing is committed. Run it outside a
-session: the migration's locks are held until the rollback.
+and a check that the schema version, the table list, every column, constraint, index, function and trigger, and
+every row are what they were. Nothing is committed. A migration that fails is reported (exit 2) and rolled back the
+same way. Run it outside a session, with the writers stopped: the migration's locks are held until the rollback.
 """
 
 import argparse
@@ -33,6 +34,24 @@ def _tables(cur):
 def _columns(cur, schema, name):
     return [r[0] for r in cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = %s "
                                       "AND table_name = %s ORDER BY ordinal_position", (schema, name)).fetchall()]
+
+
+def fingerprint(cur) -> str:
+    """The schema of journal and public: every column, constraint, index, function and trigger - for the check that
+    the rollback left nothing behind."""
+    import hashlib
+    parts = [cur.execute("SELECT table_schema, table_name, column_name, data_type, is_nullable, column_default FROM "
+                         "information_schema.columns WHERE table_schema IN ('journal', 'public') ORDER BY 1, 2, 3"
+                         ).fetchall(),
+             cur.execute("SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE "
+                         "connamespace IN ('journal'::regnamespace, 'public'::regnamespace) ORDER BY 1, 2").fetchall(),
+             cur.execute("SELECT schemaname, tablename, indexname, indexdef FROM pg_indexes WHERE schemaname IN "
+                         "('journal', 'public') ORDER BY 1, 2, 3").fetchall(),
+             cur.execute("SELECT n.nspname, p.proname, md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid = "
+                         "p.pronamespace WHERE n.nspname IN ('journal', 'public') ORDER BY 1, 2, 3").fetchall(),
+             cur.execute("SELECT tgrelid::regclass::text, tgname, tgenabled FROM pg_trigger WHERE NOT tgisinternal "
+                         "AND tgrelid::regclass::text NOT LIKE '\\_timescaledb%' ORDER BY 1, 2").fetchall()]
+    return hashlib.sha256(repr(parts).encode()).hexdigest()
 
 
 def state(cur, before=None):
@@ -101,26 +120,38 @@ def main(argv=None):
         print(f"schema v{version}; rehearsing {', '.join(os.path.basename(p) for _, p in pending)} in one "
               "transaction (rolled back)")
         t0 = time.time()
-        before = state(cur)
-        for v, path in pending:
-            if v in PRE_HOOKS:
-                PRE_HOOKS[v](conn)
-            with open(path, encoding="utf-8") as f:
-                cur.execute(f.read())
-            if v in POST_HOOKS:
-                POST_HOOKS[v](conn)
-        after = state(cur, before)
-        lines, changed = compare(before, after)
+        schema_before = fingerprint(cur)
+        before, failure = state(cur), None
+        try:
+            for v, path in pending:
+                if v in PRE_HOOKS:
+                    PRE_HOOKS[v](conn)
+                with open(path, encoding="utf-8") as f:
+                    cur.execute(f.read())
+                if v in POST_HOOKS:
+                    POST_HOOKS[v](conn)
+            after = state(cur, before)
+        except Exception as e:                          # the rehearsal failed: reported, rolled back, checked
+            failure = e
         conn.rollback()
-        print("\n".join(lines) or "  no table changed")
-        print(f"{changed} existing table(s) with removed, changed or dropped rows or columns "
-              f"({time.time() - t0:.1f} s); rolled back")
+        if failure is None:
+            lines, changed = compare(before, after)
+            print("\n".join(lines) or "  no table changed")
+            print(f"{changed} existing table(s) with removed, changed or dropped rows or columns "
+                  f"({time.time() - t0:.1f} s); rolled back")
+        else:
+            print(f"FAILED: {type(failure).__name__}: {str(failure).splitlines()[0] if str(failure) else ''} - rolled "
+                  "back; a deployment would fail at the same point")
         cur = conn.cursor()
         again = cur.execute("SELECT coalesce(max(version), 0) FROM schema_migrations").fetchone()[0]
-        same = again == version and _tables(cur) == tables_before
+        same = again == version and _tables(cur) == tables_before and fingerprint(cur) == schema_before \
+            and state(cur) == before
         conn.rollback()
-        print(f"after the rollback: schema v{again}, tables {'as before' if same else 'DIFFERENT'}")
-        return 0 if same else 1
+        print(f"after the rollback: schema v{again}, tables, schema and rows "
+              f"{'as before' if same else 'DIFFERENT - investigate before deploying'}")
+        if not same:
+            return 3
+        return 0 if failure is None else 2
 
 
 if __name__ == "__main__":

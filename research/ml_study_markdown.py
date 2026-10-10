@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Dict, List
 
 from research import ml_study as st
@@ -86,21 +88,34 @@ def _cmp(d) -> str:
     return "-" if not d else f"{_f(d.get('mean', d.get('brier')), 4, True)} {_ci(d.get('interval'))}"
 
 
+# The protocol's deviations and additions, in time order (UTC, from the session's log). "Outcomes read" means the
+# first scoring stage (2026-10-09 23:22:21 UTC) had already read outcomes when the change was made.
 DEVIATIONS = [
-    "TabPFN refuses more than 1000 training rows on a CPU by default (a speed guard); the RTH folds train on 1400 "
-    "to 3000 rows, so the guard was lifted (TABPFN_ALLOW_CPU_LARGE_DATASET=1). The model and its defaults are "
-    "unchanged.",
-    "The direction-or-size decomposition (symmetrised forecasts, direction alone on the rows that moved) and the "
-    "symmetric prior (PRIOR_SYM: the prior's bullish and bearish shares replaced by their mean) were added after the "
-    "first scoring pass, when the RTH arms' gains over the same-clock prior needed explaining. They are analysis "
-    "views computed from the stored predictions; no prediction, configuration or fold changed.",
-    "The planted-signal control first used fixed betas whose oracle gains (0.065 and 0.145 pre-open, 0.022 and "
-    "0.072 RTH) missed the protocol's targets. The final run solves beta for the targets (ml_study.beta_for: 0.04 "
-    "and 0.015). The shuffled-label controls are also scored against the symmetric prior: with shuffled labels, "
-    "the conditional prior beat CLOCK itself in 3 of 5 RTH runs, so beating CLOCK needs no signal.",
-    "An RTH label first required only its window's two end bars; the protocol (and rth_eval.window_move) requires "
-    "every bar of the window. Fixed before the final run; no window in the data lacks an inner bar (0 of 29,160), so "
-    "no label changed.",
+    {"when": "2026-10-09 23:20:42", "read": "no",
+     "what": "TabPFN's guard against more than 1,000 training rows on a CPU lifted (TABPFN_ALLOW_CPU_LARGE_DATASET=1)",
+     "why": "the RTH folds train on 1,400 to 3,600 rows; without it the registered TPF arm could not run there",
+     "impact": "none on the model or its defaults; TabPFN's own predictions did not exist yet"},
+    {"when": "2026-10-09 23:21:30", "read": "no",
+     "what": "an RTH label requires every bar of its window, not only the two end bars",
+     "why": "the protocol and rth_eval.window_move say so; a test found the gap",
+     "impact": "none: no window in the data lacks an inner bar (0 of 29,160), so no label changed"},
+    {"when": "2026-10-09 23:24:49 and 23:28:08", "read": "yes",
+     "what": "the direction-or-size decomposition and the symmetric prior (PRIOR_SYM) added as analysis views",
+     "why": "the arms' gains over the same-clock prior needed explaining; the first controls had shown that "
+            "shuffled labels beat it too",
+     "impact": "post hoc: it changes the reading, not one prediction. Every comparison against CLOCK and A is kept "
+               "beside it, in full"},
+    {"when": "2026-10-09 23:37:49", "read": "yes (the first control run)",
+     "what": "the planted signals' beta solved for the protocol's oracle gains (0.04 and 0.015)",
+     "why": "the first run's fixed betas gave 0.065 and 0.145 before the open, 0.022 and 0.072 on RTH - not what the "
+            "protocol specified",
+     "impact": "the controls only; both runs are reported (ml_study_v1/controls_first_run.json)"},
+    {"when": "2026-10-10 07:36:14", "read": "yes",
+     "what": "the deployed fan (fan_rw_v1) scored on the RTH 15-minute rows; the size of the move scored apart from "
+             "the signed move",
+     "why": "the review of 2026-10-10: compare the scale model with the product's own size forecast before any "
+            "claim",
+     "impact": "a new comparator, not a new search. It narrowed the size claim (section 4.6)"},
 ]
 
 
@@ -135,6 +150,41 @@ def _fold_reading(rows: List[Dict[str, Any]]) -> str:
                     "(a standard error of about 0.03 each), and noticed after the fact, that is within noise. It is "
                     "what p1_ml_forward_v2's prospective sessions test.")
     return out + " No regime split was declared before the study, so none is reported."
+
+
+def _size_bullet(P: Dict[str, Any]) -> str:
+    d1, d2 = P["rth/h15/cutoff"].get("distribution"), P["rth/h15/delayed"].get("distribution")
+    if not d1 or "signed" not in d1:
+        return "- **Size, not direction:** see section 4.6."
+    sig = lambda d, k: _cmp(d["signed"]["paired"][k])      # noqa: E731
+    ab = lambda d, k: _cmp(d["absolute"]["paired"][k])     # noqa: E731
+    return ("- **Size, not direction:** the deployed fan (fan_rw_v1) already forecasts the size of the next 15 "
+            f"minutes far better than the same-clock history: same-clock minus fan is {sig(d1, 'CLOCK_emp - FAN')} "
+            "on the signed move. The study's scale model adds little to the fan. Scale model minus fan, from the "
+            f"cutoff: {sig(d1, 'LS0 - FAN')} on the signed move and {ab(d1, 'LS0 - FAN')} on its size. With "
+            f"the realistic delayed start: {sig(d2, 'LS0 - FAN')} and {ab(d2, 'LS0 - FAN')}. No improvement to "
+            "the product is claimed. A location added to the scale does not help (section 4.6).")
+
+
+def _planted_frozen(ctl) -> str:
+    """N's and M's results on the planted signals: the final run at the protocol's strengths, the first at
+    stronger ones."""
+    parts = []
+    if ctl and ctl.get("preopen_synthetic"):
+        strong = max(ctl["preopen_synthetic"].values(), key=lambda v: v["oracle_gain"])
+        n, m = strong["arms"].get("N"), strong["arms"].get("M")
+        if n and m:
+            parts.append(f"at the protocol's {strong['oracle_gain']:.3f}, N's and M's mean gains were "
+                         f"{-n['mean']:.3f} and {-m['mean']:.3f}, but they were rarely significant with 158 sessions "
+                         f"({n['detected']} and {m['detected']} of {strong['runs']} runs)")
+    try:
+        with open(os.path.join(run.REPORT_DIR, "controls_first_run.json"), encoding="utf-8") as f:
+            first = json.load(f)["preopen"]["0.8"]
+        parts.append(f"at the first run's {first['oracle_gain']:.3f}, N and M were detected in "
+                     f"{first['arms']['N'][1]} and {first['arms']['M'][1]} of 10 runs")
+    except (OSError, KeyError, ValueError):
+        pass
+    return "; ".join(parts) or "see section 1"
 
 
 def _choices(fc: Dict[str, Dict[str, int]]) -> str:
@@ -185,16 +235,20 @@ def render(res: Dict[str, Any]) -> str:
          "## Answer", ""])
     chance = 0.025 * n_cmp
     if not pre_beats_a and not pre_dir and len(rth_dir) <= max(1, round(chance)):
-        add(["**No edge established.** Nothing predicts NQ's direction better than having no view, before the open "
-             "or at any RTH horizon. No challenger is recommended."
-             + (f" One direction-only interval of {n_cmp} dips below no view ({_name(rth_dir[0][1], True)} at "
-                f"{rth_dir[0][0].split('/')[1][1:]} min, {rth_dir[0][0].split('/')[2]} origin): about what chance "
-                f"alone gives ({chance:.1f})." if len(rth_dir) == 1 else ""), ""])
+        add(["**No directional edge established for the tested models, features, horizons and evaluation design. No "
+             "challenger is recommended.** Before the open, nothing beats the frequencies (A). During the session, "
+             "nothing beats a forecast with no view on direction, beyond what the many comparisons would produce "
+             "anyway.", ""])
     else:
         add(["**No reliable directional edge.** The intervals that fall below zero are listed below. They are "
              f"development data with {n_cmp} RTH comparisons per score, so about {chance:.1f} such intervals are "
              "expected by chance alone.", ""])
     va = A[best_pre]["paired"].get("A")
+    excl = []
+    for a in ("P", "M", "TPF", "CP", "B", "N"):
+        iv = (A.get(a) or {}).get("paired", {}).get("A", {}).get("interval")
+        if iv:
+            excl.append(f"{a} {-iv[0]:.3f}" if iv[0] < 0 else f"{a} - none inside its interval, which lies above zero")
     add([f"- **Pre-open direction_15m** ({s['sessions']} test sessions): nothing beats A. The best candidate is "
          f"{_name(best_pre)}, at {_f(A[best_pre]['brier'])} against A's {_f(A['A']['brier'])} "
          f"({_cmp(va)}). "
@@ -203,32 +257,45 @@ def render(res: Dict[str, Any]) -> str:
          + f"B scores {_f(A['B']['brier'])}, N {_f(A['N']['brier'])}, M {_f(A['M']['brier'])} and P "
          f"{_f(A['P']['brier'])}. The frequencies with no view on direction (bullish = bearish) score "
          f"{_f(A['PRIOR_SYM']['brier'])}, slightly better than A ({_cmp(A['PRIOR_SYM']['paired'].get('A'))}). "
-         "So even A's own tilt carries no information; this is far below a material edge, and a post-hoc view. "
-         "With one row per session this sample misses most real signals smaller than about 0.04 (sections 1 and "
-         "5), so the pre-open \"no edge\" rules out only a large one.",
+         "That is a post-hoc view, far below a material edge; it says only that A's own tilt carries no "
+         "information.",
+         "- **How large an edge these data exclude:** this is read from the 95 % intervals, not from a power "
+         "calculation. The intervals against A leave out improvements larger than: " + "; ".join(excl) + ". "
+         "Smaller true improvements remain possible. This sample has one row per session, and it detected a planted "
+         "0.04 signal in only 1 to 3 of 10 runs (section 1).",
          f"- **RTH, the next 15 minutes from the cutoff** ({P['rth/h15/cutoff']['matched']['sessions']} test "
          f"sessions): the same-clock prior (CLOCK) scores {_f(p15['PRIOR']['brier'])}. Across the 8 horizons and "
-         f"origins, {len(rth_clock)} of {n_cmp} arm and problem pairs beat CLOCK with an interval below zero. "
-         "But CLOCK's own per-cutoff up-shares are noise: the symmetric prior (the same frequencies with no view on "
-         f"direction) beats CLOCK in {sum(_below(v) for v in sym_vs_clock.values())} of 8 problems. Against the "
-         f"symmetric prior, {len(rth_vs_sym)} pair(s) keep an interval below zero on the three classes"
+         f"origins, {len(rth_clock)} of {n_cmp} arm and problem pairs beat CLOCK with an interval below zero. But "
+         "CLOCK's own per-cutoff up-shares are noisy: the symmetric prior (the same frequencies, with bullish and "
+         f"bearish set to their mean) beats CLOCK in {sum(_below(v) for v in sym_vs_clock.values())} of 8 problems, "
+         "and so do shuffled labels (section 1). Against the symmetric prior, "
+         f"{len(rth_vs_sym)} pair(s) keep an interval below zero on the three classes"
          + (" (" + "; ".join(f"{_name(a, True)} at {n.split('/')[1][1:]} min, {n.split('/')[2]} origin: "
                              f"{_cmp(P[n]['matched']['arms'][a]['paired']['PRIOR_SYM'])}, of which size "
                              f"{_cmp(P[n]['matched']['arms'][a]['paired']['PRIOR_SYM']['sym'])} and direction "
                              f"{_cmp(P[n]['matched']['arms'][a]['paired']['PRIOR_SYM']['dir'])}"
                              for n, a in rth_vs_sym) + ")" if rth_vs_sym else "")
-         + f". On direction alone, {len(rth_dir)} of {n_cmp} fall below no view: "
+         + f". On direction alone, {len(rth_dir)} of {n_cmp} intervals {'lies' if len(rth_dir) == 1 else 'lie'} "
+           "below no view: "
          + (", ".join(f"{_name(a, True)} at {n.split('/')[1][1:]} min ({n.split('/')[2]})" for n, a in rth_dir)
-            or "none") + f". About {0.025 * n_cmp:.1f} would by chance alone.",
+            or "none")
+         + ". Each comparison counts when its two-sided 95 % interval lies below zero, so a one-sided error of "
+           "about 2.5 %. There is no multiplicity correction, and the comparisons are dependent: the same sessions, "
+           "overlapping horizons, correlated arms. With independent comparisons about "
+         + f"{chance:.1f} would be expected. The result is consistent with no robust discovery. It does not prove "
+           "that only chance is at work.",
          f"- **RTH analogues:** RTH-20's member frequencies score worse than the same-clock history at every "
          f"horizon (15 minutes: {_cmp(p15['B_rth']['paired']['PRIOR'])}). Adding the recent path to the "
-         f"similarity does not help ({_cmp(p15['B_rth_recent']['paired'].get('B_rth'))} against RTH-20).",
-         "- **Size, not direction:** a scale model forecasts the size of the next 15 minutes better than the "
-         "same-clock history (section 4.6). The location added to it does not help.",
-         "- **Why N, M and P look like A:** it is shrinkage on a weak signal, not a coding bug (section 2).",
-         "- **What it would take:** detecting a true 0.01 improvement needs hundreds of sessions, and the "
-         "registered rule cannot reach 80 % power for an effect of exactly 0.01 at any sample size. Sixty sessions "
-         "detect only effects several times larger (section 5).", ""])
+         f"similarity does not help ({_cmp(p15['B_rth_recent']['paired'].get('B_rth'))} against RTH-20). The "
+         "analogues stay useful as historical comparisons. Their similarity percentage is not an outcome "
+         "probability.",
+         _size_bullet(P),
+         "- **Why N, M and P look like A:** the tuning prefers the strongest penalty, looser penalties score worse, "
+         "and the same pipeline moves with planted signals. That is shrinkage on a weak signal, not a coding bug "
+         "(section 2).",
+         "- **Sample sizes** (estimates under stated assumptions, not guarantees; section 5): with an effect of exactly "
+         "0.01, the registered rule cannot reach 80 % power at any sample size. At 60 sessions it has 80 % power "
+         "only for true improvements of about 0.05 or more before the open.", ""])
 
     # ------------------------------------------------------------------ what ran
     m = run._manifest()
@@ -243,6 +310,8 @@ def render(res: Dict[str, Any]) -> str:
                 "tabpfn": "TabPFN v2 on the pre-open and the two 15-minute RTH problems (.venv-research)",
                 "controls": f"{e.get('preopen_runs')} pre-open and {e.get('rth_runs')} RTH control runs, the "
                             "future-bar checks",
+                "fan": f"fan_rw_v1 on {e.get('rows')} RTH 15-minute rows (review addition; skipped: "
+                       f"{e.get('skipped')})",
                 "score": f"{len(e.get('verified', []))} prediction files verified, then the outcomes read"}.get(name, "")
         add([f"| {name} | {e.get('at')} | `{str(e.get('code_revision', ''))[:12]}"
              f"{'+dirty' if str(e.get('code_revision', '')).endswith('+dirty') else ''}` | {what} |"])
@@ -269,7 +338,14 @@ def render(res: Dict[str, Any]) -> str:
          "after 120 sessions. For the pre-open task they are exactly the development comparison's eight folds. "
          "Each tuned family is tried on two feature sets (NQ only, NQ plus other instruments), an ablation counted "
          "in its grid.", "",
-         "## Deviations from the protocol", ""] + [f"- {d}" for d in DEVIATIONS] + [""])
+         "## Deviations from the protocol, and later additions", "",
+         "| when (UTC) | outcomes already read? | what changed | why | inferential impact |",
+         "|---|---|---|---|---|"]
+        + [f"| {d['when']} | {d['read']} | {d['what']} | {d['why']} | {d['impact']} |" for d in DEVIATIONS]
+        + ["", "Re-running the stages from the final code gave byte-identical predictions (above). That shows the "
+               "predictions are reproducible. It does not rule out selection or reporting bias in what was added "
+               "after outcomes were read. That is why each addition is listed here, and why every original "
+               "comparison is kept.", ""])
 
     # ------------------------------------------------------------------ 1. correctness
     dev, wk = pre["dev_reproduction"], pre["week"]
@@ -341,17 +417,32 @@ def render(res: Dict[str, Any]) -> str:
                 best = max(x["detected"] for a, x in v["arms"].items() if a != "CP")
                 parts.append(f"a planted gain of {v['oracle_gain']:.3f} in at most {best} of {v['runs']} runs")
             det_lines.append(f"{label}: " + "; ".join(parts))
-    add(["", "The code does what it claims:", "",
+    add(["", "**How the signals were planted.** The real labels are replaced by draws from softmax(log p + beta z "
+             "(-1, +1, 0)), over bearish, bullish and neutral:", "",
+         "- p is the rows' overall class frequencies;",
+         "- z is the standardised sum of two real features (before the open: nq_ret_on and nq_range_pos; RTH: "
+         "ret_30 and range_pos), so the planted effect is directional.", "",
+         "The strength is stated as the oracle gain: the expected unhalved Brier score of p minus that of the true "
+         "probabilities, the mean of |p_true - p|^2 over the labelled rows, in the same units as every Brier "
+         "difference here. beta is solved for the protocol's gains of 0.04 and 0.015 (ml_study.beta_for). Seeds "
+         "are 0 to 9 before the open and 0 to 2 for RTH, per strength. A run counts as detected when the arm's "
+         "outer-test 95 % interval against the prior lies below zero.", "",
+         "The first run used fixed betas with gains of 0.065 and 0.145 before the open, 0.022 and 0.072 for RTH. "
+         "It found the strong pre-open signal in 9 to 10 of 10 runs for every learned model, and N and M found the "
+         "weaker one in 6 of 10 (ml_study_v1/controls_first_run.json). The conditional prior found neither, as "
+         "expected: it never sees the two features the signal is planted in.", "",
+         "The code does what it claims:", "",
          "- the reproductions are identical;",
          "- nothing leaks across the date split or from later bars;",
          "- shuffled labels give no skill against the symmetric prior;",
-         "- a planted signal is found where the sample allows: " + ("; ".join(det_lines) if det_lines else "-")
-         + ".", "",
-         "So the two tasks' silences mean different things:", "",
-         "- The RTH task, with twelve cutoffs per session, finds a signal of the size that would matter. Its \"no "
-         "edge\" is informative.",
-         "- The pre-open task has one row per session. It misses most planted signals of 0.04, so its \"no edge\" "
-         "says only that no large signal exists (section 5).", "",
+         "- in these simulations, a planted signal is found where the sample allows: "
+         + ("; ".join(det_lines) if det_lines else "-") + ".", "",
+         "So the two tasks' silences carry different weight:", "",
+         "- The RTH task, with twelve cutoffs per session, found a planted gain of 0.015 in every run here.",
+         "- The pre-open task has one row per session. It found a planted 0.04 in at most 3 of 10 runs, so its "
+         "\"no edge\" excludes only large effects (the intervals in the answer).", "",
+         "Simulations show power against the planted kind of signal only: a linear, directional tilt in two "
+         "features. They say nothing about power against every signal a market could hold.", "",
          "None of this says whether NQ is predictable. The next sections do.", ""])
 
     # ------------------------------------------------------------------ 2. why the ML looks like the prior
@@ -441,11 +532,11 @@ def render(res: Dict[str, Any]) -> str:
         + ["- deliveries: " + ", ".join(f"{k} {v}" for k, v in prod["deliveries"].items())
            + ". The one delivery is 2026-10-09's, recorded after the fact by 363c818 and shown as a "
              "reconstruction.", "",
-           "**Verdict.** The probabilities track A because the data leave little better to do:", "",
-           "- the tuning prefers the strongest penalty on offer;",
-           "- a looser penalty scores worse;",
-           "- the same code learns a planted signal (section 1);",
-           "- the features come from history only.", "",
+           "**Verdict.** The probabilities track A because the data leave little better to do. The evidence:", "",
+           "- the tuning prefers the strongest penalty on offer (the counts above);",
+           "- along the path, a looser penalty scores steadily worse;",
+           "- the same pipeline moves with a planted signal: " + _planted_frozen(ctl) + ";",
+           "- the features come from history only (section 1).", "",
            "This is shrinkage on a weak signal, not a bug.", ""])
 
     # ------------------------------------------------------------------ 3. pre-open ladder
@@ -491,7 +582,10 @@ def render(res: Dict[str, Any]) -> str:
                        + " | ".join(cells) + " |")
     add(["**The five supplied sessions.** These are walk-forward refits on every earlier labelled session, the "
          "earlier check's method, shown as full vectors:", ""] + wk_rows +
-        ["", "Means: " + ", ".join(f"{a} {wk['mean_brier'][a]:.3f}" for a in "ABNMP") + ".", "",
+        ["", "Means, from the full vectors: " + ", ".join(f"{a} {wk['mean_brier'][a]:.4f}" for a in "ABNMP")
+         + ". The table rounds each session's score to three decimals. The earlier check quoted N as 0.662, the mean "
+           "of those rounded scores; the exact mean is "
+         + f"{wk['mean_brier']['N']:.4f}.", "",
          "\\* 2026-10-09's label is computed from the stored bars; no outcome is recorded yet.", "",
          "Five sessions establish nothing: not equality, not non-inferiority, not a lasting disadvantage.", ""])
 
@@ -534,7 +628,22 @@ def render(res: Dict[str, Any]) -> str:
         add([f"**{title}**", ""] + _decomposition(P[name]["matched"], "PRIOR_SYM", rth=True) + [""])
     res_worse = [n for n, p in P.items() if _above((p["matched"]["arms"].get("RES", {}).get("paired", {})
                                                     .get("PRIOR_SYM") or {}).get("dir"))]
-    add(["How to read the two tables:", "",
+    add(["**The comparators.**", "",
+         "- *CLOCK* is the training sessions' class frequencies at the same cutoff, horizon and origin, "
+         "Laplace-smoothed ((n_c + 1) / (n + 3)), each fold's own.",
+         "- *The symmetric prior* (PRIOR_SYM) is CLOCK with its bullish and bearish shares replaced by their mean. "
+         "Its neutral share stays CLOCK's estimated one, frozen in the same fold. Before the open, it is A_s "
+         "treated the same way.",
+         "- *Zero moves:* the label is neutral whenever |move| <= band (and band > 0), so a zero move is neutral.",
+         "- *The direction-only score* uses only the rows labelled bullish or bearish. There, \"no view\" "
+         "(q = 0.5) scores exactly 0.5. The 50/50 is a statement about that binary outcome given a move past the "
+         "band, not about the three classes.", "",
+         "**Why CLOCK is a noisy reference.** Each cutoff's up-share is estimated separately, from 120 to 300 "
+         "sessions. That leaves a sampling error of a few percentage points, which a Brier score charges for. A "
+         "forecast that pools or shrinks those shares escapes the charge without knowing anything about the move. "
+         "With shuffled labels the conditional prior still beat CLOCK (section 1). So beating CLOCK alone shows no "
+         "information. Both references are kept in every table.", "",
+         "How to read the two tables:", "",
          "- The symmetrised column is the size part: the chance of a move past the band.",
          "- The direction-only column is measured against no view, which scores exactly 0.5. A gain over CLOCK "
          "that disappears here was CLOCK's noisy tilt, not the arm's skill.",
@@ -558,8 +667,12 @@ def render(res: Dict[str, Any]) -> str:
              f"{len(rth_dir)} interval(s) below zero against no view: "
          + (", ".join(f"{_name(a, True)} at {n.split('/')[1][1:]} min ({n.split('/')[2]})" for n, a in rth_dir)
             or "none")
-         + f". At 95 %, about {0.025 * n_cmp:.1f} would fall below zero by chance alone. The symmetrised (size) "
-           f"score has {len(rth_size)} interval(s) below zero against the symmetric prior.", ""])
+         + ". A comparison counts when its two-sided 95 % interval lies below zero, so a one-sided error of about "
+           "2.5 %. There is no multiplicity correction. The comparisons are dependent: the same sessions, overlapping "
+           "horizons, correlated arms. With independent comparisons about "
+         + f"{0.025 * n_cmp:.1f} would be expected, and dependence widens that spread. The result is consistent with "
+           "no robust discovery, not proof of chance. The symmetrised (size) score has "
+         + f"{len(rth_size)} interval(s) below zero against the symmetric prior.", ""])
     ph = P["rth/h15/cutoff"]["phases"]
     cols = [a for a in ("LR", "GB", "BL", "B_rth", "B_rth_recent") if a in next(iter(ph.values()))]
     add(["### 4.4 By session phase: 15 minutes, cutoff origin (exploratory)", "",
@@ -578,45 +691,80 @@ def render(res: Dict[str, Any]) -> str:
          "it scores direction as up or not up, with size separately.", ""])
     d1, d2 = P["rth/h15/cutoff"].get("distribution"), P["rth/h15/delayed"].get("distribution")
     if d1:
-        add(["### 4.6 Size and direction as distributions: 15 minutes", "",
-             "CRPS is in units of sigma_1m x sqrt(15).", "",
-             "| origin | CLOCK empirical | LS0: scale model, zero drift | LSmu: scale + ridge location | "
-             "LS0 - CLOCK | LSmu - LS0 | 90 % coverage, empirical / LS | 90 % width, empirical / LS |",
-             "|---|---:|---:|---:|---|---|---|---|"])
-        for origin, d in (("cutoff", d1), ("delayed", d2)):
-            if d:
-                add([f"| {origin} | {_f(d['crps']['CLOCK_emp'])} | {_f(d['crps']['LS0'])} | {_f(d['crps']['LSmu'])} | "
-                     f"{_cmp(d['paired']['LS0 - CLOCK_emp'])} | {_cmp(d['paired']['LSmu - LS0'])} | "
-                     f"{_pct(d['coverage']['cover90_emp'])} / {_pct(d['coverage']['cover90_ls'])} | "
-                     f"{_f(d['width90']['emp'], 2)} / {_f(d['width90']['ls'], 2)} |"])
-        size_better = _below(d1["paired"]["LS0 - CLOCK_emp"]) and (not d2 or _below(d2["paired"]["LS0 - CLOCK_emp"]))
+        add(["### 4.6 Size and direction as distributions: 15 minutes, against the deployed fan", "",
+             "Four forecasts of the window's move, on identical rows. Identical means the same test sessions, the "
+             "same origin (the bar ending at the cutoff), the same window [S, S + 15) and the same target, in units "
+             "of sigma_1m x sqrt(15). The four:", "",
+             "- *CLOCK*: the training sessions' moves at that cutoff, as an empirical distribution;",
+             "- *LS0*: the study's scale model, centred at zero;",
+             "- *LSmu*: the same scale plus a ridge location;",
+             "- *FAN*: fan_rw_v1, the deployed volatility-aware random-walk fan, from the same origin. For the "
+             "delayed start, its variance over the window is the difference of its cumulative variances.", "",
+             "The fan forecasts full, complete sessions only. "
+             f"{d1['rows']} of {d1['rows_all']} rows remain at the cutoff origin and {d2['rows']} of {d2['rows_all']} "
+             "at the delayed origin. All four are historical reconstructions on these rows, so no live-issue "
+             "eligibility applies to any of them. The signed move (direction and size) and its absolute value (size "
+             "alone) are scored as separate tasks.", ""])
+        for task, title in (("signed", "CRPS of the signed move"), ("absolute", "CRPS of the absolute move (size)")):
+            add([f"**{title}** (lower is better; paired per session, 95 % intervals):", "",
+                 "| origin | CLOCK | LS0 | LSmu | FAN | LS0 - FAN | CLOCK - FAN | LS0 - CLOCK | LSmu - LS0 |",
+                 "|---|---:|---:|---:|---:|---|---|---|---|"])
+            for origin, d in (("cutoff", d1), ("delayed", d2)):
+                t = d[task]
+                add([f"| {origin} | {_f(t['crps']['CLOCK_emp'])} | {_f(t['crps']['LS0'])} | {_f(t['crps']['LSmu'])} | "
+                     f"{_f(t['crps']['FAN'])} | {_cmp(t['paired']['LS0 - FAN'])} | {_cmp(t['paired']['CLOCK_emp - FAN'])} | "
+                     f"{_cmp(t['paired']['LS0 - CLOCK_emp'])} | {_cmp(t['paired']['LSmu - LS0'])} |"])
+            add([""])
+        add(["90 % central intervals: coverage CLOCK / LS / FAN "
+             f"{_pct(d1['coverage']['cover90_emp'])} / {_pct(d1['coverage']['cover90_ls'])} / "
+             f"{_pct(d1['coverage']['cover90_fan'])} at the cutoff origin and {_pct(d2['coverage']['cover90_emp'])} / "
+             f"{_pct(d2['coverage']['cover90_ls'])} / {_pct(d2['coverage']['cover90_fan'])} delayed. Mean widths "
+             f"{_f(d1['width90']['emp'], 2)} / {_f(d1['width90']['ls'], 2)} / {_f(d1['width90']['fan'], 2)} and "
+             f"{_f(d2['width90']['emp'], 2)} / {_f(d2['width90']['ls'], 2)} / {_f(d2['width90']['fan'], 2)}.", ""])
+        fan_beats_clock = _above(d1["signed"]["paired"]["CLOCK_emp - FAN"])
+        ls_beats_fan = {o: (_below(d["signed"]["paired"]["LS0 - FAN"]), _below(d["absolute"]["paired"]["LS0 - FAN"]))
+                        for o, d in (("cutoff", d1), ("delayed", d2))}
         alphas = d1["direction"]["alphas"]
         maxed = len(alphas) == 1 and float(next(iter(alphas))) == max(float(a) for a in (1e4, *map(float, alphas)))
-        add(["", ("**Size is forecastable.** " if size_better else "**Size:** ")
-             + "The scale is a regression of the log squared move on the volatility so far, relative volume, the "
-               "range, the time of day and scheduled events. "
-             + ("It beats the same-clock history with intervals below zero at both origins. " if size_better
-                else "It does not clearly beat the same-clock history. ")
-             + f"Its log correlates with the log size of the move at {_f(d1['scale']['corr_log_sigma_abs_z'], 2)}.", "",
-             "**Direction is not.** The ridge location's penalty "
+        add([("**Size.** The fan already forecasts the size of the move far better than the same-clock history. "
+              if fan_beats_clock else "**Size.** ")
+             + "The study's scale model is a regression of the log squared move on the volatility so far, relative "
+               "volume, the range, the time of day and scheduled events. Against the fan, it is "
+             + ("better at the cutoff origin on both tasks" if all(ls_beats_fan["cutoff"]) else
+                "not established better at the cutoff origin")
+             + " and "
+             + ("better at the delayed origin" if all(ls_beats_fan["delayed"]) else
+                "not established better at the delayed origin, the one a live forecast would have")
+             + ". The differences are a few tenths of a percent to about 1.5 % of the fan's score, and this is "
+               "development data, with the fan comparison added after the fact. No improvement to the product is "
+               "claimed. A size model meant to replace the fan's would need its own prospective test against the "
+               "fan's record.", "",
+             f"Both scales correlate with the log size of the move: the scale model at "
+             f"{_f(d1['scale']['corr_log_sigma_abs_z'], 2)}, the fan at {_f(d1['scale']['corr_log_fan_sigma_abs_z'], 2)} "
+             "from the cutoff.", "",
+             "**Direction is not forecastable.** The ridge location's penalty "
              + ("went to its maximum in every fold" if maxed else f"was chosen as {alphas}")
-             + f". Its out-of-sample correlation with the move is {_f(d1['direction']['corr_mu_z'], 3, True)}, "
-               f"and it gets the sign right {_pct(d1['direction']['sign_hit'])} of the time.", "",
-             "This repeats 2026-09's finding. A narrower calibrated range is not a directional edge. The project's "
-             "random-walk fan (fan_rw_v1) is the deployed size benchmark. Its own reports "
-             "(docs/reports/fan_rw_v1_NQ_*.md) cover it, and it was not re-run here.", ""])
+             + f". Its out-of-sample correlation with the move is {_f(d1['direction']['corr_mu_z'], 3, True)}, and "
+               f"it gets the sign right {_pct(d1['direction']['sign_hit'])} of the time. Adding it changes the signed "
+               "score by the LSmu - LS0 column. This repeats 2026-09's finding. A narrower calibrated range is not a "
+               "directional edge.", ""])
 
     # ------------------------------------------------------------------ 5. power
     add(["## 5. Power", "",
-         "These figures come from the development per-session differences: their standard deviation, and the "
-         "moving-block bootstrap's design effect (the variance of the mean against independent sessions). The table "
-         "gives the sessions needed for 80 % power at a true improvement delta. It uses the normal approximation and "
-         f"two-sided {100 * LEVEL:.2f} % intervals (Bonferroni over three candidates). Two rules:", "",
+         "**What is assumed.** These are estimates, not guaranteed detection thresholds:", "",
+         "- *The effect:* a true improvement delta is a true mean per-session difference of delta in the unhalved "
+         "Brier score (candidate minus reference).",
+         "- *The variability:* each comparison's development standard deviation, and the moving-block bootstrap's "
+         "design effect (the variance of the mean against independent sessions).",
+         "- *The arithmetic:* the normal approximation; power is the chance that the rule's condition holds.",
+         f"- *The interval:* two-sided {100 * LEVEL:.2f} % (Bonferroni over three candidates), unless the column "
+         "says otherwise.", "",
+         "Two rules:", "",
          "- *registered* (p1_ml_forward_v2): the point estimate at most -0.01 and the upper bound below 0;",
          "- *material* (recommended for any new study): the upper bound below -0.01.", "",
          "| comparison | n | sd | design effect | registered: delta 0.01 / 0.02 / 0.03 | material: delta 0.02 / "
          "0.03 / 0.05 | material at 95 % (fixed sequence): 0.02 / 0.03 / 0.05 | power at 60 sessions, registered, "
-         "delta 0.02 / 0.03 | detectable at 60 (registered) |",
+         "delta 0.02 / 0.03 | delta with 80 % power at 60 sessions (registered) |",
          "|---|---:|---:|---:|---|---|---|---|---:|"])
     for name, v in pw.items():
         rr, mr, fx = v["registered_rule"], v["material_rule"], v["material_fixed_sequence"]
@@ -637,8 +785,8 @@ def render(res: Dict[str, Any]) -> str:
         + ([f"- *Pre-open differences are noisy.* Their standard deviation is {min(v['sd'] for v in pre_rows):.2f} "
             f"to {max(v['sd'] for v in pre_rows):.2f} per session, so 60 sessions detect only improvements of "
             f"{min(v['detectable_at_60']['registered'] for v in pre_rows):.3f} to "
-            f"{max(v['detectable_at_60']['registered'] for v in pre_rows):.3f} - several times what any development "
-            "estimate suggests."] if pre_rows else [])
+            f"{max(v['detectable_at_60']['registered'] for v in pre_rows):.3f} with 80 % power. That is several "
+            "times the largest development point estimate of an improvement over A."] if pre_rows else [])
         + ([f"- *RTH differences are much tighter*, at {min(v['sd'] for v in rth_rows):.3f} to "
             f"{max(v['sd'] for v in rth_rows):.3f} per session, because each session averages twelve cutoffs. An "
             "RTH study is where 60 sessions could settle something - provided the comparator is the symmetric "
@@ -656,23 +804,28 @@ def render(res: Dict[str, Any]) -> str:
 
     # ------------------------------------------------------------------ 7. recommendation
     add(["## 7. Recommendation", "",
-         "**No edge established. No challenger is recommended.**", "",
+         "**No directional edge established for the tested models, features, horizons and evaluation design. No "
+         "challenger is recommended.**", "",
          "- A and B stay in force as they are: B as the existing baseline, A as the benchmark.",
-         "- N, M and P stay experimental.",
-         "- p1_ml_forward_v2 runs as registered. Its prospective sessions are the only clean test of N, M and P.",
+         "- N, M and P stay experimental. Learned directional forecasts stay experimental.",
+         "- p1_ml_forward_v2 runs as registered, with its thresholds, endpoint, artifacts and feature definition "
+         "unchanged. Its prospective sessions are the only clean test of N, M and P. The stricter v3 in the "
+         "deployment plan stays unregistered.",
          "- Registering another direction model now would spend the forward sample on a candidate the development "
          "data do not support.", "",
-         "**Worth keeping in view, as size forecasts rather than direction challengers:**", "",
-         "- the scale model (section 4.6);",
-         "- the models' small gain on the neutral-or-not part at 15 minutes (section 4.2).", "",
-         "**Any later RTH comparison** should be made against the symmetric prior, not CLOCK. CLOCK's noisy "
-         "per-cutoff tilt is beaten even with shuffled labels (section 1).", "",
-         "Both belong to the fan's territory. There they would compete with fan_rw_v1, not with A.", "",
-         "**The analogues.** rth_session_v1 (registered by its first issue) tests the full-session analogues "
-         "prospectively. The development estimate above gives little reason to expect a directional result.", ""])
+         "**Size.** The deployed fan already does most of what the scale model does (section 4.6). Its remaining "
+         "gain is small and not established at the realistic delayed origin, so it is no challenger to the fan "
+         "without its own prospective test. The models' small gain on the neutral-or-not part of the three classes "
+         "(section 4.2) is the same kind of information.", "",
+         "**Comparisons.** Any later RTH direction comparison should be made against the symmetric prior as well as "
+         "CLOCK, reported side by side. CLOCK's per-cutoff tilt is beaten even with shuffled labels (section 1).", "",
+         "**The analogues.** They remain useful as historical comparisons on the dashboard. Their similarity "
+         "percentage is not an outcome probability. rth_session_v1 (registered by its first issue) tests their "
+         "continuations prospectively; the development estimate gives little reason to expect a directional "
+         "result.", ""])
     add(["## Reproduce", "", "```",
          "python scripts/ml_study.py all    # or the stages one by one: predict-preopen, predict-rth, analogues,",
-         "                                  # tabpfn, controls, score", "```", "",
+         "                                  # tabpfn, controls, fan, score", "```", "",
          "- TabPFN runs in .venv-research (research/requirements-tabpfn.txt), never in the production .venv. Its "
          "weights are pinned by sha256 in research/tabpfn_arm.py.",
          "- The database is read with default_transaction_read_only; nothing is written to it.", ""])

@@ -312,12 +312,31 @@ def _crps_members(xs: np.ndarray, y: float) -> float:
     return float(np.abs(xs - y).mean()) - 0.5 * spread
 
 
+def _crps_folded(y: np.ndarray, mu: np.ndarray, sigma: np.ndarray, n: int = 2000) -> np.ndarray:
+    """CRPS of |X|, X ~ N(mu, sigma^2), at y >= 0: the integral of F(x)^2 over [0, y] and of (1 - F(x))^2 beyond, F the
+    folded normal's distribution function - numerically (trapezoid, the jump at y exact)."""
+    from scipy.stats import norm
+    out = np.empty(len(y))
+    for i, (v, m, s_) in enumerate(zip(y, mu, sigma)):
+        F = lambda x: norm.cdf((x - m) / s_) - norm.cdf((-x - m) / s_)      # noqa: E731
+        lo = np.linspace(0.0, v, n)
+        hi = np.linspace(v, max(v, abs(m) + 10 * s_), n)
+        out[i] = np.trapezoid(F(lo) ** 2, lo) + np.trapezoid((1 - F(hi)) ** 2, hi)
+    return out
+
+
 def _distribution(rt, name: str) -> Dict[str, Any]:
+    """Size and direction as distributions at 15 minutes, on identical rows: the same-clock empirical moves (CLOCK),
+    the scale model at zero drift (LS0) and with the ridge location (LSmu), and the deployed fan_rw_v1 (FAN) - the
+    signed move (CRPS of z) and its size alone (CRPS of |z|) scored separately, in z units."""
     from scipy.stats import norm
     p = rt["problems"][name]
     problem, rows, folds = p["problem"], p["rows"], p["folds"]
     dist = pd.read_csv(os.path.join(run.OUT, "distribution_rth_h15.csv.gz"))
     dist = dist[dist["problem"] == name].set_index("row")
+    fpath = os.path.join(run.OUT, "fan_rth_h15.csv.gz")
+    fanz = pd.read_csv(fpath) if os.path.exists(fpath) else pd.DataFrame(columns=["problem", "row", "fan_sigma_z"])
+    fanz = fanz[fanz["problem"] == name].set_index("row")["fan_sigma_z"]
     z = rows["z"].to_numpy(float)
     ok = (problem.y >= 0) & np.isfinite(z)
     out_rows = []
@@ -329,32 +348,52 @@ def _distribution(rt, name: str) -> Dict[str, Any]:
             if xs is None or len(xs) < 30 or r not in dist.index:
                 continue
             mu, sg = float(dist.loc[r, "mu"]), float(dist.loc[r, "sigma"])
+            sf = float(fanz.loc[r]) if r in fanz.index else np.nan
             q = {lv: (np.quantile(xs, (1 - lv) / 2), np.quantile(xs, (1 + lv) / 2)) for lv in (0.5, 0.9)}
             out_rows.append({
                 "session": problem.sessions[problem.row_session[r]], "cutoff": int(problem.keys[r]), "z": z[r],
                 "CLOCK_emp": _crps_members(xs, z[r]), "LS0": float(_crps_gauss(z[r], 0.0, sg)),
-                "LSmu": float(_crps_gauss(z[r], mu, sg)), "mu": mu, "sigma": sg,
+                "LSmu": float(_crps_gauss(z[r], mu, sg)), "mu": mu, "sigma": sg, "fan_sigma": sf,
+                "FAN": float(_crps_gauss(z[r], 0.0, sf)) if np.isfinite(sf) else np.nan,
                 "abs_CLOCK_emp": _crps_members(np.sort(np.abs(xs)), abs(z[r])),
                 "cover50_emp": q[0.5][0] <= z[r] <= q[0.5][1], "cover90_emp": q[0.9][0] <= z[r] <= q[0.9][1],
                 "width90_emp": q[0.9][1] - q[0.9][0],
                 "cover50_ls": abs(z[r]) <= norm.ppf(0.75) * sg, "cover90_ls": abs(z[r]) <= norm.ppf(0.95) * sg,
-                "width90_ls": 2 * norm.ppf(0.95) * sg})
+                "width90_ls": 2 * norm.ppf(0.95) * sg,
+                "cover90_fan": abs(z[r]) <= norm.ppf(0.95) * sf if np.isfinite(sf) else np.nan,
+                "width90_fan": 2 * norm.ppf(0.95) * sf if np.isfinite(sf) else np.nan})
     d = pd.DataFrame(out_rows)
+    res: Dict[str, Any] = {"rows_all": len(d), "sessions_all": int(d["session"].nunique())}
+    # every comparison on the rows every arm has - the fan forecasts full, complete sessions only
+    d = d[np.isfinite(d["FAN"])].reset_index(drop=True)
+    d["abs_LS0"] = _crps_folded(np.abs(d["z"].to_numpy()), np.zeros(len(d)), d["sigma"].to_numpy())
+    d["abs_LSmu"] = _crps_folded(np.abs(d["z"].to_numpy()), d["mu"].to_numpy(), d["sigma"].to_numpy())
+    d["abs_FAN"] = _crps_folded(np.abs(d["z"].to_numpy()), np.zeros(len(d)), d["fan_sigma"].to_numpy())
     sess = d["session"].tolist()
-    res = {"rows": len(d), "sessions": int(d["session"].nunique())}
-    per = {k: st.session_means(d[k].to_numpy(float), sess) for k in ("CLOCK_emp", "LS0", "LSmu")}
-    res["crps"] = {k: float(np.mean(list(v.values()))) for k, v in per.items()}
-    res["paired"] = {f"{a} - {b}": {k: v for k, v in st.paired(per[a], per[b]).items() if k in ("mean", "interval",
-                                                                                                "n")}
-                     for a, b in (("LS0", "CLOCK_emp"), ("LSmu", "LS0"), ("LSmu", "CLOCK_emp"))}
-    res["coverage"] = {k: float(d[k].mean()) for k in ("cover50_emp", "cover90_emp", "cover50_ls", "cover90_ls")}
-    res["width90"] = {"emp": float(d["width90_emp"].mean()), "ls": float(d["width90_ls"].mean())}
+    res.update(rows=len(d), sessions=int(d["session"].nunique()))
+    arms = ("CLOCK_emp", "LS0", "LSmu", "FAN")
+    for task, prefix in (("signed", ""), ("absolute", "abs_")):
+        per = {a: st.session_means(d[prefix + a].to_numpy(float), sess) for a in arms}
+        res[task] = {"crps": {a: float(np.mean(list(per[a].values()))) for a in arms},
+                     "paired": {f"{a} - {b}": {k: v for k, v in st.paired(per[a], per[b]).items()
+                                               if k in ("mean", "interval", "n")}
+                                for a, b in (("LS0", "FAN"), ("CLOCK_emp", "FAN"), ("LS0", "CLOCK_emp"),
+                                             ("LSmu", "LS0"))}}
+    res["crps"] = res["signed"]["crps"]                      # (the earlier keys, kept for the summary bullets)
+    res["paired"] = {"LS0 - CLOCK_emp": res["signed"]["paired"]["LS0 - CLOCK_emp"],
+                     "LSmu - LS0": res["signed"]["paired"]["LSmu - LS0"]}
+    res["coverage"] = {k: float(d[k].astype(float).mean()) for k in
+                       ("cover50_emp", "cover90_emp", "cover50_ls", "cover90_ls", "cover90_fan")}
+    res["width90"] = {"emp": float(d["width90_emp"].mean()), "ls": float(d["width90_ls"].mean()),
+                      "fan": float(d["width90_fan"].mean())}
     nz = d[d["mu"].abs() > 1e-9]
     res["direction"] = {"sign_hit": float((np.sign(nz["mu"]) == np.sign(nz["z"])).mean()) if len(nz) else None,
                         "corr_mu_z": float(np.corrcoef(d["mu"], d["z"])[0, 1]) if d["mu"].std() > 0 else None,
                         "mu_sd": float(d["mu"].std()), "alphas": dist["alpha"].value_counts().to_dict()}
     res["scale"] = {"corr_log_sigma_abs_z": float(np.corrcoef(np.log(d["sigma"]), np.log(np.abs(d["z"]) + 1e-3))
-                                                  [0, 1])}
+                                                  [0, 1]),
+                    "corr_log_fan_sigma_abs_z": float(np.corrcoef(np.log(d["fan_sigma"]),
+                                                                  np.log(np.abs(d["z"]) + 1e-3))[0, 1])}
     return res
 
 

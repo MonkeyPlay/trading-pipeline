@@ -2,18 +2,19 @@
 
 **Development research on inspected sessions, not a test.** Every session here was looked at before (hist_dev_v1, p1_pool_tuning_v1, the fan experiments, the ML development comparison). Anything this study finds is at most a candidate for a prospective study. Nothing here is registered, promoted or delivered; A and B stay as they are.
 
-The protocol `ml_study_v1` (hash `bb93b0e15deecab8`, [research/ml_study.py](../../research/ml_study.py)) was fixed before any outer prediction. Every outer prediction was written with its sha256 before the scoring stage read an outcome (8 files checked at scoring). The trial manifest, predictions and per-session scores are in [ml_study_v1/](ml_study_v1/).
+The protocol `ml_study_v1` (hash `bb93b0e15deecab8`, [research/ml_study.py](../../research/ml_study.py)) was fixed before any outer prediction. Every outer prediction was written with its sha256 before the scoring stage read an outcome (9 files checked at scoring). The trial manifest, predictions and per-session scores are in [ml_study_v1/](ml_study_v1/).
 
 ## Answer
 
-**No edge established.** Nothing predicts NQ's direction better than having no view, before the open or at any RTH horizon. No challenger is recommended. One direction-only interval of 58 dips below no view (LR logistic (nested) at 5 min, delayed origin): about what chance alone gives (1.5).
+**No directional edge established for the tested models, features, horizons and evaluation design. No challenger is recommended.** Before the open, nothing beats the frequencies (A). During the session, nothing beats a forecast with no view on direction, beyond what the many comparisons would produce anyway.
 
-- **Pre-open direction_15m** (158 test sessions): nothing beats A. The best candidate is P pooled NQ+ES+RTY boosted (frozen refits), at 0.5999 against A's 0.6019 (-0.0020 [-0.0234, +0.0220]). N NQ-only logit (frozen refits), LR logistic (nested), RES prior + residual (nested) and BL blend with the prior are worse than A, with intervals above zero. B scores 0.6191, N 0.6238, M 0.6132 and P 0.5999. The frequencies with no view on direction (bullish = bearish) score 0.5993, slightly better than A (-0.0026 [-0.0038, -0.0007]). So even A's own tilt carries no information; this is far below a material edge, and a post-hoc view. With one row per session this sample misses most real signals smaller than about 0.04 (sections 1 and 5), so the pre-open "no edge" rules out only a large one.
-- **RTH, the next 15 minutes from the cutoff** (198 test sessions): the same-clock prior (CLOCK) scores 0.6597. Across the 8 horizons and origins, 13 of 58 arm and problem pairs beat CLOCK with an interval below zero. But CLOCK's own per-cutoff up-shares are noise: the symmetric prior (the same frequencies with no view on direction) beats CLOCK in 4 of 8 problems. Against the symmetric prior, 2 pair(s) keep an interval below zero on the three classes (GB boosted trees (nested) at 15 min, cutoff origin: -0.0042 [-0.0083, -0.0001], of which size -0.0022 [-0.0046, -0.0000] and direction -0.0041 [-0.0093, +0.0018]; TPF TabPFN v2 at 15 min, cutoff origin: -0.0039 [-0.0065, -0.0016], of which size -0.0032 [-0.0051, -0.0016] and direction -0.0016 [-0.0045, +0.0013]). On direction alone, 1 of 58 fall below no view: LR logistic (nested) at 5 min (delayed). About 1.5 would by chance alone.
-- **RTH analogues:** RTH-20's member frequencies score worse than the same-clock history at every horizon (15 minutes: +0.0268 [+0.0178, +0.0363]). Adding the recent path to the similarity does not help (+0.0009 [-0.0060, +0.0080] against RTH-20).
-- **Size, not direction:** a scale model forecasts the size of the next 15 minutes better than the same-clock history (section 4.6). The location added to it does not help.
-- **Why N, M and P look like A:** it is shrinkage on a weak signal, not a coding bug (section 2).
-- **What it would take:** detecting a true 0.01 improvement needs hundreds of sessions, and the registered rule cannot reach 80 % power for an effect of exactly 0.01 at any sample size. Sixty sessions detect only effects several times larger (section 5).
+- **Pre-open direction_15m** (158 test sessions): nothing beats A. The best candidate is P pooled NQ+ES+RTY boosted (frozen refits), at 0.5999 against A's 0.6019 (-0.0020 [-0.0234, +0.0220]). N NQ-only logit (frozen refits), LR logistic (nested), RES prior + residual (nested) and BL blend with the prior are worse than A, with intervals above zero. B scores 0.6191, N 0.6238, M 0.6132 and P 0.5999. The frequencies with no view on direction (bullish = bearish) score 0.5993, slightly better than A (-0.0026 [-0.0038, -0.0007]). That is a post-hoc view, far below a material edge; it says only that A's own tilt carries no information.
+- **How large an edge these data exclude:** this is read from the 95 % intervals, not from a power calculation. The intervals against A leave out improvements larger than: P 0.023; M 0.006; TPF 0.004; CP 0.006; B 0.015; N - none inside its interval, which lies above zero. Smaller true improvements remain possible. This sample has one row per session, and it detected a planted 0.04 signal in only 1 to 3 of 10 runs (section 1).
+- **RTH, the next 15 minutes from the cutoff** (198 test sessions): the same-clock prior (CLOCK) scores 0.6597. Across the 8 horizons and origins, 13 of 58 arm and problem pairs beat CLOCK with an interval below zero. But CLOCK's own per-cutoff up-shares are noisy: the symmetric prior (the same frequencies, with bullish and bearish set to their mean) beats CLOCK in 4 of 8 problems, and so do shuffled labels (section 1). Against the symmetric prior, 2 pair(s) keep an interval below zero on the three classes (GB boosted trees (nested) at 15 min, cutoff origin: -0.0042 [-0.0083, -0.0001], of which size -0.0022 [-0.0046, -0.0000] and direction -0.0041 [-0.0093, +0.0018]; TPF TabPFN v2 at 15 min, cutoff origin: -0.0039 [-0.0065, -0.0016], of which size -0.0032 [-0.0051, -0.0016] and direction -0.0016 [-0.0045, +0.0013]). On direction alone, 1 of 58 intervals lies below no view: LR logistic (nested) at 5 min (delayed). Each comparison counts when its two-sided 95 % interval lies below zero, so a one-sided error of about 2.5 %. There is no multiplicity correction, and the comparisons are dependent: the same sessions, overlapping horizons, correlated arms. With independent comparisons about 1.5 would be expected. The result is consistent with no robust discovery. It does not prove that only chance is at work.
+- **RTH analogues:** RTH-20's member frequencies score worse than the same-clock history at every horizon (15 minutes: +0.0268 [+0.0178, +0.0363]). Adding the recent path to the similarity does not help (+0.0009 [-0.0060, +0.0080] against RTH-20). The analogues stay useful as historical comparisons. Their similarity percentage is not an outcome probability.
+- **Size, not direction:** the deployed fan (fan_rw_v1) already forecasts the size of the next 15 minutes far better than the same-clock history: same-clock minus fan is +0.0109 [+0.0062, +0.0161] on the signed move. The study's scale model adds little to the fan. Scale model minus fan, from the cutoff: -0.0022 [-0.0034, -0.0007] on the signed move and -0.0043 [-0.0068, -0.0013] on its size. With the realistic delayed start: -0.0007 [-0.0028, +0.0013] and -0.0014 [-0.0057, +0.0026]. No improvement to the product is claimed. A location added to the scale does not help (section 4.6).
+- **Why N, M and P look like A:** the tuning prefers the strongest penalty, looser penalties score worse, and the same pipeline moves with planted signals. That is shrinkage on a weak signal, not a coding bug (section 2).
+- **Sample sizes** (estimates under stated assumptions, not guarantees; section 5): with an effect of exactly 0.01, the registered rule cannot reach 80 % power at any sample size. At 60 sessions it has 80 % power only for true improvements of about 0.05 or more before the open.
 
 ## What ran
 
@@ -24,7 +25,8 @@ The protocol `ml_study_v1` (hash `bb93b0e15deecab8`, [research/ml_study.py](../.
 | tabpfn | 2026-10-10T00:08:35Z | `900f3cb196af+dirty` | TabPFN v2 on the pre-open and the two 15-minute RTH problems (.venv-research) |
 | predict_rth | 2026-10-10T00:16:43Z | `900f3cb196af+dirty` | 318 sessions 2025-07-08 to 2026-10-09, 3804 cutoff rows, 29160 windows |
 | analogues | 2026-10-10T00:17:13Z | `900f3cb196af+dirty` | 198 test sessions, 36432 forecasts |
-| score | 2026-10-10T00:23:03Z | `900f3cb196af+dirty` | 8 prediction files verified, then the outcomes read |
+| fan | 2026-10-10T07:36:14Z | `f00f41e57b83+dirty` | fan_rw_v1 on 4728 RTH 15-minute rows (review addition; skipped: {'incomplete day': 24}) |
+| score | 2026-10-10T07:54:01Z | `f00f41e57b83+dirty` | 9 prediction files verified, then the outcomes read |
 
 Re-run from the final code, after TabPFN and the controls had used the first run's outputs: predict_preopen (first 2026-10-09T23:14:15Z) - every prediction file byte-identical; predict_rth (first 2026-10-09T23:16:03Z) - every prediction file byte-identical; analogues (first 2026-10-09T23:17:00Z) - every prediction file byte-identical.
 
@@ -42,12 +44,17 @@ Re-run from the final code, after TabPFN and the controls had used the first run
 
 The outer folds train on every earlier session less one embargoed session, test the next 20, and start after 120 sessions. For the pre-open task they are exactly the development comparison's eight folds. Each tuned family is tried on two feature sets (NQ only, NQ plus other instruments), an ablation counted in its grid.
 
-## Deviations from the protocol
+## Deviations from the protocol, and later additions
 
-- TabPFN refuses more than 1000 training rows on a CPU by default (a speed guard); the RTH folds train on 1400 to 3000 rows, so the guard was lifted (TABPFN_ALLOW_CPU_LARGE_DATASET=1). The model and its defaults are unchanged.
-- The direction-or-size decomposition (symmetrised forecasts, direction alone on the rows that moved) and the symmetric prior (PRIOR_SYM: the prior's bullish and bearish shares replaced by their mean) were added after the first scoring pass, when the RTH arms' gains over the same-clock prior needed explaining. They are analysis views computed from the stored predictions; no prediction, configuration or fold changed.
-- The planted-signal control first used fixed betas whose oracle gains (0.065 and 0.145 pre-open, 0.022 and 0.072 RTH) missed the protocol's targets. The final run solves beta for the targets (ml_study.beta_for: 0.04 and 0.015). The shuffled-label controls are also scored against the symmetric prior: with shuffled labels, the conditional prior beat CLOCK itself in 3 of 5 RTH runs, so beating CLOCK needs no signal.
-- An RTH label first required only its window's two end bars; the protocol (and rth_eval.window_move) requires every bar of the window. Fixed before the final run; no window in the data lacks an inner bar (0 of 29,160), so no label changed.
+| when (UTC) | outcomes already read? | what changed | why | inferential impact |
+|---|---|---|---|---|
+| 2026-10-09 23:20:42 | no | TabPFN's guard against more than 1,000 training rows on a CPU lifted (TABPFN_ALLOW_CPU_LARGE_DATASET=1) | the RTH folds train on 1,400 to 3,600 rows; without it the registered TPF arm could not run there | none on the model or its defaults; TabPFN's own predictions did not exist yet |
+| 2026-10-09 23:21:30 | no | an RTH label requires every bar of its window, not only the two end bars | the protocol and rth_eval.window_move say so; a test found the gap | none: no window in the data lacks an inner bar (0 of 29,160), so no label changed |
+| 2026-10-09 23:24:49 and 23:28:08 | yes | the direction-or-size decomposition and the symmetric prior (PRIOR_SYM) added as analysis views | the arms' gains over the same-clock prior needed explaining; the first controls had shown that shuffled labels beat it too | post hoc: it changes the reading, not one prediction. Every comparison against CLOCK and A is kept beside it, in full |
+| 2026-10-09 23:37:49 | yes (the first control run) | the planted signals' beta solved for the protocol's oracle gains (0.04 and 0.015) | the first run's fixed betas gave 0.065 and 0.145 before the open, 0.022 and 0.072 on RTH - not what the protocol specified | the controls only; both runs are reported (ml_study_v1/controls_first_run.json) |
+| 2026-10-10 07:36:14 | yes | the deployed fan (fan_rw_v1) scored on the RTH 15-minute rows; the size of the move scored apart from the signed move | the review of 2026-10-10: compare the scale model with the product's own size forecast before any claim | a new comparator, not a new search. It narrowed the size claim (section 4.6) |
+
+Re-running the stages from the final code gave byte-identical predictions (above). That shows the predictions are reproducible. It does not rule out selection or reporting bias in what was added after outcomes were read. That is why each addition is listed here, and why every original comparison is kept.
 
 ## 1. Implementation checks: correctness, not skill
 
@@ -69,17 +76,28 @@ The outer folds train on every earlier session less one embargoed session, test 
 | Planted signal, RTH, 15 minutes, oracle gain 0.015 (beta 0.241) | found (3/3) | The oracle's gain is 0.0151. Detected (interval below zero) in CP 1/3, LR 3/3, GB 3/3, RES 3/3, BL 3/3 runs. Mean gains: CP 0.0013, LR 0.0145, GB 0.0125, RES 0.0116, BL 0.0139 |
 | Planted signal, RTH, 15 minutes, oracle gain 0.040 (beta 0.416) | found (3/3) | The oracle's gain is 0.0398. Detected (interval below zero) in CP 1/3, LR 3/3, GB 3/3, RES 3/3, BL 3/3 runs. Mean gains: CP 0.0012, LR 0.0375, GB 0.0358, RES 0.0351, BL 0.0377 |
 
+**How the signals were planted.** The real labels are replaced by draws from softmax(log p + beta z (-1, +1, 0)), over bearish, bullish and neutral:
+
+- p is the rows' overall class frequencies;
+- z is the standardised sum of two real features (before the open: nq_ret_on and nq_range_pos; RTH: ret_30 and range_pos), so the planted effect is directional.
+
+The strength is stated as the oracle gain: the expected unhalved Brier score of p minus that of the true probabilities, the mean of |p_true - p|^2 over the labelled rows, in the same units as every Brier difference here. beta is solved for the protocol's gains of 0.04 and 0.015 (ml_study.beta_for). Seeds are 0 to 9 before the open and 0 to 2 for RTH, per strength. A run counts as detected when the arm's outer-test 95 % interval against the prior lies below zero.
+
+The first run used fixed betas with gains of 0.065 and 0.145 before the open, 0.022 and 0.072 for RTH. It found the strong pre-open signal in 9 to 10 of 10 runs for every learned model, and N and M found the weaker one in 6 of 10 (ml_study_v1/controls_first_run.json). The conditional prior found neither, as expected: it never sees the two features the signal is planted in.
+
 The code does what it claims:
 
 - the reproductions are identical;
 - nothing leaks across the date split or from later bars;
 - shuffled labels give no skill against the symmetric prior;
-- a planted signal is found where the sample allows: RTH (15 minutes): a planted gain of 0.015 in at most 3 of 3 runs; a planted gain of 0.040 in at most 3 of 3 runs; pre-open: a planted gain of 0.018 in at most 1 of 10 runs; a planted gain of 0.042 in at most 3 of 10 runs.
+- in these simulations, a planted signal is found where the sample allows: RTH (15 minutes): a planted gain of 0.015 in at most 3 of 3 runs; a planted gain of 0.040 in at most 3 of 3 runs; pre-open: a planted gain of 0.018 in at most 1 of 10 runs; a planted gain of 0.042 in at most 3 of 10 runs.
 
-So the two tasks' silences mean different things:
+So the two tasks' silences carry different weight:
 
-- The RTH task, with twelve cutoffs per session, finds a signal of the size that would matter. Its "no edge" is informative.
-- The pre-open task has one row per session. It misses most planted signals of 0.04, so its "no edge" says only that no large signal exists (section 5).
+- The RTH task, with twelve cutoffs per session, found a planted gain of 0.015 in every run here.
+- The pre-open task has one row per session. It found a planted 0.04 in at most 3 of 10 runs, so its "no edge" excludes only large effects (the intervals in the answer).
+
+Simulations show power against the planted kind of signal only: a linear, directional tilt in two features. They say nothing about power against every signal a market could hold.
 
 None of this says whether NQ is predictable. The next sections do.
 
@@ -155,12 +173,12 @@ In production so far:
 - nq_prior_p1_v1 (historical_replay): 280 issued
 - deliveries: nq_baseline_p1_v1 1. The one delivery is 2026-10-09's, recorded after the fact by 363c818 and shown as a reconstruction.
 
-**Verdict.** The probabilities track A because the data leave little better to do:
+**Verdict.** The probabilities track A because the data leave little better to do. The evidence:
 
-- the tuning prefers the strongest penalty on offer;
-- a looser penalty scores worse;
-- the same code learns a planted signal (section 1);
-- the features come from history only.
+- the tuning prefers the strongest penalty on offer (the counts above);
+- along the path, a looser penalty scores steadily worse;
+- the same pipeline moves with a planted signal: at the protocol's 0.042, N's and M's mean gains were 0.024 and 0.027, but they were rarely significant with 158 sessions (1 and 3 of 10 runs); at the first run's 0.144, N and M were detected in 10 and 9 of 10 runs;
+- the features come from history only (section 1).
 
 This is shrinkage on a weak signal, not a bug.
 
@@ -243,7 +261,7 @@ Folds in which an arm beats A, of 8: N NQ-only logit (frozen refits) 3, M multi-
 | 2026-10-08 | bearish | 43.0/45.1/11.9, 0.543 | 41.5/52.6/6.0, 0.622 | 42.8/44.7/12.5, 0.543 | 44.2/46.5/9.3, 0.536 | 47.9/42.7/9.4, 0.463 |
 | 2026-10-09 | bearish * | 43.2/45.0/11.9, 0.539 | 41.6/52.5/5.9, 0.620 | 45.3/43.4/11.3, 0.501 | 46.2/43.4/10.4, 0.489 | 39.5/50.0/10.5, 0.626 |
 
-Means: A 0.660, B 0.719, N 0.661, M 0.669, P 0.763.
+Means, from the full vectors: A 0.6600, B 0.7194, N 0.6615, M 0.6686, P 0.7629. The table rounds each session's score to three decimals. The earlier check quoted N as 0.662, the mean of those rounded scores; the exact mean is 0.6615.
 
 \* 2026-10-09's label is computed from the stored bars; no outcome is recorded yet.
 
@@ -341,6 +359,15 @@ Each arm is compared with the symmetric prior: the same-clock frequencies with n
 | B_rth analogues RTH-20 (v3) | +0.0268 [+0.0200, +0.0349] | +0.0130 [+0.0075, +0.0193] | +0.0255 [+0.0166, +0.0344] | +0.0138 [+0.0091, +0.0189] |
 | B_rth_recent analogues + recent path | +0.0288 [+0.0207, +0.0377] | +0.0149 [+0.0091, +0.0215] | +0.0261 [+0.0153, +0.0369] | +0.0139 [+0.0084, +0.0195] |
 
+**The comparators.**
+
+- *CLOCK* is the training sessions' class frequencies at the same cutoff, horizon and origin, Laplace-smoothed ((n_c + 1) / (n + 3)), each fold's own.
+- *The symmetric prior* (PRIOR_SYM) is CLOCK with its bullish and bearish shares replaced by their mean. Its neutral share stays CLOCK's estimated one, frozen in the same fold. Before the open, it is A_s treated the same way.
+- *Zero moves:* the label is neutral whenever |move| <= band (and band > 0), so a zero move is neutral.
+- *The direction-only score* uses only the rows labelled bullish or bearish. There, "no view" (q = 0.5) scores exactly 0.5. The 50/50 is a statement about that binary outcome given a move past the band, not about the three classes.
+
+**Why CLOCK is a noisy reference.** Each cutoff's up-share is estimated separately, from 120 to 300 sessions. That leaves a sampling error of a few percentage points, which a Brier score charges for. A forecast that pools or shrinks those shares escapes the charge without knowing anything about the move. With shuffled labels the conditional prior still beat CLOCK (section 1). So beating CLOCK alone shows no information. Both references are kept in every table.
+
 How to read the two tables:
 
 - The symmetrised column is the size part: the chance of a move past the band.
@@ -360,7 +387,7 @@ How to read the two tables:
 | 60 | cutoff | 198 | 0.6637 | -0.0022 [-0.0053, +0.0012] | CP conditional prior | 0.6619 | -0.0018 [-0.0038, +0.0005] | +0.0004 [-0.0025, +0.0034] | CP conditional prior +0.0003 [-0.0044, +0.0051] | +0.0197 [+0.0093, +0.0292] |
 | 60 | delayed | 198 | 0.6641 | -0.0022 [-0.0069, +0.0028] | CP conditional prior | 0.6617 | -0.0024 [-0.0049, +0.0007] | -0.0002 [-0.0043, +0.0041] | CP conditional prior +0.0007 [-0.0064, +0.0075] | +0.0219 [+0.0124, +0.0301] |
 
-Across the 8 problems and 8 arms (58 pairs), the direction-only score has 1 interval(s) below zero against no view: LR logistic (nested) at 5 min (delayed). At 95 %, about 1.5 would fall below zero by chance alone. The symmetrised (size) score has 3 interval(s) below zero against the symmetric prior.
+Across the 8 problems and 8 arms (58 pairs), the direction-only score has 1 interval(s) below zero against no view: LR logistic (nested) at 5 min (delayed). A comparison counts when its two-sided 95 % interval lies below zero, so a one-sided error of about 2.5 %. There is no multiplicity correction. The comparisons are dependent: the same sessions, overlapping horizons, correlated arms. With independent comparisons about 1.5 would be expected, and dependence widens that spread. The result is consistent with no robust discovery, not proof of chance. The symmetrised (size) score has 3 interval(s) below zero against the symmetric prior.
 
 ### 4.4 By session phase: 15 minutes, cutoff origin (exploratory)
 
@@ -376,29 +403,54 @@ B_rth_recent ranks the same pool by the mean of two similarities: v3's, and a re
 
 These are development estimates from reconstructed rankings. rth_session_v1 is the prospective test, and it scores direction as up or not up, with size separately.
 
-### 4.6 Size and direction as distributions: 15 minutes
+### 4.6 Size and direction as distributions: 15 minutes, against the deployed fan
 
-CRPS is in units of sigma_1m x sqrt(15).
+Four forecasts of the window's move, on identical rows. Identical means the same test sessions, the same origin (the bar ending at the cutoff), the same window [S, S + 15) and the same target, in units of sigma_1m x sqrt(15). The four:
 
-| origin | CLOCK empirical | LS0: scale model, zero drift | LSmu: scale + ridge location | LS0 - CLOCK | LSmu - LS0 | 90 % coverage, empirical / LS | 90 % width, empirical / LS |
-|---|---:|---:|---:|---|---|---|---|
-| cutoff | 0.4949 | 0.4819 | 0.4826 | -0.0130 [-0.0182, -0.0087] | +0.0007 [+0.0002, +0.0013] | 89.5 % / 91.3 % | 2.87 / 2.85 |
-| delayed | 0.4842 | 0.4703 | 0.4701 | -0.0139 [-0.0185, -0.0094] | -0.0002 [-0.0008, +0.0005] | 90.2 % / 91.8 % | 2.88 / 2.83 |
+- *CLOCK*: the training sessions' moves at that cutoff, as an empirical distribution;
+- *LS0*: the study's scale model, centred at zero;
+- *LSmu*: the same scale plus a ridge location;
+- *FAN*: fan_rw_v1, the deployed volatility-aware random-walk fan, from the same origin. For the delayed start, its variance over the window is the difference of its cumulative variances.
 
-**Size is forecastable.** The scale is a regression of the log squared move on the volatility so far, relative volume, the range, the time of day and scheduled events. It beats the same-clock history with intervals below zero at both origins. Its log correlates with the log size of the move at 0.34.
+The fan forecasts full, complete sessions only. 2364 of 2376 rows remain at the cutoff origin and 2364 of 2376 at the delayed origin. All four are historical reconstructions on these rows, so no live-issue eligibility applies to any of them. The signed move (direction and size) and its absolute value (size alone) are scored as separate tasks.
 
-**Direction is not.** The ridge location's penalty went to its maximum in every fold. Its out-of-sample correlation with the move is -0.055, and it gets the sign right 49.3 % of the time.
+**CRPS of the signed move** (lower is better; paired per session, 95 % intervals):
 
-This repeats 2026-09's finding. A narrower calibrated range is not a directional edge. The project's random-walk fan (fan_rw_v1) is the deployed size benchmark. Its own reports (docs/reports/fan_rw_v1_NQ_*.md) cover it, and it was not re-run here.
+| origin | CLOCK | LS0 | LSmu | FAN | LS0 - FAN | CLOCK - FAN | LS0 - CLOCK | LSmu - LS0 |
+|---|---:|---:|---:|---:|---|---|---|---|
+| cutoff | 0.4958 | 0.4827 | 0.4835 | 0.4849 | -0.0022 [-0.0034, -0.0007] | +0.0109 [+0.0062, +0.0161] | -0.0131 [-0.0183, -0.0084] | +0.0007 [+0.0002, +0.0013] |
+| delayed | 0.4852 | 0.4712 | 0.4710 | 0.4719 | -0.0007 [-0.0028, +0.0013] | +0.0133 [+0.0094, +0.0170] | -0.0140 [-0.0184, -0.0095] | -0.0002 [-0.0008, +0.0005] |
+
+**CRPS of the absolute move (size)** (lower is better; paired per session, 95 % intervals):
+
+| origin | CLOCK | LS0 | LSmu | FAN | LS0 - FAN | CLOCK - FAN | LS0 - CLOCK | LSmu - LS0 |
+|---|---:|---:|---:|---:|---|---|---|---|
+| cutoff | 0.3163 | 0.2925 | 0.2925 | 0.2968 | -0.0043 [-0.0068, -0.0013] | +0.0195 [+0.0099, +0.0300] | -0.0238 [-0.0337, -0.0143] | +0.0000 [-0.0000, +0.0000] |
+| delayed | 0.3081 | 0.2872 | 0.2872 | 0.2885 | -0.0014 [-0.0057, +0.0026] | +0.0196 [+0.0119, +0.0266] | -0.0210 [-0.0295, -0.0121] | +0.0000 [+0.0000, +0.0001] |
+
+90 % central intervals: coverage CLOCK / LS / FAN 89.5 % / 91.2 % / 91.5 % at the cutoff origin and 90.2 % / 91.8 % / 92.1 % delayed. Mean widths 2.87 / 2.85 / 2.93 and 2.88 / 2.83 / 2.86.
+
+**Size.** The fan already forecasts the size of the move far better than the same-clock history. The study's scale model is a regression of the log squared move on the volatility so far, relative volume, the range, the time of day and scheduled events. Against the fan, it is better at the cutoff origin on both tasks and not established better at the delayed origin, the one a live forecast would have. The differences are a few tenths of a percent to about 1.5 % of the fan's score, and this is development data, with the fan comparison added after the fact. No improvement to the product is claimed. A size model meant to replace the fan's would need its own prospective test against the fan's record.
+
+Both scales correlate with the log size of the move: the scale model at 0.34, the fan at 0.33 from the cutoff.
+
+**Direction is not forecastable.** The ridge location's penalty went to its maximum in every fold. Its out-of-sample correlation with the move is -0.055, and it gets the sign right 49.2 % of the time. Adding it changes the signed score by the LSmu - LS0 column. This repeats 2026-09's finding. A narrower calibrated range is not a directional edge.
 
 ## 5. Power
 
-These figures come from the development per-session differences: their standard deviation, and the moving-block bootstrap's design effect (the variance of the mean against independent sessions). The table gives the sessions needed for 80 % power at a true improvement delta. It uses the normal approximation and two-sided 98.33 % intervals (Bonferroni over three candidates). Two rules:
+**What is assumed.** These are estimates, not guaranteed detection thresholds:
+
+- *The effect:* a true improvement delta is a true mean per-session difference of delta in the unhalved Brier score (candidate minus reference).
+- *The variability:* each comparison's development standard deviation, and the moving-block bootstrap's design effect (the variance of the mean against independent sessions).
+- *The arithmetic:* the normal approximation; power is the chance that the rule's condition holds.
+- *The interval:* two-sided 98.33 % (Bonferroni over three candidates), unless the column says otherwise.
+
+Two rules:
 
 - *registered* (p1_ml_forward_v2): the point estimate at most -0.01 and the upper bound below 0;
 - *material* (recommended for any new study): the upper bound below -0.01.
 
-| comparison | n | sd | design effect | registered: delta 0.01 / 0.02 / 0.03 | material: delta 0.02 / 0.03 / 0.05 | material at 95 % (fixed sequence): 0.02 / 0.03 / 0.05 | power at 60 sessions, registered, delta 0.02 / 0.03 | detectable at 60 (registered) |
+| comparison | n | sd | design effect | registered: delta 0.01 / 0.02 / 0.03 | material: delta 0.02 / 0.03 / 0.05 | material at 95 % (fixed sequence): 0.02 / 0.03 / 0.05 | power at 60 sessions, registered, delta 0.02 / 0.03 | delta with 80 % power at 60 sessions (registered) |
 |---|---:|---:|---:|---|---|---|---|---:|
 | N - A (pre-open) | 158 | 0.158 | 0.76 | never / 505 / 225 | 2008 / 505 / 125 | 1516 / 377 / 94 | 10 % / 24 % | 0.058 |
 | M - A (pre-open) | 158 | 0.119 | 0.86 | never / 318 / 141 | 1265 / 318 / 79 | 953 / 240 / 60 | 16 % / 39 % | 0.046 |
@@ -419,7 +471,7 @@ A difference without significance does not show that two forecasts are equally g
 **What the table shows:**
 
 - *An effect of exactly 0.01 never reaches 80 % power under the registered rule.* Its point threshold is 0.01 itself, so power stays at most 50 % however many sessions accrue.
-- *Pre-open differences are noisy.* Their standard deviation is 0.12 to 0.26 per session, so 60 sessions detect only improvements of 0.046 to 0.106 - several times what any development estimate suggests.
+- *Pre-open differences are noisy.* Their standard deviation is 0.12 to 0.26 per session, so 60 sessions detect only improvements of 0.046 to 0.106 with 80 % power. That is several times the largest development point estimate of an improvement over A.
 - *RTH differences are much tighter*, at 0.023 to 0.065 per session, because each session averages twelve cutoffs. An RTH study is where 60 sessions could settle something - provided the comparator is the symmetric prior, not CLOCK.
 
 ## 6. Forecast edge is not trading edge
@@ -435,29 +487,24 @@ No trading claim is made, and this study authorises no trade.
 
 ## 7. Recommendation
 
-**No edge established. No challenger is recommended.**
+**No directional edge established for the tested models, features, horizons and evaluation design. No challenger is recommended.**
 
 - A and B stay in force as they are: B as the existing baseline, A as the benchmark.
-- N, M and P stay experimental.
-- p1_ml_forward_v2 runs as registered. Its prospective sessions are the only clean test of N, M and P.
+- N, M and P stay experimental. Learned directional forecasts stay experimental.
+- p1_ml_forward_v2 runs as registered, with its thresholds, endpoint, artifacts and feature definition unchanged. Its prospective sessions are the only clean test of N, M and P. The stricter v3 in the deployment plan stays unregistered.
 - Registering another direction model now would spend the forward sample on a candidate the development data do not support.
 
-**Worth keeping in view, as size forecasts rather than direction challengers:**
+**Size.** The deployed fan already does most of what the scale model does (section 4.6). Its remaining gain is small and not established at the realistic delayed origin, so it is no challenger to the fan without its own prospective test. The models' small gain on the neutral-or-not part of the three classes (section 4.2) is the same kind of information.
 
-- the scale model (section 4.6);
-- the models' small gain on the neutral-or-not part at 15 minutes (section 4.2).
+**Comparisons.** Any later RTH direction comparison should be made against the symmetric prior as well as CLOCK, reported side by side. CLOCK's per-cutoff tilt is beaten even with shuffled labels (section 1).
 
-**Any later RTH comparison** should be made against the symmetric prior, not CLOCK. CLOCK's noisy per-cutoff tilt is beaten even with shuffled labels (section 1).
-
-Both belong to the fan's territory. There they would compete with fan_rw_v1, not with A.
-
-**The analogues.** rth_session_v1 (registered by its first issue) tests the full-session analogues prospectively. The development estimate above gives little reason to expect a directional result.
+**The analogues.** They remain useful as historical comparisons on the dashboard. Their similarity percentage is not an outcome probability. rth_session_v1 (registered by its first issue) tests their continuations prospectively; the development estimate gives little reason to expect a directional result.
 
 ## Reproduce
 
 ```
 python scripts/ml_study.py all    # or the stages one by one: predict-preopen, predict-rth, analogues,
-                                  # tabpfn, controls, score
+                                  # tabpfn, controls, fan, score
 ```
 
 - TabPFN runs in .venv-research (research/requirements-tabpfn.txt), never in the production .venv. Its weights are pinned by sha256 in research/tabpfn_arm.py.

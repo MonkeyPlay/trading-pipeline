@@ -10,6 +10,7 @@ docs/reports/ml_study_v1/. Run the stages in order (``all`` runs every one):
     python scripts/ml_study.py analogues          # B_rth / B_rth_recent at the RTH test sessions
     python scripts/ml_study.py tabpfn             # TabPFN v2 in .venv-research (never the production .venv)
     python scripts/ml_study.py controls           # shuffled labels, synthetic signal, future-bar invariance
+    python scripts/ml_study.py fan                # the deployed fan_rw_v1 on the RTH 15-minute rows (size)
     python scripts/ml_study.py score              # checks the stored predictions, then reads the outcomes
 
 Every stage's outputs are recorded with their sha256 in docs/reports/ml_study_v1/manifest.json; the score
@@ -62,13 +63,13 @@ def run_tabpfn():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["predict-preopen", "predict-rth", "analogues", "tabpfn", "controls", "score",
-                                      "all"])
+    ap.add_argument("stage", choices=["predict-preopen", "predict-rth", "analogues", "tabpfn", "controls", "fan",
+                                      "score", "all"])
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     args = ap.parse_args(argv)
     from research import ml_study_data as dd
     from research import ml_study_run as run
-    stages = (["predict-preopen", "predict-rth", "analogues", "tabpfn", "controls", "score"]
+    stages = (["predict-preopen", "predict-rth", "analogues", "tabpfn", "controls", "fan", "score"]
               if args.stage == "all" else [args.stage])
     for stage in stages:
         if stage == "tabpfn":
@@ -84,6 +85,8 @@ def main(argv=None):
                 print(run.analogues(conn, args.jobs)["files"])
             elif stage == "controls":
                 run.controls(conn, args.jobs)
+            elif stage == "fan":
+                print(run.fan(conn))
             elif stage == "score":
                 from research import ml_study_report as rep
                 print(rep.score(conn))

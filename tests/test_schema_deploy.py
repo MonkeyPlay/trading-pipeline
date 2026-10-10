@@ -76,7 +76,9 @@ def test_deploy_fast_forwards_main_and_migrates_from_a_committed_revision(fresh,
     assert run.returncode == 0, run.stdout + run.stderr
     assert git("rev-parse", "HEAD") == head and git("branch", "--show-current") == "main"
     log = (prod / "logs" / "deployments.log").read_text()
-    assert f"deployed {head} ({head}) to {prod} (main), schema v" in log
+    assert f"deployed {head} ({head}) to {prod} (main), database " in log and "artifacts verified" in log
+    assert "has not been restarted" in log                                    # it never claims a restart
+    assert sorted(p.name for p in prod.rglob("*") if p.is_symlink()) == [".venv"]   # nothing linked
     (prod / "README.md").write_text("changed\n")                             # production runs committed revisions
     again = deploy(head)
     assert again.returncode != 0 and "local changes" in again.stderr
@@ -86,3 +88,79 @@ def test_deploy_fast_forwards_main_and_migrates_from_a_committed_revision(fresh,
     git("checkout", "--quiet", "--detach")
     detached = deploy(head)
     assert detached.returncode != 0 and "not main" in detached.stderr
+
+
+def _prod_at_head(tmp_path):
+    """A clone standing in for ~/trading_pipeline, on main at this repository's HEAD; ``(prod, head, deploy, git)``."""
+    head = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    prod = tmp_path / "prod"
+    subprocess.run(["git", "clone", "--quiet", ROOT, str(prod)], check=True)
+    git = lambda *a: subprocess.run(["git", "-C", str(prod), *a], check=True, capture_output=True,  # noqa: E731
+                                    text=True).stdout.strip()
+    git("checkout", "--quiet", "-B", "main", head)
+    (prod / ".env").write_text(f"DATABASE_URL={DSN}\n")
+    os.symlink(os.path.join(ROOT, ".venv"), prod / ".venv")
+    env = dict(os.environ, DATABASE_URL=DSN, PROD_DIR=str(prod))
+    deploy = lambda rev: subprocess.run([os.path.join(ROOT, "scripts", "deploy.sh"), rev], env=env,  # noqa: E731
+                                        capture_output=True, text=True, timeout=300)
+    return prod, head, deploy, git
+
+
+def _schema_version():
+    with psycopg.connect(DSN) as c:
+        return c.execute("SELECT max(version) FROM schema_migrations").fetchone()[0]
+
+
+def test_deploy_refuses_while_auto_or_a_dashboard_runs_from_the_checkout(fresh, tmp_path):
+    """Nothing may write the database during a deployment: Auto mode's lock held, or a dashboard process started from
+    the production checkout, is refused before anything changes."""
+    import fcntl
+    import sys
+    prod, head, deploy, git = _prod_at_head(tmp_path)
+    (prod / "data").mkdir(exist_ok=True)
+    lock = open(prod / "data" / "auto_mode.lock", "a+")
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    lock.write("pid 4242, port 8080")
+    lock.flush()
+    try:
+        run = deploy(head)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    assert run.returncode != 0 and "Auto mode is on (pid 4242, port 8080)" in run.stdout
+    assert "Nothing changed" in run.stderr
+    dashboard = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "dashboard.app"], cwd=prod)
+    try:
+        run = deploy(head)
+    finally:
+        dashboard.kill()
+        dashboard.wait()
+    assert run.returncode != 0 and f"pid {dashboard.pid} runs from {prod}" in run.stdout
+    assert not (prod / "logs" / "deployments.log").exists()                   # nothing deployed, nothing logged
+    assert deploy(head).returncode == 0                                        # once stopped, it goes ahead
+
+
+def test_deploy_checks_the_artifacts_before_it_migrates(fresh, tmp_path):
+    """An installed ML artifact that does not hash to its manifest is refused before the schema changes; the
+    database stays at the version it had."""
+    import hashlib
+    import json
+    from database.connection import reset_database
+    from database.migrations import latest_version
+    prod, head, deploy, git = _prod_at_head(tmp_path)
+    reset_database(DSN, upto=latest_version() - 1)
+    try:
+        d = prod / "data" / "models" / "nq_ml" / "nq_ml_nq_p1_v1"
+        d.mkdir(parents=True)
+        (d / "model.joblib").write_bytes(b"not the artifact the manifest describes")
+        (d / "manifest.json").write_text(json.dumps({"version": "nq_ml_nq_p1_v1", "sha256": "0" * 64}))
+        run = deploy(head)
+        assert run.returncode != 0 and "hashes to" in run.stdout and "nothing changed" in run.stderr
+        assert _schema_version() == latest_version() - 1                       # not migrated
+        sha = hashlib.sha256((d / "model.joblib").read_bytes()).hexdigest()
+        (d / "manifest.json").write_text(json.dumps({"version": "nq_ml_nq_p1_v1", "sha256": sha}))
+        run = deploy(head)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert _schema_version() == latest_version() and "artifacts: verified" in run.stdout
+    finally:
+        reset_database(DSN)

@@ -1,0 +1,136 @@
+{
+ "what": "the first planted-signal control run (2026-10-09 23:22-23:36 UTC), with fixed betas whose oracle gains missed the protocol's targets (0.04 and 0.015); superseded by the final run with beta solved for the targets. Its controls.pkl was overwritten by the final run: these values are transcribed from the run's printed summary (mean gain = the oracle-style Brier gain of the arm over the prior in the outer test sessions; detected = runs whose 95 % interval of arm minus prior lies below zero)",
+ "preopen": {
+  "runs_per_strength": 10,
+  "seeds": "0-9",
+  "0.45": {
+   "oracle_gain": 0.065,
+   "arms": {
+    "CP": [
+     -0.0095,
+     0
+    ],
+    "LR": [
+     0.0415,
+     3
+    ],
+    "GB": [
+     0.0402,
+     4
+    ],
+    "RES": [
+     0.0431,
+     3
+    ],
+    "BL": [
+     0.0382,
+     3
+    ],
+    "N": [
+     0.0503,
+     6
+    ],
+    "M": [
+     0.0499,
+     6
+    ],
+    "P": [
+     0.0189,
+     2
+    ]
+   }
+  },
+  "0.8": {
+   "oracle_gain": 0.1445,
+   "arms": {
+    "CP": [
+     -0.012,
+     0
+    ],
+    "LR": [
+     0.1172,
+     9
+    ],
+    "GB": [
+     0.112,
+     9
+    ],
+    "RES": [
+     0.1177,
+     9
+    ],
+    "BL": [
+     0.1158,
+     10
+    ],
+    "N": [
+     0.1225,
+     10
+    ],
+    "M": [
+     0.1195,
+     9
+    ],
+    "P": [
+     0.0659,
+     10
+    ]
+   }
+  }
+ },
+ "rth_15min_cutoff": {
+  "runs_per_strength": 3,
+  "seeds": "0-2",
+  "0.3": {
+   "oracle_gain": 0.0224,
+   "arms": {
+    "CP": [
+     0.0017,
+     1
+    ],
+    "LR": [
+     0.0216,
+     3
+    ],
+    "GB": [
+     0.0202,
+     3
+    ],
+    "RES": [
+     0.0191,
+     3
+    ],
+    "BL": [
+     0.0211,
+     3
+    ]
+   }
+  },
+  "0.6": {
+   "oracle_gain": 0.0715,
+   "arms": {
+    "CP": [
+     0.0012,
+     1
+    ],
+    "LR": [
+     0.0681,
+     3
+    ],
+    "GB": [
+     0.0657,
+     3
+    ],
+    "RES": [
+     0.0663,
+     3
+    ],
+    "BL": [
+     0.067,
+     3
+    ]
+   }
+  }
+ },
+ "format": "arm: [mean gain, runs detected]"
+}

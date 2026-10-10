@@ -50,7 +50,18 @@ else
     docker exec "$CONTAINER" pg_dump --format=custom --no-owner "$DATABASE_URL" > "$BACKUP_FILE"
 fi
 
-echo "Backup completed successfully! Saved as $BACKUP_FILE"
+if [ ! -s "$BACKUP_FILE" ]; then
+    echo "ERROR: $BACKUP_FILE is missing or empty." >&2
+    exit 1
+fi
+# record and validate it: sha256, the archive's header and table data, the source's schema and row counts now
+# (scripts/verify_backup.py; BACKUP_RESTORE_CHECK=1 also restores it into a disposable database and compares)
+"$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/verify_backup.py" "$BACKUP_FILE" --at-backup --db "$DATABASE_URL" \
+    ${BACKUP_RESTORE_CHECK:+--restore}
 
-# Keep only the last 30 days of backups to prevent storage bloat
-find "$BACKUP_DIR" -name "trading_pipeline_backup_*.dump" -mtime +30 -exec rm {} \;
+echo "Backup completed successfully! Saved as $BACKUP_FILE (record: $BACKUP_FILE.json)"
+
+# Keep only the last 30 days of rotating backups; data/backups/keep/ (backups worth keeping, e.g. the last one before
+# a migration) is never pruned
+find "$BACKUP_DIR" -maxdepth 1 -name "trading_pipeline_backup_*.dump" -mtime +30 -exec rm {} \;
+find "$BACKUP_DIR" -maxdepth 1 -name "trading_pipeline_backup_*.dump.json" -mtime +30 -exec rm {} \;

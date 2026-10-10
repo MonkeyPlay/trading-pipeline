@@ -598,6 +598,19 @@
    "rth_runs": 11,
    "seconds": 895.1
   },
+  "fan": {
+   "at": "2026-10-10T07:36:14Z",
+   "code_revision": "f00f41e57b835f364201a64fda0733dfc27ed86a+dirty",
+   "files": {
+    "fan_rth_h15.csv.gz (data/research)": "b562138f26750eae021db84ef4e5debdea6ca216712d66407084393f1c5a1a04"
+   },
+   "rows": 4728,
+   "seconds": 11.6,
+   "skipped": {
+    "incomplete day": 24
+   },
+   "why": "added at the review of 2026-10-10: the size result compared with the deployed fan on identical origins, windows and targets before any product claim"
+  },
   "predict_preopen": {
    "at": "2026-10-10T00:01:22Z",
    "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
@@ -1212,10 +1225,11 @@
    ]
   },
   "score": {
-   "at": "2026-10-10T00:23:03Z",
-   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "at": "2026-10-10T07:54:01Z",
+   "code_revision": "f00f41e57b835f364201a64fda0733dfc27ed86a+dirty",
    "verified": [
     "distribution_rth_h15.csv.gz",
+    "fan_rth_h15.csv.gz",
     "predictions_preopen.csv",
     "predictions_rth.csv.gz",
     "predictions_rth_analogues.csv.gz",

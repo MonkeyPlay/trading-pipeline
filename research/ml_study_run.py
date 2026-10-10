@@ -21,6 +21,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 import os
 import pickle
 import platform
@@ -460,6 +461,72 @@ def analogues(conn, jobs: int) -> Dict[str, Any]:
     entry = {"seconds": round(time.time() - t0, 1), "sessions": len(work), "rows": len(frame),
              "files": {"predictions_rth_analogues.csv.gz (data/research)": _sha(pfile)}}
     _record("analogues", entry)
+    return entry
+
+
+# --------------------------------------------------------------------------
+# fan: the deployed random-walk fan on the RTH study's 15-minute rows
+# --------------------------------------------------------------------------
+
+FAN_HORIZONS = (st.RTH_ORIGINS["delayed"], 15, st.RTH_ORIGINS["delayed"] + 15)   # cumulative variances from the origin
+
+
+def fan(conn) -> Dict[str, Any]:
+    """fan_rw_v1 (forecaster/fan_benchmark: zero drift, the intraday variance pattern, scheduled releases, the short
+    and long levels) on the RTH 15-minute test rows of both origins: its standard deviation of the window's move
+    [S, S + 15) from the same origin - the bar ending at the cutoff, the fan's short level reading the session's
+    returns to it only - converted to the study's z units (points / (sigma_1m sqrt(15))). For the delayed origin the
+    window's variance is the difference of the cumulative variances to S + 15 and to S. The fan forecasts full
+    sessions only; any other row is counted, not filled. Added at the review of 2026-10-10, after the study was
+    scored: written with its sha256 before the comparison reads an outcome."""
+    from features import calendar as cal
+    from forecaster import fan_benchmark as fb
+    from forecaster import fan_data
+    t0 = time.time()
+    rt = _load("rth.pkl")
+    days = fan_data.load_days(conn, "NQ", dd.HISTORY_FIRST, rt["sessions"][-1])
+    by = {d.session_date.isoformat(): d for d in days}
+    fitted: Dict[str, Any] = {}
+    out, skipped = [], {}
+    for name in ("rth/h15/cutoff", "rth/h15/delayed"):
+        p = rt["problems"][name]
+        problem, rows, folds = p["problem"], p["rows"], p["folds"]
+        off = st.RTH_ORIGINS[name.split("/")[2]]
+        for f in folds:
+            for r in np.flatnonzero(np.isin(problem.row_session, f.test)):
+                day, c = str(rows.loc[r, "session"]), int(rows.loc[r, "cutoff"])
+                d = by.get(day)
+                reason = ("no fan day" if d is None else "not a full session" if d.schedule != "full" else
+                          "incomplete day" if not d.complete else None)
+                if reason is None and day not in fitted:
+                    try:
+                        m = fb.fit(d, days)
+                        fitted[day] = fb.horizon_variances(m, d.returns, FAN_HORIZONS)["full"]
+                    except fb.InsufficientHistory:
+                        fitted[day] = None
+                if reason is None and fitted[day] is None:
+                    reason = "insufficient history for the fan"
+                if reason is None:
+                    t = fb.slot_at(d.session_date, cal.session(day).rth_open_at) + c - 1
+                    V = fitted[day]
+                    i = {h: k for k, h in enumerate(FAN_HORIZONS)}
+                    var = float(V[i[15]][t]) if not off else float(V[i[off + 15]][t] - V[i[off]][t])
+                    price, sigma = float(d.last_price[t]), float(rows.loc[r, "sigma"])
+                    if not (np.isfinite(var) and var > 0 and price > 0 and sigma > 0):
+                        reason = "no fan variance at the origin"
+                if reason is not None:
+                    skipped[reason] = skipped.get(reason, 0) + 1
+                    continue
+                out.append({"problem": name, "row": int(r), "session": day, "cutoff": c,
+                            "fan_sigma_z": math.sqrt(var) * price / (sigma * math.sqrt(15)),
+                            "fan_sigma_bps": 1e4 * math.sqrt(var)})
+    path = os.path.join(OUT, "fan_rth_h15.csv.gz")
+    pd.DataFrame(out).to_csv(path, index=False, float_format="%.10g", compression={"method": "gzip", "mtime": 0})
+    entry = {"seconds": round(time.time() - t0, 1), "rows": len(out), "skipped": skipped,
+             "files": {"fan_rth_h15.csv.gz (data/research)": _sha(path)},
+             "why": "added at the review of 2026-10-10: the size result compared with the deployed fan on identical "
+                    "origins, windows and targets before any product claim"}
+    _record("fan", entry)
     return entry
 
 
