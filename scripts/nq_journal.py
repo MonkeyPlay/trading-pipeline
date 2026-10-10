@@ -58,7 +58,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -479,38 +479,60 @@ def cmd_preview(conn, args):
 
 
 def cmd_rth_issue(conn, args):
-    """The RTH analogue sets of the session in progress (forecaster/rth_analogues.issue): its newest completed
-    window from the open and any checkpoint not stored yet - what Auto runs after each collection."""
+    """The RTH analogue sets of the session in progress (forecaster/rth_analogues.py) - what Auto runs after each
+    collection: the first-hour matcher's (v2: its newest completed window and any checkpoint not stored yet, until
+    11:00 ET) and the full-session matcher's (v3: its newest window and the evaluation's cutoffs, until 30 minutes
+    after the RTH close). --date issues both for that session."""
+    from contracts import nq_rth as rth
     from forecaster import rth_analogues as ra
     ra.register(conn)
-    result = ra.issue(conn, day=args.date, issued_by=args.by)
-    if result["status"] != "issued":
-        print(f"RTH analogues of {result['session_date']}: {result['status']} - {result['reason']}")
-        return 0                                  # waiting, closed or busy (another issue is storing): not a failure
-    for m, set_id, new in result["stored"]:
-        aset = store.get_rth_set(conn, set_id)
-        print(("new: " if new else "already stored: ") + ra.describe(aset))
-        print("  " + (", ".join(f"#{x['rank']} {x['session_date']} {float(x['similarity']):.1f}%"
-                                for x in aset["members"]) or "no analogue"))
-    for m, version, forecast_id, new in result["forecasts"]:
-        print(f"  {version} forecasts of the {m}-minute window: {'stored' if new else 'already stored'} "
-              f"({forecast_id[:8]})")
-    if result["stop"]["state"] != "complete":
-        print(f"  the window stops at {result['minutes']} minute(s): {ra.stop_text(result['stop'])}")
+    now = datetime.now(timezone.utc)
+    runs = ([ra.issue(conn, day=args.date, issued_by=args.by)] if args.date or ra.first_hour_due(now) else []) + \
+           ([ra.issue_session(conn, day=args.date, issued_by=args.by)] if args.date or ra.session_due(now) else [])
+    if not runs:
+        print("No RTH matcher is due now: the first hour's runs from the open to 11:00 ET, the full session's to 30 "
+              "minutes after the close.")
+        return 0
+    for result in runs:
+        version = result.get("version", rth.RTH_MATCHER_VERSION)
+        if result["status"] != "issued":
+            print(f"RTH analogues ({version}) of {result['session_date']}: {result['status']} - {result['reason']}")
+            continue                               # waiting, closed or busy (another issue is storing): not a failure
+        for m, set_id, new in result["stored"]:
+            aset = store.get_rth_set(conn, set_id)
+            print(("new: " if new else "already stored: ") + ra.describe(aset))
+            print("  " + (", ".join(f"#{x['rank']} {x['session_date']} {float(x['similarity']):.1f}%"
+                                    for x in aset["members"]) or "no analogue"))
+        for m, version_, forecast_id, new, *h in result["forecasts"]:
+            print(f"  {version_} forecasts of the {m}-minute window" + (f", {h[0]} min ahead" if h else "")
+                  + f": {'stored' if new else 'already stored'} ({forecast_id[:8]})")
+        for miss in result.get("misses") or []:
+            span = (f"{miss['first_minutes']}" if miss["first_minutes"] == miss["last_minutes"]
+                    else f"{miss['first_minutes']}-{miss['last_minutes']}")
+            print(f"  not stored: window(s) {span} - {miss['reason'].replace('_', ' ')}: {miss['detail']}")
+        if result.get("closed"):
+            print(f"  RTH closed: the session's last window ({result['session_minutes']} minutes) is stored")
+        elif result["stop"]["state"] != "complete":
+            print(f"  the window stops at {result['minutes']} minute(s): {ra.stop_text(result['stop'])}")
     return 0
 
 
 def cmd_rth_backfill(conn, args):
-    """Historical reconstructions of RTH analogue sets: the checkpoints (15, 30, 60 minutes) or, with
-    --all-minutes, every window of the first hour - stored once, labelled as reconstructions."""
+    """Historical reconstructions of RTH analogue sets, stored once and labelled as reconstructions: the first-hour
+    matcher's (v2, default) checkpoints - 15, 30, 60 minutes - or with --all-minutes every window of the first hour;
+    the full-session matcher's (--version nq_match_rth_v3) evaluation cutoffs and last window, or with --all-minutes
+    every window to the close."""
     from contracts import nq_rth as rth
     from forecaster import rth_analogues as ra
     ra.register(conn)
     days = [s.session_date.isoformat() for s in _sessions(args)]
-    minutes = range(1, rth.MAX_MINUTES + 1) if args.all_minutes else rth.CHECKPOINTS
-    result = ra.reconstruct(conn, days, minutes)
-    print(f"RTH analogues ({rth.RTH_MATCHER_VERSION}): {result['new']} new set(s), {result['already']} already "
-          f"stored, over {len(days)} session(s)")
+    if args.version == rth.SESSION_VERSION:
+        result = ra.reconstruct_session(conn, days, range(1, rth.SESSION_MAX_MINUTES + 1) if args.all_minutes
+                                        else None)
+    else:
+        result = ra.reconstruct(conn, days, range(1, rth.MAX_MINUTES + 1) if args.all_minutes else rth.CHECKPOINTS)
+    print(f"RTH analogues ({args.version}): {result['new']} new set(s), {result['already']} already stored, over "
+          f"{len(days)} session(s)")
     for day, why in sorted(result["skipped"].items()):
         print(f"  {day}: {why}")
     return 0
@@ -518,37 +540,41 @@ def cmd_rth_backfill(conn, args):
 
 def cmd_rth_show(conn, args):
     """One RTH set of a session, in one of two views: reconstructed (default) - the newest calculation of the
-    longest stored window not past --minute (default 60), live or not; issued - what had been issued live by --at
-    (an ET time of the session's day; default: the end of the day), never a later correction or a backfill."""
+    longest stored window not past --minute (default: the whole window), live or not; issued - what had been issued
+    live by --at (an ET time of the session's day; default: the end of the day), never a later correction or a
+    backfill. --version: the full-session matcher by default when the session has its sets, else the first hour's."""
     from datetime import time as dtime
     from contracts import nq_rth as rth
     from forecaster import rth_analogues as ra
-    windows = store.rth_windows(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION)
+    version = args.version or (rth.SESSION_VERSION if store.rth_windows(conn, defs.SYMBOL, args.date,
+                                                                        rth.SESSION_VERSION)
+                               else rth.RTH_MATCHER_VERSION)
+    minute = args.minute or (rth.SESSION_MAX_MINUTES if version == rth.SESSION_VERSION else rth.MAX_MINUTES)
+    windows = store.rth_windows(conn, defs.SYMBOL, args.date, version)
     if not windows:
-        print(f"No {rth.RTH_MATCHER_VERSION} RTH analogue set of {args.date} is stored.")
+        print(f"No {version} RTH analogue set of {args.date} is stored.")
         return 1
-    print("Stored windows: " + ", ".join(f"{w['elapsed_minutes']}" + ("*" if w["checkpoint"] else "")
-                                         + (f" ({w['sets']} sets)" if w["sets"] > 1 else "")
-                                         + (" live" if w["live"] else "") for w in windows)
-          + "   (* checkpoint)")
+    print(f"{version} - stored windows: " + ", ".join(
+        f"{w['elapsed_minutes']}" + ("*" if w["checkpoint"] else "") + (f" ({w['sets']} sets)" if w["sets"] > 1 else "")
+        + (" live" if w["live"] else "") for w in windows) + "   (* checkpoint)")
     if args.view == "issued":
         at = (cal.ny_instant(cal.session(args.date).session_date, dtime.fromisoformat(args.at)) if args.at
               else None)
-        aset = store.rth_set_issued(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION, at=at)
+        aset = store.rth_set_issued(conn, defs.SYMBOL, args.date, version, at=at)
         if aset is None:
             print(f"As issued: nothing was issued live for {args.date}" + (f" by {args.at} ET." if args.at else "."))
             return 1
         print("As issued" + (f" by {args.at} ET" if args.at else "") + ":")
     else:
-        aset = store.rth_set_at(conn, defs.SYMBOL, args.date, rth.RTH_MATCHER_VERSION, args.minute)
+        aset = store.rth_set_at(conn, defs.SYMBOL, args.date, version, minute)
         if aset is None:
-            print(f"No window of {args.minute} minutes or less is stored.")
+            print(f"No window of {minute} minutes or less is stored.")
             return 1
         print("Reconstructed (the newest calculation, live or not):")
     print(ra.describe(aset))
     print(f"  pool {aset['pool_size']} earlier session(s); excluded: "
           + (", ".join(f"{k.replace('_', ' ')} {v}" for k, v in aset["excluded"].items()) or "none")
-          + "; similarity is resemblance of the observed openings, not a probability")
+          + "; similarity is resemblance of the observed sessions, not a probability")
     feats = list(rth.WEIGHTS)
     print(f"  {'':22s}{'target':>10s}" + "".join(f"{m['session_date']:>13s}" for m in aset["members"]))
     print(f"  {'similarity':22s}{'':>10s}" + "".join(f"{float(m['similarity']):12.1f}%" for m in aset["members"]))
@@ -561,22 +587,35 @@ def cmd_rth_show(conn, args):
             row += (f"{'—':>13s}" if not c["comparable"] else
                     f"{float(c['analogue']):7.3f} {float(c['score']):.2f}")
         print(row)
+    misses = store.rth_misses(conn, defs.SYMBOL, args.date, version) if version == rth.SESSION_VERSION else []
+    for miss in misses:
+        print(f"  not stored live: {miss['first_minutes']}-{miss['last_minutes']} ({miss['reason']}): {miss['detail']}")
     return 0
 
 
 def cmd_rth_calibrate(conn, args):
     """Reproduces the RTH matcher's tolerance calibration (contracts/nq_rth.CALIBRATION) over the sessions to --end:
-    the median pairwise difference of each feature at 30 minutes and twice it - beside the registered values. Stores
-    nothing; a different calibration needs a new matcher version."""
+    the median pairwise difference of each feature at 30 minutes and twice it - beside the registered values. With
+    --minutes (the full-session matcher's sessions) the same spread at other windows beside what the sqrt(n / 30)
+    rule implies - how far the descriptive extension past 60 minutes is from the data. Stores nothing; a different
+    calibration needs a new matcher version."""
+    import math
     from contracts import nq_rth as rth
     from forecaster import rth_analogues as ra
     from matching import rth as mr
-    openings, _ = ra.load_openings(conn, args.end)
-    result = mr.calibrate([o for d, o in openings.items() if not args.start or d >= args.start])
-    print(f"{result['sessions']} session(s) {result['first']}..{result['last']} (registered: "
-          f"{rth.CALIBRATION['sessions']} {rth.CALIBRATION['first_session']}..{rth.CALIBRATION['last_session']})")
-    for f, med in result["medians"].items():
-        print(f"  {f:20s} median {med:.4f}  tolerance {result['tolerances'][f]:>5s}  registered {rth.TOLERANCES[f]}")
+    windows = [int(x) for x in args.minutes.split(",")] if args.minutes else [rth.SCALE_MINUTES]
+    openings, _ = (ra.load_session_openings(conn, args.end, cache=False) if args.minutes else
+                   ra.load_openings(conn, args.end))
+    pick = [o for d, o in openings.items() if not args.start or d >= args.start]
+    for n in windows:
+        result = mr.calibrate(pick, n)
+        print(f"{n} minutes: {result['sessions']} session(s) {result['first']}..{result['last']} (registered at "
+              f"{rth.SCALE_MINUTES}: {rth.CALIBRATION['sessions']} {rth.CALIBRATION['first_session']}.."
+              f"{rth.CALIBRATION['last_session']})")
+        for f, med in result["medians"].items():
+            implied = float(rth.TOLERANCES[f]) * (math.sqrt(n / rth.SCALE_MINUTES) if f in rth.SCALED else 1)
+            print(f"  {f:20s} median {med:.4f}  2 x median {2 * med:.3f}  in use at {n} min {implied:.3f}  "
+                  f"(ratio {2 * med / implied:.2f})")
     return 0
 
 
@@ -590,7 +629,21 @@ def cmd_rth_eval_status(conn, args):
 
     def q(d, unit="min"):
         return "-" if not d else f"median {d['median']:.1f}, p90 {d['p90']:.1f}, max {d['max']:.1f} {unit}"
-    for version in ([args.version] if args.version else rth_eval.VERSIONS):
+    from contracts import rth_session as rs
+    for version in ([args.version] if args.version else (*rth_eval.VERSIONS, rs.VERSION)):
+        if version == rs.VERSION:
+            st = rth_eval.session_status(conn)
+            print(f"{version} - {st['label']}")
+            if not st["registered"]:
+                print("  not registered yet: the first full-session RTH issue registers it.")
+                continue
+            print(f"  {st['counted_sessions']} of {st['endpoint_sessions']} sessions counted at the 15-minute horizon "
+                  f"(end date {st['end_date']})")
+            for at, a in st["availability"].items():
+                rates = ", ".join(f"{k.replace('_', ' ')} {v} ({a['rates'][k]:.0%})" for k, v in sorted(a["counts"].items()))
+                print(f"  {at}: {a['opportunities']} decided - {rates or 'none'}"
+                      + (f"; lead to the window's start {q(a['lead_minutes'])}" if a["lead_minutes"] else ""))
+            continue
         st = rth_eval.status(conn, version=version)
         print(f"{version} - {st['label']}")
         if not st["registered"]:
@@ -617,13 +670,14 @@ def cmd_rth_eval_score(conn, args):
     done; --show prints the stored result."""
     import json
     from forecaster import rth_eval
+    from contracts import rth_session as rs
     version = args.version or rth_eval.VERSIONS[0]
     if args.show:
         stored = store.rth_eval_result(conn, version)
         print(json.dumps(stored["results"], indent=2) if stored else f"{version} has not been scored.")
         return 0 if stored else 1
     try:
-        results = rth_eval.score(conn, version=version)
+        results = rth_eval.session_score(conn) if version == rs.VERSION else rth_eval.score(conn, version=version)
     except rth_eval.NotAtEndpoint as e:
         print(f"Not scored: {e}")
         return 1
@@ -861,21 +915,29 @@ def main(argv=None):
     p.add_argument("--date", help="Session date YYYY-MM-DD")
     p.add_argument("--start", help="First session date (inclusive)")
     p.add_argument("--end", help="Last session date (inclusive)")
-    p.add_argument("--all-minutes", action="store_true", help="Every window of the first hour, not only 15/30/60")
+    p.add_argument("--all-minutes", action="store_true",
+                   help="Every window (of the first hour; of the session with --version nq_match_rth_v3)")
+    p.add_argument("--version", choices=["nq_match_rth_v2", "nq_match_rth_v3"], default="nq_match_rth_v2",
+                   help="The first-hour matcher (default) or the full-session one")
     p = sub.add_parser("rth-show", help="The RTH set a review of a session at a minute sees")
     p.add_argument("--date", help="Session date YYYY-MM-DD")
-    p.add_argument("--minute", type=int, default=60, help="Reconstructed view: minutes after the 09:30 ET open")
+    p.add_argument("--minute", type=int, default=None,
+                   help="Reconstructed view: minutes after the 09:30 ET open (default: the whole window)")
+    p.add_argument("--version", choices=["nq_match_rth_v2", "nq_match_rth_v3"], default=None,
+                   help="Default: the full-session matcher when the session has its sets, else the first hour's")
     p.add_argument("--view", choices=["reconstructed", "issued"], default="reconstructed")
     p.add_argument("--at", help="Issued view: HH:MM ET on the session's day (default: everything issued)")
     p = sub.add_parser("rth-eval-status", help="The RTH evaluations' operational health (never a score)")
-    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1"])
+    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1", "rth_session_v1"])
     p = sub.add_parser("rth-eval-score", help="An RTH evaluation's one scoring, at its endpoint only")
-    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1"],
+    p.add_argument("--version", choices=["rth_continuation_v2", "rth_operational_v1", "rth_session_v1"],
                    help="Default rth_continuation_v2 (research only)")
     p.add_argument("--show", action="store_true", help="Print the stored result")
     p = sub.add_parser("rth-calibrate", help="Reproduce the RTH matcher's tolerance calibration (stores nothing)")
     p.add_argument("--start", help="First session date (default: all)")
     p.add_argument("--end", required=True, help="Last session date")
+    p.add_argument("--minutes", default=None,
+                   help="Windows to measure the spread at, e.g. 30,60,120,240,390 (the full-session sessions)")
     p = sub.add_parser("timeliness", help="When pre-open forecasts at candidate cutoffs could have been issued")
     p.add_argument("--date", help="Session date YYYY-MM-DD")
     p.add_argument("--start", help="First session date (inclusive)")

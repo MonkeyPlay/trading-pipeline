@@ -24,6 +24,15 @@ pre-open snapshot, cutoff, annotation, analogue set or forecast changes.
 
 Similarity is agreement between two observed opening paths. It is never a
 probability of anything, and nothing here is fitted to what happened afterwards.
+
+The full-session matcher, beside v2 (which stays the first hour, unchanged):
+
+  SESSION_VERSION       nq_match_rth_v3: the same matching from the open to the
+                        scheduled RTH close, refreshed each confirmed minute
+  session_minutes(s)    the session's RTH length from the calendar (390, 210 early)
+  SESSION_DEFINITION    v2's definition with the full-session window, the timing
+                        record and issue_class (timely, late, reconstruction)
+  TOLERANCE_SCOPE       past 60 minutes the scaled tolerances are descriptive only
 """
 
 from __future__ import annotations
@@ -185,3 +194,70 @@ DEFINITION = {
 
 def matcher_record() -> Dict[str, Any]:
     return _record(RTH_MATCHER_VERSION, KIND, DEFINITION)
+
+
+# --------------------------------------------------------------------------
+# The full-session matcher (nq_match_rth_v3): the same matching through the regular session's close
+# --------------------------------------------------------------------------
+#
+# v2 above stays exactly as registered: the first hour, the record of the frozen evaluations rth_continuation_v2 and
+# rth_operational_v1, which are only ever fed by v2's sets. v3 is a separate version issued beside it from the open to
+# the scheduled RTH close, with its own sets, its own evaluation (contracts/rth_session.py) and the timing record a
+# minute-by-minute issue needs. Its features, weights and tolerances are v2's; past 60 minutes the scaled tolerances
+# are a descriptive extension, never validated (TOLERANCE_SCOPE).
+
+SESSION_VERSION = "nq_match_rth_v3"
+SESSION_MAX_MINUTES = 390               # the longest RTH session (09:30-16:00 ET); an early close is shorter
+SESSION_CHECKPOINTS = (15, 30, 60)      # the windows the database marks (its generated checkpoint column)
+TIMELY_WITHIN = timedelta(minutes=2)    # a live set stored within this of its last input's receipt is timely
+# Auto keeps issuing until this long after the scheduled close: on the ~11-minute feed the last bars, and the bar
+# after the close that confirms the last of them, arrive after it. A grace for collection - never a forecast rule.
+SESSION_GRACE = timedelta(minutes=30)
+
+TOLERANCE_SCOPE = (
+    "the tolerances are v2's, calibrated at 30 minutes and checked at 15 and 60 (within about 10 % of the "
+    f"sqrt(n / {SCALE_MINUTES}) rule); beyond 60 minutes the same rule is a descriptive extension, not validated - "
+    "phase-dependent tolerances calibrated on training sessions and frozen would be a new version "
+    "(nq_journal.py rth-calibrate --version nq_match_rth_v3 measures the spread at longer windows)")
+
+
+def session_minutes(session) -> int:
+    """The regular session's length in minutes from the trading calendar: 390, or 210 on a 13:00 ET close (the
+    scheduled RTH close - never the 17:00 futures halt)."""
+    return int((session.scheduled_close_at - session.rth_open_at).total_seconds() // 60)
+
+
+SESSION_DEFINITION: Dict[str, Any] = {
+    **{k: v for k, v in DEFINITION.items() if k not in ("checkpoints", "always_issued")},
+    "purpose": "which earlier NQ sessions traded most like the session in progress, from the 09:30 ET open to the "
+               "minute observed, refreshed through the regular session - a description of resemblance, not a "
+               "forecast",
+    "window": "expanding from the 09:30 ET open (America/New_York, the trading calendar's DST-aware instants): at n "
+              "minutes both sessions' first n completed 1-minute RTH bars, [09:30, 09:30 + n); never rolling; n = "
+              "1..L, L the session's scheduled RTH minutes from the trading calendar (390, 210 on a 13:00 close); "
+              "the RTH close ends it, not the 17:00 futures halt",
+    "completed_bar": DEFINITION["completed_bar"] + "; the last RTH bar is confirmed by any later bar of the same "
+                                                   "trading day (the futures trade on after the cash close)",
+    "tolerances_scope": TOLERANCE_SCOPE,
+    "relative_volume_scope": "the mean of the same window over the 20 scheduled sessions before that hold it - an "
+                             "early-close session holds no window past its close",
+    "pool": DEFINITION["pool"] + "; a session shorter than the window (an early close) is excluded "
+                                 "(incomplete_window) - its missing minutes are never invented",
+    "issue": "an issue (auto: Auto mode after a successful collection; manual: a person) stores the newest confirmed "
+             "window and any cutoff window of the full-session evaluation not yet stored; windows confirmed between "
+             "two issues are not stored afterwards with a made-up time: they are recorded as missed with the reason "
+             "(journal.rth_issue_misses). Nothing past the session's close; after it, the last set stands and the "
+             "session is 'RTH closed'. A backfill stores reconstructions",
+    "timing": "every set records its data cutoff, the bar that confirmed its last bar (start and receipt), when "
+              "every input reached the store, when its computation started and when the database stored it; "
+              "issue_class, by the database: 'timely' - issued by auto or manual within 2 minutes of its last input "
+              "reaching the store; 'late' - issued live but later than that (a catch-up); 'reconstruction' - a "
+              "backfill, or anything stored more than 30 minutes after its cutoff. Timely means as current as the "
+              "feed allows: on the delayed feed the description is still that feed's age behind the market",
+    "versions": "v2 keeps the first hour and feeds rth_continuation_v2 and rth_operational_v1 only; v3 feeds "
+                "rth_session_v1 only",
+}
+
+
+def session_record() -> Dict[str, Any]:
+    return _record(SESSION_VERSION, KIND, SESSION_DEFINITION)

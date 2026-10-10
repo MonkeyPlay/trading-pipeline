@@ -28,6 +28,7 @@ time.**
 |---|---|---|
 | `nq_match_rth_v1` | 2026-10-09 09:35 UTC, by the first `rth-backfill` (774 reconstructions at 15/30/60 minutes over 258 sessions, kept) | — |
 | `nq_match_rth_v2` | on its first issue or backfill | After an outside review: confirmation by any later bar (v1 required the next minute's bar, so a missing minute also dropped the bar before it). Issuance mode and input receipt times recorded. The calibration's provenance is part of the definition. The 45-minute window is always issued. Weights, tolerances and features are unchanged. |
+| `nq_match_rth_v3` | on its first issue or backfill (with migration 0031) | **The full session**, beside v2: the same matching from the open to the scheduled RTH close, each confirmed minute, with its own timing record and evaluation (`rth_session_v1`). v2 stays the first hour, unchanged. See [The full session](#the-full-session-nq_match_rth_v3). |
 
 Who launched the v1 backfill is not confirmed: no Claude session on this machine ran it.
 
@@ -252,8 +253,8 @@ The first `rth-issue` or `rth-backfill` registers `nq_match_rth_v2`, `rth_contin
 `rth_operational_v1`. From then on they are frozen: changed weights, tolerances, features,
 calibration or evaluation rules need a new version name.
 
-Production runs a fixed, deployed revision (README, [Database](../README.md#database)): a
-change here reaches the record only through `scripts/deploy.sh`.
+Production runs from `~/trading_pipeline` on `main` (README, [Database](../README.md#database)): a
+new migration reaches the store only through its explicit apply step.
 
 ## Dashboard
 
@@ -434,10 +435,172 @@ checkpoints can end with different sample sizes, and reaching 60 does not by its
 evidence at any one checkpoint adequate. Each per-checkpoint result carries its own *n*, and
 is secondary.
 
+## The full session (`nq_match_rth_v3`)
+
+Defined in [contracts/nq_rth.py](../contracts/nq_rth.py) (`SESSION_DEFINITION`). It is the same
+matching through the whole regular session. At 12:17 ET it compares today's 09:30–12:17 with
+the same 167 minutes of every earlier eligible session: "RTH analogues — first 167 minutes —
+data through 12:17 ET". It is issued beside v2. **v2 keeps the first hour and stays the
+only input of `rth_continuation_v2` and `rth_operational_v1`.** v3 feeds only its own
+evaluation, `rth_session_v1`.
+
+### What carries over from v2, and what does not
+
+- **Unchanged:** features, weights, coverage floor, pool rules (the whole earlier pool
+  re-scored at each window, never only yesterday's or the pre-open five), the five displayed
+  analogues, frozen pre-open context and ATR units, the Globex VWAP anchor, the strict gap
+  rule, and the confirmation rule.
+- **The window:** n = 1..L, where L comes from the trading calendar: 390 minutes, or 210 on a
+  13:00 ET early close. It ends at the scheduled RTH close, never at the 17:00 futures halt.
+  Holidays have no session; daylight saving moves the UTC instants, not the length.
+- **The last RTH bar:** like every bar, it counts once a later bar of the same trading day is
+  stored. The futures trade on after the cash close, so the 16:00 bar normally confirms 15:59.
+  Without such a bar, the window waits at 389 minutes ("awaiting confirmation").
+- **Short sessions:** an early-close session holds no window past 210 minutes. For longer
+  windows it is excluded (`incomplete_window`) and never filled in. Relative volume uses the
+  sessions that hold the window.
+- **Tolerances past 60 minutes:** a descriptive extension, not validated (`TOLERANCE_SCOPE`).
+  The registered tolerances were calibrated at 30 minutes and checked at 15 and 60. Measured
+  on the calibration's own sessions (`rth-calibrate --minutes 30,60,120,180,240,300,389`), the
+  rule drifts with the window:
+
+  | Window (minutes) | Path features' typical spread ÷ tolerance in use | vs VWAP | In overnight range | vs prev. close |
+  |---:|---:|---:|---:|---:|
+  | 30 | 1.00 | 1.00 | 1.01 | 0.98 |
+  | 60 | 0.89–0.97 | 1.08 | 1.17 | 1.05 |
+  | 120 | 0.70–0.82 | 1.14 | 1.36 | 1.14 |
+  | 240 | 0.60–0.69 | 1.26 | 1.57 | 1.20 |
+  | 389 | 0.55–0.62 | 1.19 | 1.66 | 1.27 |
+
+  Late in the session the path tolerances are therefore about 1.6–1.8 times too wide, so path
+  features score generously, while the fixed location tolerances are up to 1.7 times too
+  tight. v3's long windows weigh the features differently from the 30-minute calibration.
+  They describe resemblance, and are not a validated similarity. Phase-dependent tolerances,
+  calibrated on training sessions only and frozen, would be a new version.
+- **Expanding only:** a rolling 30- or 60-minute "recent path" component could weigh an
+  afternoon reversal more. That is a research hypothesis, not part of v3.
+
+### Issuing through the session
+
+- **Schedule:** Auto runs `rth-issue` after each successful collection, from the open's first
+  confirmed minute until 30 minutes after the scheduled close. The 30 minutes is a grace for
+  the delayed feed's last bars, not a forecast rule. v2 still stops at 11:00 ET
+  (`first_hour_due`); `session_due` covers v3; the dashboard schedules by either. A dashboard
+  started before this change keeps its old schedule (the first hour) until restarted.
+- **What one issue stores:**
+  - the newest confirmed window;
+  - every `rth_session_v1` cutoff window (each 30 minutes, 10:00–15:30) not stored yet and
+    still within 30 minutes of its cutoff.
+
+  Nothing is stored past the close. After the close the last set stands and is marked
+  "RTH closed".
+- **Bounded catch-up:** windows confirmed between two issues are not stored afterwards under
+  a made-up issue time. They go into `journal.rth_issue_misses` with the reason:
+  - `coalesced`: bars arrived together within one issue interval;
+  - `not_running`: no issue ran while they were current;
+  - `expired`: an evaluation cutoff never issued within its 30 minutes.
+
+  So stale work never queues up, and the session's record shows what was missed.
+- **Cost, measured on the production store** (read-only, 2026-10-09, a full replay of
+  2026-10-08's 390 windows):
+  - a whole issue: p50 0.74 s, p99 0.76 s;
+  - ranking and building one window: 35 ms at p50 and 71 ms at worst;
+  - peak memory about 76 MB.
+
+  The earlier sessions' inputs are cached in `data/rth_cache` under a per-day fingerprint (bar
+  count, latest receipt, latest bar; the snapshot's id), and only changed days are re-read. A
+  warm load takes 0.66 s against 2.97 s uncached. A test checks that the cached and fresh loads
+  are identical and that a revised bar invalidates its day. Overnight sums are exact (numeric),
+  so the same bars always give the same inputs and digest.
+
+### The timing record (migration 0031)
+
+Every v3 set stores, beside v2's provenance:
+
+| Field | Meaning |
+|---|---|
+| `cutoff_at` | the data cutoff: the end of the last matched bar |
+| `confirmed_by_start`, `confirmed_received_at` | the bar that confirmed the last matched bar, and when it reached the store |
+| `inputs_received_at` | when every input of the set was in the store |
+| `computation_started_at` | when the issuing run started computing |
+| `created_at` | when the database stored it (its clock) |
+| `session_minutes` | the session's scheduled RTH length |
+| `issue_class` | decided by the database: **timely** (issued by Auto or by hand within 2 minutes of its last input reaching the store), **late** (issued live but later: a catch-up) or **reconstruction** (a backfill, or stored more than 30 minutes after its cutoff) |
+
+- **"Timely" means as current as the feed allows.** On the delayed feed a timely set still
+  describes the market as it was about 11 minutes earlier, and the panel says how far behind
+  the clock it is.
+- **v1/v2 limit:** v1/v2 sets stay limited to 60 minutes, now by name in the database.
+
+### Dashboard
+
+- **Which matcher:** the RTH panel shows the full-session sets when the day has them. A day with
+  both offers **Full session / First hour**.
+- **Header:** "As issued: RTH analogues — first 167 minutes — data through 12:17 ET", then:
+  - how and when it was issued;
+  - timely, late or reconstruction;
+  - the feed's delay;
+  - whether the inputs are verified;
+  - "RTH closed" on the last window;
+  - the tolerance note past 60 minutes;
+  - the matcher version.
+- **Live status:** for the session in progress it says how far behind the clock the matches
+  are, and **Stale** when no newer set was stored for 3 minutes (Auto off, or the collection
+  failing).
+- **Playback:** As issued only ever shows sets stored by the time replayed. Reconstructed shows
+  the latest calculation and says so.
+- **Kept:** chart zoom and the chosen analogue are kept as before. Nothing about the analogues'
+  continuations is aggregated or overlaid.
+
+### The full-session evaluation (`rth_session_v1`)
+
+Defined in [contracts/rth_session.py](../contracts/rth_session.py). It is registered by the
+first v3 issue, before that run stores a forecast. It follows `rth_operational_v1`'s
+construction:
+
+- **When:** at every 30-minute cutoff from 10:00 to 15:30 ET.
+- **Target window:** the forecast's window is [S, S + h). S is the start of the second full
+  minute after the forecast is built, and h is 15 minutes (primary), 5, 30 or 60.
+- **The close:** a window that would cross the close is **never forecast and never shortened**.
+  At 15:30 only 5 and 15 minutes fit; on an early close, nothing after 13:00.
+- **Arms:** RTH-20 (primary, a sample size fixed in advance), RTH-5, PRE-5 and CLOCK. Each
+  member's move is over the same clock minutes of its own session.
+- **Eligibility:** a forecast counts only if the database stamped it by S.
+- **Scores and decision:** as the other evaluations: size CRPS and direction Brier, sessions
+  weighed equally (a dense cutoff grid adds no precision), and a circular moving-block
+  bootstrap over sessions at 98.75 %.
+- **Endpoint:** 60 counted sessions or 2027-06-30, scored once.
+- **Secondary results:** per-horizon and per-phase (morning, midday, afternoon) results are
+  exploratory.
+- **Before the endpoint:** `rth-eval-status --version rth_session_v1` shows availability per
+  cutoff and horizon, never a score.
+
+**Deployment** needs migration 0031. The steps, the Monday checks and the rollback are in
+[reports/deployment_plan_2026-10-10.md](reports/deployment_plan_2026-10-10.md).
+
+**What to expect.** The ML study ([reports/ml_study.md](reports/ml_study.md), section 4) rebuilt
+RTH-20 at these cutoffs for 198 earlier sessions:
+
+- its member frequencies scored worse than the same-clock history on direction, at every horizon;
+- a variant adding the last 30 minutes' path did not help;
+- a same-clock up-share itself carries a little estimation noise, so a direction win over CLOCK
+  alone should be checked against p(up) = 0.5.
+
+The prospective result is what counts.
+
+```bash
+python scripts/nq_journal.py rth-issue                                        # both matchers, as Auto does
+python scripts/nq_journal.py rth-backfill --version nq_match_rth_v3 --date 2026-10-08 [--all-minutes]
+python scripts/nq_journal.py rth-show --date 2026-10-12 --view issued --at 12:17   # as issued by 12:17 ET
+python scripts/nq_journal.py rth-calibrate --end 2026-10-07 --minutes 30,60,120,240,389   # the drift above
+python scripts/nq_journal.py rth-eval-status --version rth_session_v1
+```
+
 ## What this is not
 
 - **Not a forecast:** no outcome, frequency or path of the analogues is aggregated, overlaid
   or turned into one on the dashboard.
 - **No direction claim:** earlier work found NQ first-hour direction unpredictable from pre-open
-  matches, momentum and 15/30-minute matching (2026-09).
+  matches, momentum and 15/30-minute matching (2026-09). ml_study_v1 (2026-10-10) found no
+  directional edge at rolling RTH horizons either.
 - **Usefulness is untested** until the evaluations reach their endpoints.

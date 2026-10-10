@@ -20,6 +20,7 @@ data/backups/
 data/models/
 data/preview/
 data/fan_cache/
+data/rth_cache/
 data/auto_mode.lock
 
 # Logs
@@ -30,3 +31,7 @@ logs/
 .DS_Store
 .idea/
 *.swp
+
+# Research (ml_study_v1): its own venv, working files and the TabPFN weights
+.venv-research/
+data/research/

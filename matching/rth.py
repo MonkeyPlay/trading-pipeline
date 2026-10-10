@@ -1,8 +1,9 @@
 # matching/rth.py
 """
-RTH analogue selection (matcher nq_match_rth_v1, contracts/nq_rth.py): the earlier
-NQ sessions whose first n minutes of regular trading most resemble the target's
-first n, for an expanding window from the 09:30 ET open.
+RTH analogue selection (matchers nq_match_rth_v2 and v3, contracts/nq_rth.py): the
+earlier NQ sessions whose first n minutes of regular trading most resemble the
+target's first n, for an expanding window from the 09:30 ET open - v2 over the first
+hour, v3 through the session's close (the same functions, a longer limit).
 
   completed_window(bars, open)   the contiguous run of confirmed 1-minute bars from
                                  the open, and why it stops: awaiting confirmation,
@@ -175,11 +176,13 @@ def features(opening: Opening, minutes: int) -> Dict[str, Optional[float]]:
     return out
 
 
-def volume_baselines(openings: Dict[str, Opening], before: Dict[str, Sequence[str]]) -> Dict[str, Dict[int, float]]:
+def volume_baselines(openings: Dict[str, Opening], before: Dict[str, Sequence[str]],
+                     max_minutes: int = rth.MAX_MINUTES) -> Dict[str, Dict[int, float]]:
     """
-    Per session date, per window n = 1..MAX_MINUTES: the mean volume of the first n minutes over the sessions
-    ``before[date]`` (the RELVOL_SESSIONS scheduled sessions before it) whose window is whole - only when at least
-    RELVOL_MIN_SESSIONS of them hold it. Every earlier session's window ended before the date's open.
+    Per session date, per window n = 1..``max_minutes`` (v2: the first hour; v3: the session): the mean volume of
+    the first n minutes over the sessions ``before[date]`` (the RELVOL_SESSIONS scheduled sessions before it) whose
+    window is whole - only when at least RELVOL_MIN_SESSIONS of them hold it (an early close holds no window past
+    its close). Every earlier session's window ended before the date's open.
     """
     cumulative: Dict[str, List[float]] = {}
     for d, op in openings.items():
@@ -192,7 +195,7 @@ def volume_baselines(openings: Dict[str, Opening], before: Dict[str, Sequence[st
     for d in openings:
         base: Dict[int, float] = {}
         prior = [cumulative[p] for p in before.get(d, ()) if p in cumulative]
-        for n in range(1, rth.MAX_MINUTES + 1):
+        for n in range(1, max_minutes + 1):
             vols = [acc[n - 1] for acc in prior if len(acc) >= n]
             if len(vols) >= rth.RELVOL_MIN_SESSIONS:
                 base[n] = sum(vols) / len(vols)
@@ -278,7 +281,7 @@ def rank(target: Opening, pool: Sequence[Opening], minutes: int) -> Dict[str, An
             "pool_size": len(scored), "pool_hash": pool_hash, "target_features": target_features, "scored": scored}
 
 
-def input_digest(target: Opening, minutes: int, ranked: Dict[str, Any]) -> str:
+def input_digest(target: Opening, minutes: int, ranked: Dict[str, Any], version: str = rth.RTH_MATCHER_VERSION) -> str:
     """
     The identity of a set's inputs: the matcher version, the window, the target's window bars, context and
     features, and every scored candidate's session, contract, context snapshot and features - everything a score
@@ -287,7 +290,7 @@ def input_digest(target: Opening, minutes: int, ranked: Dict[str, Any]) -> str:
     def feats(f):
         return {k: show(v) for k, v in f.items()}
     doc = {
-        "version": rth.RTH_MATCHER_VERSION, "minutes": minutes,
+        "version": version, "minutes": minutes,
         "target": {"session_date": target.session_date, "contract_id": target.contract_id,
                    "snapshot_id": target.context.snapshot_id if target.context else None,
                    "bars": [[b[0].isoformat(), *map(show, b[1:])] for b in target.bars[:minutes]],

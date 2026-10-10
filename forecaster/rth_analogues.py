@@ -235,9 +235,12 @@ def provenance(target: mr.Opening, minutes: int, meta: Dict[str, Any], pool_date
 
 
 def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta: Dict[str, Any],
-              issued_by: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+              issued_by: str, version: str = rth.RTH_MATCHER_VERSION,
+              started: Optional[datetime] = None) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     """``(set, members, ranked)`` of ``target`` at ``minutes``, issued by ``issued_by`` (auto, manual, backfill) -
-    what save_rth_set stores; the database adds when, and whether that was live."""
+    what save_rth_set stores; the database adds when, and whether that was live. ``version`` v3 (the full session)
+    also records the timing a minute-by-minute issue needs: the session's RTH length, when the computation started
+    (``started``) and the bar that confirmed the window's last bar - v2's record is unchanged."""
     if issued_by not in rth.ISSUED_BY:
         raise ValueError(f"issued_by must be one of {rth.ISSUED_BY}, not {issued_by!r}")
     if target.context is None:
@@ -252,9 +255,9 @@ def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta
     inputs = provenance(target, minutes, meta, [o.session_date for o in pool])
     rec = {
         "symbol": target.symbol, "session_date": target.session_date, "contract_id": target.contract_id,
-        "matcher_version": rth.RTH_MATCHER_VERSION, "context_snapshot_id": target.context.snapshot_id,
+        "matcher_version": version, "context_snapshot_id": target.context.snapshot_id,
         "elapsed_minutes": minutes, "cutoff_at": target.rth_open_at + minutes * MINUTE,
-        "input_digest": mr.input_digest(target, minutes, ranked),
+        "input_digest": mr.input_digest(target, minutes, ranked, version),
         "pool_size": ranked["pool_size"], "pool_hash": ranked["pool_hash"], "excluded": ranked["excluded"],
         "mean_similarity": mr.show(sum(sims) / len(sims)) if sims else None,
         "target_features": {f: mr.show(v) for f, v in ranked["target_features"].items()},
@@ -269,6 +272,16 @@ def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta
         },
         "code_revision": code_revision(), "issued_by": issued_by, **inputs,
     }
+    if version == rth.SESSION_VERSION:
+        cutoff = rec["cutoff_at"]
+        confirm = next((t for t in sorted(m["stored"]) if t >= cutoff), None)
+        if confirm is None and m["newest_bar_end"] - MINUTE >= cutoff:
+            confirm = m["newest_bar_end"] - MINUTE          # a later bar past the loaded ones (after the close)
+        rec.update(session_minutes=m["session_minutes"], computation_started_at=started, confirmed_by_start=confirm,
+                   confirmed_received_at=m["receipts"].bound([m["stored"].get(confirm)]) if confirm in m["stored"]
+                   else None)
+        rec["quality"]["session_minutes"] = m["session_minutes"]
+        rec["quality"]["tolerance_extension"] = minutes > 60     # past the calibrated range: descriptive only
     members = [{
         "rank": x["rank"], "session_date": x["opening"].session_date, "contract_id": x["opening"].contract_id,
         "snapshot_id": x["opening"].context.snapshot_id, "similarity": mr.show(x["similarity"]),
@@ -284,10 +297,12 @@ def build_set(target: mr.Opening, pool: Iterable[mr.Opening], minutes: int, meta
 def register(conn) -> None:
     """Registers the RTH matcher's definition and its evaluation's (contracts/rth_eval.py) - before any set or
     evaluation forecast of the run is stored; a changed definition under a registered version name stops the run."""
-    from contracts import rth_eval, rth_operational
+    from contracts import rth_eval, rth_operational, rth_session
     store.register_version(conn, rth.matcher_record())
     store.register_version(conn, rth_eval.record())
     store.register_version(conn, rth_operational.record())
+    store.register_version(conn, rth.session_record())
+    store.register_version(conn, rth_session.record())
 
 
 def _target_snapshot_ok(openings: Dict[str, mr.Opening], day: str) -> Optional[str]:
@@ -395,8 +410,14 @@ def reconstruct(conn, days: List[str], minutes: Iterable[int] = rth.CHECKPOINTS,
 
 
 def due_window(now: datetime) -> Optional[str]:
-    """The session whose RTH sets an Auto run issues at ``now``: from the open's first completed minute until 30
-    minutes after 10:30 ET (a delayed feed still brings the last windows), else None."""
+    """The session whose RTH sets an Auto run issues at ``now`` - the first hour's (first_hour_due) or the full
+    session's (session_due) - else None: what the dashboard's Auto and Run collector schedule the rth step by."""
+    return first_hour_due(now) or session_due(now)
+
+
+def first_hour_due(now: datetime) -> Optional[str]:
+    """The session whose first-hour (v2) sets an Auto run issues at ``now``: from the open's first completed minute
+    until 30 minutes after 10:30 ET (a delayed feed still brings the last windows), else None."""
     today = now.astimezone(cal.NY_TZ).date()
     try:
         s = cal.session(today)
@@ -408,11 +429,12 @@ def due_window(now: datetime) -> Optional[str]:
     return today.isoformat() if s.rth_open_at + MINUTE <= now <= end else None
 
 
-def stop_text(stop: Dict[str, Any]) -> str:
-    """Why a session's confirmed window ends, in words."""
+def stop_text(stop: Dict[str, Any], session: bool = False) -> str:
+    """Why a session's confirmed window ends, in words (``session``: the full-session matcher's, which completes at
+    the RTH close)."""
     at = utc(stop.get("minute"))
     hm = f"{at.astimezone(cal.NY_TZ):%H:%M} ET" if at else ""
-    return {"complete": "the whole first hour confirmed",
+    return {"complete": "the whole regular session confirmed - RTH closed" if session else "the whole first hour confirmed",
             "awaiting_confirmation": f"the {hm} bar is stored, awaiting confirmation (a later bar) - it may still "
                                      f"be forming",
             "not_stored": f"the {hm} bar is not stored yet - the feed is behind",
@@ -452,6 +474,17 @@ def describe(aset: Dict[str, Any]) -> str:
         tags.append("inputs not verifiable as of the cutoff")
     if aset["quality"].get("in_calibration_sample"):
         tags.append("its session is in the tolerances' calibration sample: descriptive, not a forward test")
+    if aset.get("matcher_version") == rth.SESSION_VERSION:
+        cls = aset.get("issue_class")
+        if cls == "timely":
+            tags.append("timely: stored within 2 min of its last input reaching the store")
+        elif cls == "late":
+            tags.append("late: stored after its inputs had been in the store a while (a catch-up)")
+        if aset.get("session_minutes") and n >= int(aset["session_minutes"]):
+            tags.append("RTH closed: the session's last window")
+        if aset["quality"].get("tolerance_extension"):
+            tags.append("past 60 minutes the tolerances are a descriptive extension, not validated")
+        tags.append(f"matcher {rth.SESSION_VERSION}")
     return text + (" · " + " · ".join(tags) if tags else "")
 
 
@@ -484,3 +517,353 @@ def newest_bar_end(conn, day: str, symbol: str = defs.SYMBOL) -> Optional[dateti
         "AND a.trading_day = b.trading_day WHERE a.symbol = %s AND b.trading_day = %s AND b.interval = '1m' "
         "AND b.price_type = 'TRADES';", (symbol, day)).fetchone()
     return None if row is None or row[0] is None else utc(row[0]) + MINUTE
+
+
+# --------------------------------------------------------------------------
+# The full-session matcher (nq_match_rth_v3): loading, its cache, the issue
+# --------------------------------------------------------------------------
+#
+# A v3 issue runs every Auto minute from the open to the close. Re-reading every earlier session's whole regular
+# session each minute is wasted work: their bars only change when the vendor revises them. So the earlier sessions'
+# loaded inputs - bars, receipt times, overnight sums, frozen context, relative-volume baselines - are kept on disk
+# (data/rth_cache) under a fingerprint per trading day (its bars' count, latest receipt and latest start on its active
+# contract; the snapshot's id and build time). A changed fingerprint reloads that day; the session in progress is read
+# every time. The cache only saves time: load_session_openings(cache=False) returns the same and a test checks it.
+
+import os
+import pickle
+import tempfile
+from typing import Sequence
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_DIR = os.path.join(_ROOT, "data", "rth_cache")
+_CACHE_FORMAT = 1
+
+
+def _session_rows(conn, symbol: str, days: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """{day: {'contract_id', 'bars', 'stored', 'newest_start'}} of ``days``: each session's 1-minute bars in [09:30,
+    16:01) ET on its active contract - the regular session to the latest close and the bar after it, which confirms
+    the last one (an early close is cut by the calendar later) - when each one's values reached the store, and the
+    start of the session's newest stored bar from 09:30 on."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if not days:
+        return out
+    for r in conn.execute(
+            "SELECT a.trading_day, b.contract_id, b.timestamp_utc, b.open, b.high, b.low, b.close, b.volume, "
+            "b.version_stored_at "
+            "FROM bars b JOIN active_contracts a ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+            "WHERE a.symbol = %s AND a.trading_day = ANY(%s::date[]) AND b.interval = '1m' "
+            "AND b.price_type = 'TRADES' "
+            "AND b.timestamp_utc >= (b.trading_day + TIME '09:30') AT TIME ZONE 'America/New_York' "
+            "AND b.timestamp_utc < (b.trading_day + TIME '16:01') AT TIME ZONE 'America/New_York' "
+            "ORDER BY a.trading_day, b.timestamp_utc;", (symbol, list(days))).fetchall():
+        d = out.setdefault(str(r[0]), {"contract_id": int(r[1]), "bars": [], "stored": {}, "newest_start": None})
+        start = utc(r[2])
+        d["bars"].append((start, float(r[3]), float(r[4]), float(r[5]), float(r[6]), float(r[7])))
+        d["stored"][start] = r[8]
+    for r in conn.execute(
+            "SELECT a.trading_day, max(b.timestamp_utc) "
+            "FROM bars b JOIN active_contracts a ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+            "WHERE a.symbol = %s AND a.trading_day = ANY(%s::date[]) AND b.interval = '1m' "
+            "AND b.price_type = 'TRADES' "
+            "AND b.timestamp_utc >= (b.trading_day + TIME '09:30') AT TIME ZONE 'America/New_York' "
+            "GROUP BY a.trading_day;", (symbol, list(days))).fetchall():
+        if str(r[0]) in out:
+            out[str(r[0])]["newest_start"] = utc(r[1])
+    return out
+
+
+def _overnight_for(conn, symbol: str, days: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """_overnight_sums for ``days`` only - summed exactly (numeric), so the same bars always give the same value: a
+    floating-point sum in the database depends on the order its plan adds the rows in."""
+    if not days:
+        return {}
+    rows = conn.execute(
+        "SELECT a.trading_day, sum(((b.high + b.low + b.close) / 3 * b.volume)::numeric), sum(b.volume), "
+        "max(b.version_stored_at), bool_or(b.version_stored_at IS NULL) "
+        "FROM bars b JOIN active_contracts a ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+        "WHERE a.symbol = %s AND a.trading_day = ANY(%s::date[]) AND b.interval = '1m' "
+        "AND b.price_type = 'TRADES' "
+        "AND b.timestamp_utc < (b.trading_day + TIME '09:30') AT TIME ZONE 'America/New_York' "
+        "GROUP BY a.trading_day;", (symbol, list(days))).fetchall()
+    return {str(r[0]): {"pv": float(r[1] or 0), "volume": float(r[2] or 0), "stored": r[3], "unknown": bool(r[4])}
+            for r in rows}
+
+
+def _fingerprints(conn, symbol: str, last_day: str) -> Dict[str, Tuple]:
+    """Per trading day to ``last_day``: (active contract, its bars' count, latest receipt, latest start) - any stored,
+    revised or newly received bar of the day changes it."""
+    rows = conn.execute(
+        "SELECT a.trading_day, a.contract_id, count(*), max(b.version_stored_at), max(b.timestamp_utc) "
+        "FROM bars b JOIN active_contracts a ON a.contract_id = b.contract_id AND a.trading_day = b.trading_day "
+        "WHERE a.symbol = %s AND a.trading_day <= %s AND b.interval = '1m' AND b.price_type = 'TRADES' "
+        "GROUP BY a.trading_day, a.contract_id;", (symbol, last_day)).fetchall()
+    return {str(r[0]): (int(r[1]), int(r[2]), str(r[3]), str(r[4])) for r in rows}
+
+
+def _context_payloads(conn, snapshot_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """{snapshot_id: the part of its payload the matcher reads (the daily ATR and three references)}."""
+    import json
+    if not snapshot_ids:
+        return {}
+    rows = conn.execute(
+        "SELECT snapshot_id, payload -> 'atr' -> 'daily', payload -> 'references' -> 'prev_rth_close', "
+        "payload -> 'references' -> 'on_high', payload -> 'references' -> 'on_low' "
+        "FROM journal.snapshots WHERE snapshot_id = ANY(%s::uuid[]);", (list(snapshot_ids),)).fetchall()
+    load = lambda v: None if v is None else json.loads(v) if isinstance(v, str) else v       # noqa: E731
+    return {str(r[0]): {"atr": {"daily": load(r[1])}, "references": {
+        "prev_rth_close": load(r[2]), "on_high": load(r[3]), "on_low": load(r[4])}} for r in rows}
+
+
+def _cache_path(symbol: str) -> str:
+    return os.path.join(CACHE_DIR, f"{rth.SESSION_VERSION}_{symbol}.pkl")
+
+
+def _read_cache(symbol: str) -> Dict[str, Any]:
+    try:
+        with open(_cache_path(symbol), "rb") as f:
+            cache = pickle.load(f)
+        if cache.get("format") == _CACHE_FORMAT and cache.get("version") == rth.SESSION_VERSION:
+            return cache
+    except (OSError, EOFError, pickle.UnpicklingError, AttributeError, ImportError):
+        pass
+    return {"format": _CACHE_FORMAT, "version": rth.SESSION_VERSION, "days": {}, "contexts": {}, "baselines": {}}
+
+
+def _write_cache(symbol: str, cache: Dict[str, Any]) -> None:
+    """Atomically (a reader never sees half a file); a failure to write only costs the next run time."""
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, suffix=".tmp")
+        with os.fdopen(fd, "wb") as f:
+            pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, _cache_path(symbol))
+    except OSError as e:
+        logger.warning(f"RTH cache not written: {e}")
+
+
+def load_session_openings(conn, last_day: str, profile: str = defs.DEFAULT_PROFILE, symbol: str = defs.SYMBOL,
+                          cache: bool = True) -> Tuple[Dict[str, mr.Opening], Dict[str, Any]]:
+    """
+    load_openings for the full-session matcher (v3): every scheduled session to ``last_day`` with RTH bars, its
+    confirmed window to its scheduled RTH close (the calendar's: 390 minutes, 210 on an early close), the context of
+    its newest pre-open snapshot, its relative-volume baselines to the close - and ``meta`` as load_openings', with
+    ``session_minutes``. ``cache``: earlier sessions' inputs from data/rth_cache, reloaded when their fingerprint
+    changes; ``last_day`` is always read afresh.
+    """
+    version = defs.PROFILES[profile].snapshot_version
+    receipts = _Receipts(conn)
+    prints = _fingerprints(conn, symbol, last_day)
+    refs = {str(r[0]): (str(r[1]), r[2]) for r in conn.execute(
+        "SELECT DISTINCT ON (session_date) session_date, snapshot_id, built_at FROM journal.snapshots "
+        "WHERE snapshot_version = %s AND symbol = %s AND session_date <= %s ORDER BY session_date, built_at DESC;",
+        (version, symbol, last_day)).fetchall()}
+    c = _read_cache(symbol) if cache else {"days": {}, "contexts": {}, "baselines": {}}
+    dirty = False                                        # the cache is written only when an earlier session changed
+    stale = sorted(d for d, fp in prints.items() if d == last_day or c["days"].get(d, {}).get("fp") != fp)
+    rows, overnight = _session_rows(conn, symbol, stale), _overnight_for(conn, symbol, stale)
+    for d in stale:
+        dirty |= d != last_day
+        if d in rows:
+            c["days"][d] = {"fp": prints[d], **rows[d],
+                            "overnight": overnight.get(d, {"pv": 0.0, "volume": 0.0, "stored": None, "unknown": False}),
+                            "has_overnight": d in overnight}
+        else:
+            c["days"].pop(d, None)                       # no RTH bar of the day (yet)
+    for d in [d for d in c["days"] if d not in prints]:  # a day no longer stored
+        del c["days"][d]
+        dirty = True
+    missing = [sid for sid, _ in refs.values() if sid not in c["contexts"]]
+    if missing:
+        c["contexts"].update(_context_payloads(conn, missing))
+        dirty = True
+    openings: Dict[str, mr.Opening] = {}
+    meta: Dict[str, Any] = {}
+    for day in sorted(c["days"]):
+        d = c["days"][day]
+        try:
+            s = cal.session(day)
+        except cal.CalendarCoverageError:
+            continue
+        if not s.is_open or d["newest_start"] is None:
+            continue
+        L = rth.session_minutes(s)
+        if "window" not in d:                            # computed once per loaded day, kept with it
+            d["window"], d["stop"] = mr.completed_window(d["bars"], s.rth_open_at, limit=L,
+                                                         newest_start=d["newest_start"])
+            dirty |= day != last_day
+        window, stop = d["window"], d["stop"]
+        ref = refs.get(day)
+        snap = None if ref is None else {"snapshot_id": ref[0], "built_at": ref[1], "payload": c["contexts"][ref[0]]}
+        on = d["overnight"]
+        openings[day] = mr.Opening(day, symbol, d["contract_id"], s.rth_open_at,
+                                   context_of(snap, (on["pv"], on["volume"])) if snap else None, tuple(window))
+        on_times = ([on["stored"]] + ([None] if on["unknown"] else [])) if d["has_overnight"] else []
+        stored = {t: v for t, v in d["stored"].items() if t < s.scheduled_close_at + MINUTE}
+        meta[day] = {"stop": stop, "newest_bar_end": d["newest_start"] + MINUTE, "stored": stored,
+                     "inputs_at": receipts.bound([*(v for t, v in stored.items() if t < s.scheduled_close_at),
+                                                  *on_times, *([snap["built_at"]] if snap else [])]),
+                     "overnight_at": receipts.bound(on_times),
+                     "snapshot_built_at": utc(snap["built_at"]) if snap else None, "receipts": receipts,
+                     "session_minutes": L}
+    # relative-volume baselines to the close, kept per day while its own and its 20 earlier sessions' fingerprints
+    # stand (the session in progress is always recomputed)
+    before = {d: [p.session_date.isoformat() for p in cal.sessions_before(d, rth.RELVOL_SESSIONS)] for d in openings}
+    for d, op in openings.items():
+        key = (prints.get(d), tuple(prints.get(p) for p in before[d]))
+        hit = c["baselines"].get(d)
+        if hit is not None and hit[0] == key and d != last_day:
+            op.volume_baseline.update(hit[1])
+            continue
+        base = mr.volume_baselines({x: openings[x] for x in [d, *before[d]] if x in openings}, {d: before[d]},
+                                   rth.SESSION_MAX_MINUTES)[d]
+        op.volume_baseline.update(base)
+        if d != last_day:
+            c["baselines"][d] = (key, base)
+            dirty = True
+    if cache and dirty:                                  # the session in progress is never kept: it is read anew
+        _write_cache(symbol, {**c, "days": {d: v for d, v in c["days"].items() if d != last_day},
+                              "baselines": {d: v for d, v in c["baselines"].items() if d != last_day}})
+    return openings, meta
+
+
+def session_due(now: datetime) -> Optional[str]:
+    """The session whose full-session (v3) sets an Auto run issues at ``now``: from the open's first completed minute
+    until SESSION_GRACE after the scheduled RTH close (the delayed feed brings the last bars, and the bar after the
+    close that confirms them, after it), else None. A grace for collection - never a forecast rule."""
+    today = now.astimezone(cal.NY_TZ).date()
+    try:
+        s = cal.session(today)
+    except cal.CalendarCoverageError:
+        return None
+    if not s.is_open:
+        return None
+    return today.isoformat() if s.rth_open_at + MINUTE <= now <= s.scheduled_close_at + rth.SESSION_GRACE else None
+
+
+def _misses(prev: Optional[Dict[str, Any]], newest: int, stored: Iterable[int], expired: Iterable[int],
+            started: datetime, day: str, issued_by: str) -> List[Dict[str, Any]]:
+    """The windows this issue does not store, as journal.rth_issue_misses rows: those confirmed since the last live
+    issue (``prev``) but before the newest - 'coalesced' when the last issue ran within two minutes (their bars arrived
+    together), 'not_running' otherwise (no issue ran) - and the evaluation cutoffs too old to issue live ('expired')."""
+    done = set(stored) | set(expired)
+    first = 1 if prev is None else prev["elapsed_minutes"] + 1
+    skipped = [n for n in range(first, newest) if n not in done]
+    out, run = [], []
+    recent = prev is not None and started - utc(prev["created_at"]) <= timedelta(minutes=2)
+    reason = "coalesced" if recent else "not_running"
+    detail = (f"confirmed together with later minutes between issues ({utc(prev['created_at']).astimezone(cal.NY_TZ):%H:%M:%S} "
+              f"and {started.astimezone(cal.NY_TZ):%H:%M:%S} ET)" if recent else
+              "no live issue ran while these windows were current" + (
+                  f" (the last at {utc(prev['created_at']).astimezone(cal.NY_TZ):%H:%M:%S} ET)" if prev else
+                  " (the session's first issue)"))
+    for n in skipped + [None]:                           # contiguous runs
+        if run and (n is None or n != run[-1] + 1):
+            out.append({"first_minutes": run[0], "last_minutes": run[-1], "reason": reason, "detail": detail})
+            run = []
+        if n is not None:
+            run.append(n)
+    for n in sorted(expired):
+        out.append({"first_minutes": n, "last_minutes": n, "reason": "expired",
+                    "detail": "an evaluation cutoff never issued live, now older than the 30-minute live limit: not "
+                              "issued afterwards"})
+    return [{**r, "symbol": defs.SYMBOL, "session_date": day, "matcher_version": rth.SESSION_VERSION,
+             "issued_by": issued_by} for r in out]
+
+
+def issue_session(conn, now: Optional[datetime] = None, day: Optional[str] = None, issued_by: str = "manual",
+                  profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:
+    """
+    The full-session (v3) sets of the session in progress: the newest confirmed window - however late in the
+    session, to its scheduled RTH close - and any cutoff window of rth_session_v1 not stored yet and still within the
+    30-minute live limit, with that evaluation's forecasts (forecaster/rth_eval.py); the windows it does not store
+    are recorded with the reason (journal.rth_issue_misses), never stored later under a made-up time. Returns as
+    issue(), with ``closed`` once the session's last window is stored and ``misses``. Shares issue()'s lock.
+    """
+    from contracts import rth_session as rs
+    if issued_by not in rth.LIVE_ISSUERS:
+        raise ValueError(f"an issue is made by one of {rth.LIVE_ISSUERS}; a backfill is reconstruct_session()")
+    started = datetime.now(timezone.utc)
+    now = now or started
+    day = day or now.astimezone(cal.NY_TZ).date().isoformat()
+    try:
+        s = cal.session(day)
+    except cal.CalendarCoverageError as e:
+        return {"status": "closed", "session_date": day, "reason": str(e), "stored": [], "version": rth.SESSION_VERSION}
+    if not s.is_open:
+        return {"status": "closed", "session_date": day, "reason": f"no session on {day}", "stored": [],
+                "version": rth.SESSION_VERSION}
+    if now < s.rth_open_at + MINUTE:
+        return {"status": "waiting", "session_date": day, "stored": [], "version": rth.SESSION_VERSION,
+                "reason": "before the open: the pre-open set stands until the first RTH bar is complete"}
+    got = conn.execute("SELECT pg_try_advisory_lock(%s);", (_LOCK_KEY,)).fetchone()[0]
+    if not got:
+        return {"status": "busy", "session_date": day, "stored": [], "version": rth.SESSION_VERSION,
+                "reason": "another RTH issue is running (another process); nothing stored"}
+    try:
+        openings, meta = load_session_openings(conn, day, profile)
+        why = _target_snapshot_ok(openings, day)
+        if why is not None:
+            return {"status": "waiting", "session_date": day, "reason": why, "stored": [],
+                    "version": rth.SESSION_VERSION}
+        target, L = openings[day], meta[day]["session_minutes"]
+        newest = min(target.minutes, L)
+        prev = store.rth_last_issue(conn, defs.SYMBOL, day, rth.SESSION_VERSION)
+        issued = {w["elapsed_minutes"] for w in store.rth_windows(conn, defs.SYMBOL, day, rth.SESSION_VERSION)
+                  if w["issued"]}
+        pending = [n for n in rs.CUTOFFS if n < newest and n not in issued]
+        expired = [n for n in pending if now > target.rth_open_at + n * MINUTE + rth.LIVE_MAX_LAG]
+        recorded = {m["first_minutes"] for m in store.rth_misses(conn, defs.SYMBOL, day, rth.SESSION_VERSION)
+                    if m["reason"] == "expired"}
+        due = sorted(({n for n in pending if n not in expired}) | {newest})
+        pool = [o for d, o in openings.items() if d < day]
+        stored, forecasts = [], []
+        for n in due:
+            rec, members, ranked = build_set(target, pool, n, meta, issued_by, rth.SESSION_VERSION, started)
+            set_id, new = store.save_rth_set(conn, rec, members)
+            stored.append((n, set_id, new))
+            forecasts.extend((n, *made) for made in rth_eval.issue_session_forecasts(
+                conn, target, n, ranked, openings, set_id, L, built_at=now))
+        advanced = prev is None or newest > prev["elapsed_minutes"]
+        misses = _misses(prev if advanced else {"elapsed_minutes": newest, "created_at": started}, newest, due,
+                         [n for n in expired if n not in recorded], started, day, issued_by)
+        store.save_rth_misses(conn, misses)
+        return {"status": "issued", "session_date": day, "minutes": newest, "stored": stored, "reason": None,
+                "forecasts": forecasts, "stop": meta[day]["stop"], "newest_bar_end": meta[day]["newest_bar_end"],
+                "closed": newest >= L, "session_minutes": L, "misses": misses, "version": rth.SESSION_VERSION}
+    finally:
+        conn.execute("SELECT pg_advisory_unlock(%s);", (_LOCK_KEY,))
+
+
+def reconstruct_session(conn, days: List[str], minutes: Optional[Iterable[int]] = None,
+                        profile: str = defs.DEFAULT_PROFILE) -> Dict[str, Any]:
+    """Full-session (v3) reconstructions of ``days`` at ``minutes`` (default: the evaluation's cutoffs and the
+    session's last window), issued by 'backfill' - never live. As reconstruct()."""
+    from contracts import rth_session as rs
+    if not days:
+        return {"new": 0, "already": 0, "skipped": {}}
+    openings, meta = load_session_openings(conn, max(days), profile)
+    new = already = 0
+    skipped: Dict[str, str] = {}
+    for day in sorted(days):
+        why = _target_snapshot_ok(openings, day)
+        if why is not None:
+            skipped[day] = why
+            continue
+        target, L = openings[day], meta[day]["session_minutes"]
+        want = sorted(set(minutes) if minutes is not None else {*(n for n in rs.CUTOFFS if n <= L), L})
+        pool = [o for d, o in openings.items() if d < day]
+        short = [m for m in want if m > target.minutes]
+        if short:
+            skipped[day] = (f"{target.minutes} confirmed RTH minute(s) stored ({stop_text(meta[day]['stop'])})"
+                            + f": no window of {', '.join(map(str, short))}")
+        for m in want:
+            if m > min(target.minutes, L):
+                continue
+            rec, members, _ = build_set(target, pool, m, meta, "backfill", rth.SESSION_VERSION)
+            _, created = store.save_rth_set(conn, rec, members)
+            new += created
+            already += not created
+    logger.info(f"RTH analogues ({rth.SESSION_VERSION}): {new} new set(s), {already} already stored, "
+                f"{len(skipped)} session(s) skipped or short.")
+    return {"new": new, "already": already, "skipped": skipped}

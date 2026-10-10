@@ -19,7 +19,7 @@ picks the analogue shown. Two sets, kept apart and switched between:
   Pre-open set   the saved structural analogues of the pre-open snapshot
                  (dashboard/views/analogues.py), or its preview before then
   RTH set        the evolving match of the opening itself, a stored set per
-                 minute of the first hour (dashboard/views/rth_analogues.py) - its
+                 minute of the regular session (dashboard/views/rth_analogues.py) - its
                  chart greys what the analogue did after the matched minutes
 
 Until a session's first RTH set is stored the pre-open set is shown; from then the
@@ -432,12 +432,17 @@ class SessionExplorer:
 
     def _review_minute(self) -> int:
         """The minutes after the open the RTH set is read at: in playback, to the end of the candle played to (never
-        a later window); else the whole first hour - the newest window stored."""
+        a later window); else the whole regular session - the newest window stored (its scheduled length from the
+        calendar: 390 minutes, 210 on an early close)."""
+        try:
+            whole = rth.session_minutes(cal.session(self.bar.date))
+        except (cal.CalendarCoverageError, TypeError, ValueError):
+            whole = rth.SESSION_MAX_MINUTES
         if not self.live or self.main.until is None:
-            return rth.MAX_MINUTES
+            return whole
         tf = pd.Timedelta(minutes=_BAR_MINUTES[self.timeframe])
         open_ = session_window(self.bar.date)["open"]
-        return max(0, min(rth.MAX_MINUTES, int((self.main.until + tf - open_) / pd.Timedelta(minutes=1))))
+        return max(0, min(whole, int((self.main.until + tf - open_) / pd.Timedelta(minutes=1))))
 
     def _replay_instant(self) -> Optional[datetime]:
         """In playback of the session in progress, the end of the candle played to (UTC) - the time an as-issued

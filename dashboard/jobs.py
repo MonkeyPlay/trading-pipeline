@@ -21,16 +21,19 @@ dashboard's database connection or its event loop:
                issued (forecaster/live_capture.py); only before the open
   rth          python scripts/nq_journal.py rth-issue --by auto|manual
                the RTH analogue sets of the session in progress
-               (forecaster/rth_analogues.py): its newest completed window from
-               the 09:30 open and any 15/30/45/60-minute window not stored yet,
-               recorded as issued by Auto or by hand - only after a collection
-               that succeeded (NEEDS_SUCCESS)
+               (forecaster/rth_analogues.py): the first-hour matcher's newest
+               completed window from the 09:30 open and any 15/30/45/60-minute
+               window not stored yet (to 11:00 ET), the full-session matcher's
+               newest window and its evaluation's cutoffs (to 30 minutes after
+               the RTH close) - recorded as issued by Auto or by hand, only after
+               a collection that succeeded (NEEDS_SUCCESS)
   auto         the collector for the session in progress only (--days 0
                --no-trailing-refresh: that session and any missing or
                incomplete day, not the refetch of the last complete sessions,
                which the daily run does; --workers 4: four symbols at a time;
                with the journal step), then the RTH analogue sets from the first
-               completed RTH minute to 11:00 ET, then the preview while one is
+               completed RTH minute to 30 minutes after the RTH close (the first
+               hour's to 11:00 ET), then the preview while one is
                possible - one run a minute while auto mode is on (AUTO, the
                Session Explorer's Auto button), so the chart, the fan and the
                analogues follow the session; each run also issues any pending mark

@@ -104,11 +104,16 @@ def test_first_bar_checkpoints_and_daylight_saving():
         assert s.rth_open_at == datetime.fromisoformat(f"{day}T{utc_hour}:30:00+00:00")
         ends = [f"{(s.rth_open_at + m * MIN).astimezone(cal.NY_TZ):%H:%M}" for m in rth.CHECKPOINTS]
         assert ends == ["09:45", "10:00", "10:30"]
-    from forecaster.rth_analogues import due_window
+    from forecaster.rth_analogues import due_window, first_hour_due, session_due
     assert due_window(_ny(DAY, 9, 30, 59)) is None                       # the 09:30 bar is not complete yet
-    assert due_window(_ny(DAY, 9, 31)) == DAY
-    assert due_window(_ny(DAY, 11, 0)) == DAY                            # 10:30 + 30 min for a delayed feed
-    assert due_window(_ny(DAY, 11, 0, 1)) is None                        # automatic matching stops
+    assert first_hour_due(_ny(DAY, 9, 31)) == session_due(_ny(DAY, 9, 31)) == DAY
+    assert first_hour_due(_ny(DAY, 11, 0)) == DAY                        # 10:30 + 30 min for a delayed feed
+    assert first_hour_due(_ny(DAY, 11, 0, 1)) is None                    # the first hour's matching stops ...
+    assert session_due(_ny(DAY, 11, 0, 1)) == due_window(_ny(DAY, 11, 0, 1)) == DAY     # ... the session's goes on
+    assert session_due(_ny(DAY, 16, 30)) == DAY                          # the 16:00 close + 30 min for the feed
+    assert session_due(_ny(DAY, 16, 30, 1)) is None and due_window(_ny(DAY, 16, 30, 1)) is None
+    assert session_due(_ny("2025-11-28", 13, 30)) == "2025-11-28"        # an early close: 13:00 + 30 min
+    assert session_due(_ny("2025-11-28", 13, 30, 1)) is None
     assert due_window(_ny("2026-06-13", 10, 0)) is None                  # a Saturday
 
 
@@ -300,13 +305,15 @@ def test_describe_says_how_far_behind_a_live_set_was_issued():
 # The Auto step
 # --------------------------------------------------------------------------
 
-def test_auto_issues_rth_sets_in_the_first_hour_only():
+def test_auto_issues_rth_sets_through_the_session_and_its_grace():
     from dashboard.jobs import auto_steps
     tue = "2026-10-06"
     assert [s for s, _ in auto_steps(_ny(tue, 9, 15))][:2] == ["collector", "preview"]
     assert [s for s, _ in auto_steps(_ny(tue, 10, 3))] == ["collector", "rth", "forward"]
     assert dict(auto_steps(_ny(tue, 10, 3)))["rth"][-3:] == ["rth-issue", "--by", "auto"]
-    assert [s for s, _ in auto_steps(_ny(tue, 11, 3))] == ["collector", "forward"]
+    assert [s for s, _ in auto_steps(_ny(tue, 12, 17))] == ["collector", "rth", "forward"]     # the full session
+    assert [s for s, _ in auto_steps(_ny(tue, 16, 25))] == ["collector", "rth", "forward"]     # the close's grace
+    assert [s for s, _ in auto_steps(_ny(tue, 16, 35))] == ["collector", "forward"]
 
 
 def test_the_rth_step_is_skipped_after_a_failed_collection(tmp_path):
@@ -615,7 +622,7 @@ def test_cli_backfill_show_and_calibrate(journal, capsys):
     assert main(["--db", DSN, "rth-backfill", "--date", day]) == 0
     assert main(["--db", DSN, "rth-show", "--date", day, "--minute", "45"]) == 0
     out = capsys.readouterr().out
-    assert "3 new set(s)" in out and "Stored windows: 15*, 30*, 60*" in out
+    assert "3 new set(s)" in out and "nq_match_rth_v2 - stored windows: 15*, 30*, 60*" in out
     assert "Reconstructed (the newest calculation, live or not):" in out
     assert "RTH analogues — first 30 minutes — data through 10:00 ET" in out
     assert "30-minute checkpoint" in out and "by a backfill" in out and "not a probability" in out
@@ -624,7 +631,7 @@ def test_cli_backfill_show_and_calibrate(journal, capsys):
     assert "nothing was issued live" in capsys.readouterr().out
     assert main(["--db", DSN, "rth-calibrate", "--end", DAY]) == 0
     out = capsys.readouterr().out
-    assert "(registered: 258 2025-09-29..2026-10-07)" in out and "path" in out
+    assert "(registered at 30: 258 2025-09-29..2026-10-07)" in out and "path" in out
 
 
 @needs_db

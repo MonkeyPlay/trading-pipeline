@@ -139,7 +139,7 @@ class PipelinePanel:
         return int(self.days.value or 5)
 
     def collect(self) -> None:
-        """The collector - then, in the first hour of a session (to 11:00 ET), its RTH analogue sets."""
+        """The collector - then, during a session (to 30 minutes after the RTH close), its RTH analogue sets."""
         steps = [("collector", collector_command(self._days()))]
         if rth_due(datetime.now(timezone.utc)):
             steps.append(("rth", rth_command("manual")))

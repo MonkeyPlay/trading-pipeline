@@ -109,20 +109,20 @@ def window_closes(conn, days: Iterable[str], upto: int,
 
 
 def window_move(closes: Dict[int, float], newest: Optional[int], k: int,
-                atr: Optional[float]) -> Tuple[Optional[float], str]:
-    """``(move, state)`` over the window of minutes [k, k + 15) after the open: (close of bar k + 14 - close of bar
-    k - 1) / ``atr``, needing every bar k - 1 .. k + 14 stored and the last confirmed by a later one. ``state`` is
+                atr: Optional[float], h: int = H) -> Tuple[Optional[float], str]:
+    """``(move, state)`` over the window of minutes [k, k + h) after the open: (close of bar k + h - 1 - close of bar
+    k - 1) / ``atr``, needing every bar k - 1 .. k + h - 1 stored and the last confirmed by a later one. ``state`` is
     'ok', 'pending' (not all stored or confirmed yet, nothing missing behind the newest bar) or 'missing' (a bar
     of the window absent while later bars are stored)."""
     if not atr or k < 1:
         return None, "missing"
-    needed = range(k - 1, k + H)
+    needed = range(k - 1, k + h)
     absent = [i for i in needed if i not in closes]
-    if newest is None or newest <= k + H - 1:
+    if newest is None or newest <= k + h - 1:
         return None, "pending" if all(i > (newest if newest is not None else -1) for i in absent) else "missing"
     if absent:
         return None, "missing"
-    return (closes[k + H - 1] - closes[k - 1]) / atr, "ok"
+    return (closes[k + h - 1] - closes[k - 1]) / atr, "ok"
 
 
 def _members(rows: Iterable[Tuple[mr.Opening, Optional[float], Optional[float]]]) -> Dict[str, Any]:
@@ -139,12 +139,17 @@ def _members(rows: Iterable[Tuple[mr.Opening, Optional[float], Optional[float]]]
     return {"members": out, "left_out": left_out}
 
 
+_FETCH = object()
+
+
 def _arms(conn, target: mr.Opening, ranked: Dict[str, Any], openings: Dict[str, mr.Opening],
-          moved) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """The four arms with each member's move by ``moved(opening)``, and the pre-open set used."""
+          moved, pre_set: Any = _FETCH) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The four arms with each member's move by ``moved(opening)``, and the pre-open set used (read now unless
+    given - one read serves several horizons)."""
     ordered = ranked["ordered"]
-    pre_set = store.latest_analogue_set(conn, target.context.snapshot_id, pre.MATCHER_VERSION, defs.LABEL_VERSION,
-                                        pre.RULES_PROTOCOL_VERSION)
+    if pre_set is _FETCH:
+        pre_set = store.latest_analogue_set(conn, target.context.snapshot_id, pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                            pre.RULES_PROTOCOL_VERSION)
     pre_members = [(openings[m["session_date"]], float(m["similarity"]))
                    for m in (pre_set or {}).get("members", []) if m["session_date"] in openings]
     clock = sorted((o for o, _ in ranked["scored"]), key=lambda o: o.session_date)
@@ -160,16 +165,16 @@ def _arms(conn, target: mr.Opening, ranked: Dict[str, Any], openings: Dict[str, 
 
 
 def _record(version: str, target: mr.Opening, minutes: int, window_start: datetime, forecasts, sources,
-            set_id: str) -> Dict[str, Any]:
+            set_id: str, horizon: int = H) -> Dict[str, Any]:
     digest = hashlib.sha256(defs.canonical_json({"forecasts": forecasts, "sources": sources}).encode()).hexdigest()
     return {"evaluation_version": version, "set_id": set_id, "symbol": target.symbol,
             "session_date": target.session_date, "elapsed_minutes": minutes, "cutoff_at": window_start,
-            "horizon_minutes": H, "target_atr": mr.show(target.context.atr), "forecasts": forecasts,
+            "horizon_minutes": horizon, "target_atr": mr.show(target.context.atr), "forecasts": forecasts,
             "sources": sources, "digest": digest, "code_revision": code_revision()}
 
 
-def _sources(ranked, set_id, pre_set, **extra) -> Dict[str, Any]:
-    return {"matcher_version": rth.RTH_MATCHER_VERSION, "rth_set_id": set_id, "pool_hash": ranked["pool_hash"],
+def _sources(ranked, set_id, pre_set, matcher_version: str = rth.RTH_MATCHER_VERSION, **extra) -> Dict[str, Any]:
+    return {"matcher_version": matcher_version, "rth_set_id": set_id, "pool_hash": ranked["pool_hash"],
             "preopen_matcher_version": pre.MATCHER_VERSION, "label_version": defs.LABEL_VERSION,
             "preopen_protocol": pre.RULES_PROTOCOL_VERSION,
             "preopen_set_id": None if pre_set is None else pre_set["set_id"], **extra}
@@ -479,4 +484,191 @@ def score(conn, now: Optional[datetime] = None, version: str = ev.VERSION) -> Di
     contract = ev if version == ev.VERSION else ops
     results.update(definition_hash=contract.definition_hash(), version=version, label=LABELS[version])
     store.save_rth_eval_result(conn, version, results, code_revision())
+    return results
+
+
+# --------------------------------------------------------------------------
+# The full-session evaluation (rth_session_v1, contracts/rth_session.py)
+# --------------------------------------------------------------------------
+
+def issue_session_forecasts(conn, target: mr.Opening, minutes: int, ranked: Dict[str, Any],
+                            openings: Dict[str, mr.Opening], set_id: str, session_minutes: int,
+                            built_at: Optional[datetime] = None) -> List[Tuple[str, str, bool, int]]:
+    """
+    rth_session_v1's forecasts of ``target``, issued with its v3 set of a cutoff window: S = the second full minute
+    after ``built_at`` (the issue's clock), one forecast per horizon whose window [S, S + h) ends by the session's
+    scheduled close - a window that would cross it is never forecast, nor shortened. Every member's move is over the
+    same clock minutes of its own session, from the bars stored now; the target's bars after the cutoff are never
+    read. Stored once per session, cutoff and horizon; ``[(version, forecast_id, new, horizon)]``.
+    """
+    from contracts import rth_session as rs
+    if minutes not in rs.CUTOFFS:
+        return []
+    built_at = built_at or datetime.now(timezone.utc)
+    k = int((built_at - target.rth_open_at) // MINUTE) + rs.LEAD_MINUTES
+    horizons = [h for h in rs.HORIZONS if rs.applicable(minutes, h, session_minutes) and minutes <= k
+                and k + h <= session_minutes]
+    if not horizons:
+        return []
+    start = target.rth_open_at + k * MINUTE
+    pre_set = store.latest_analogue_set(conn, target.context.snapshot_id, pre.MATCHER_VERSION, defs.LABEL_VERSION,
+                                        pre.RULES_PROTOCOL_VERSION)
+    members = ({o.session_date for o, _ in ranked["scored"]} | {x["opening"].session_date for x in ranked["ordered"]}
+               | {m["session_date"] for m in (pre_set or {}).get("members", [])})
+    closes = window_closes(conn, members, k + max(horizons))
+    out = []
+    for h in horizons:
+        def moved(o: mr.Opening, h=h) -> Optional[float]:
+            c, newest = closes.get(o.session_date, ({}, None))
+            return window_move(c, newest, k, o.context.atr if o.context else None, h)[0]
+        forecasts, used = _arms(conn, target, ranked, openings, moved, pre_set)
+        sources = _sources(ranked, set_id, used, rth.SESSION_VERSION, target_start_minute=k,
+                           match_cutoff_minutes=minutes, match_cutoff_at=target.rth_open_at + minutes * MINUTE,
+                           built_at=built_at, session_minutes=session_minutes)
+        rec = _record(rs.VERSION, target, minutes, start, forecasts, _jsonable(sources), set_id, h)
+        out.append((rs.VERSION, *store.save_rth_eval_forecast(conn, rec), h))
+    return out
+
+
+def session_cases(conn, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """
+    rth_session_v1's cases: every scheduled NQ session from its registration day to ``now``, at every cutoff and
+    horizon that fits the session (contracts/rth_session.applicable) - ``{'session_date', 'minutes', 'horizon',
+    'reason', 'forecast', 'times', 'y', 'scores'}`` as cases(), the reason the first of not_issued, late,
+    unverified_inputs, forecast_incomplete, outcome_pending, outcome_missing that applies.
+    """
+    from contracts import rth_session as rs
+    from forecaster import rth_analogues as ra
+    now = now or datetime.now(timezone.utc)
+    reg = _registered(conn, rs.VERSION)
+    if reg is None:
+        return []
+    first = ra.utc(reg["registered_at"]).astimezone(cal.NY_TZ).date()
+    today = now.astimezone(cal.NY_TZ).date()
+    if today < first:
+        return []
+    stored = {(f["session_date"], f["elapsed_minutes"], int(f["horizon_minutes"])): f
+              for f in store.rth_eval_forecasts(conn, rs.VERSION)
+              if first.isoformat() <= f["session_date"] <= today.isoformat()}
+    upto = max([window_start(f) + int(f["horizon_minutes"]) + 1 for f in stored.values()], default=rth.SESSION_MAX_MINUTES)
+    closes = window_closes(conn, {d for d, _, _ in stored}, upto)
+    sets: Dict[str, Any] = {}
+    out = []
+    for s in cal.sessions_between(first, today):
+        day, L = s.session_date.isoformat(), rth.session_minutes(s)
+        for minutes in rs.CUTOFFS:
+            for h in rs.HORIZONS:
+                if not rs.applicable(minutes, h, L):
+                    continue
+                f = stored.get((day, minutes, h))
+                case = {"session_date": day, "minutes": minutes, "horizon": h, "forecast": f, "times": None,
+                        "y": None, "scores": None, "reason": None}
+                if f is None:
+                    # an issue could still come while the cutoff's window is within the live limit and its earliest
+                    # window still fits before the close
+                    last = min(s.rth_open_at + minutes * MINUTE + rth.LIVE_MAX_LAG,
+                               s.rth_open_at + (L - h - rs.LEAD_MINUTES) * MINUTE)
+                    case["reason"] = "outcome_pending" if now < last else "not_issued"
+                    out.append(case)
+                    continue
+                case["times"] = _times(f)
+                if not f["eligible"]:
+                    case["reason"] = "late"
+                else:
+                    if f["set_id"] not in sets:
+                        sets[f["set_id"]] = store.get_rth_set(conn, f["set_id"])
+                    if sets[f["set_id"]]["pit_status"] != "verified":
+                        case["reason"] = "unverified_inputs"
+                    elif any(len(f["forecasts"][k]["members"]) < n for k, n in rs.MIN_MEMBERS.items()):
+                        case["reason"] = "forecast_incomplete"
+                    else:
+                        c, newest = closes.get(day, ({}, None))
+                        y, state = window_move(c, newest, window_start(f), float(f["target_atr"]), h)
+                        if state == "ok":
+                            case.update(y=y, scores=case_scores(f["forecasts"], y))
+                        else:
+                            case["reason"] = "outcome_pending" if state == "pending" else "outcome_missing"
+                out.append(case)
+    return out
+
+
+def session_availability(all_cases: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """availability() per cutoff and horizon ('10:00 / 15 min'): every decided opportunity, scored and each reason
+    with its rate, and the stored forecasts' timing."""
+    from contracts import rth_session as rs
+    out = {}
+    for minutes, at in rs.CUTOFFS.items():
+        for h in rs.HORIZONS:
+            cs = [c for c in all_cases if c["minutes"] == minutes and c["horizon"] == h
+                  and c["reason"] != "outcome_pending"]
+            if not cs:
+                continue
+            n = len(cs)
+            counts = Counter((c["reason"] or "scored") for c in cs)
+            timed = [c["times"] for c in cs if c.get("times") is not None]
+            out[f"{at} / {h} min"] = {"opportunities": n, "counts": dict(counts),
+                                      "rates": {k: round(v / n, 4) for k, v in counts.items()},
+                                      "lead_minutes": _quantiles([t["lead"] for t in timed]),
+                                      "information_age_minutes": _quantiles([t["age"] for t in timed])}
+    return out
+
+
+def session_status(conn, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """rth_session_v1's operational health - never a score."""
+    from contracts import rth_session as rs
+    all_cases = session_cases(conn, now)
+    primary = [c for c in all_cases if c["horizon"] == rs.PRIMARY_HORIZON]
+    counted = sorted({c["session_date"] for c in primary if c["reason"] is None})
+    return {"version": rs.VERSION, "label": "operational, through the regular session - windows that start after "
+                                            "the forecast is stored",
+            "registered": _registered(conn, rs.VERSION) is not None, "cases": len(all_cases),
+            "by_reason": dict(Counter((c["reason"] or "scored") for c in all_cases)),
+            "availability": session_availability(all_cases), "counted_sessions": len(counted),
+            "endpoint_sessions": rs.ENDPOINT_SESSIONS, "end_date": rs.END_DATE}
+
+
+def session_analyse(all_cases: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """rth_session_v1's analysis (pure): the primary comparisons at the primary horizon over sessions (each
+    session's difference averaged over its scored cutoffs), the same at every other horizon, and per phase -
+    exploratory."""
+    from contracts import rth_session as rs
+    b = rs.BOOTSTRAP
+    out: Dict[str, Any] = {"by_reason": dict(Counter((c["reason"] or "scored") for c in all_cases)),
+                           "availability": session_availability(all_cases), "primary": {}, "horizons": {},
+                           "phases": {}}
+    for h in rs.HORIZONS:
+        scored = [c for c in all_cases if c["reason"] is None and c["horizon"] == h]
+        target = out["primary"] if h == rs.PRIMARY_HORIZON else out["horizons"].setdefault(f"{h} min", {})
+        for a, base, measure in rs.PRIMARY:
+            diffs = [d for _, d in session_differences(scored, a, base, measure)]
+            iv = block_bootstrap(diffs, b["block"], b["resamples"], b["seed"], b["level"])
+            target[f"{a} vs {base}: {measure}"] = {**iv, "decision": decide(iv) if h == rs.PRIMARY_HORIZON else None}
+        if h == rs.PRIMARY_HORIZON:
+            out["counted_sessions"] = len({c["session_date"] for c in scored})
+            for phase, (lo, hi) in rs.PHASES.items():
+                part = [c for c in scored if lo <= c["minutes"] <= hi]
+                for a, base, measure in rs.PRIMARY:
+                    diffs = [d for _, d in session_differences(part, a, base, measure)]
+                    out["phases"].setdefault(phase, {})[f"{a} vs {base}: {measure}"] = block_bootstrap(
+                        diffs, b["block"], b["resamples"], b["seed"], b["level"])
+    return out
+
+
+def session_score(conn, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """rth_session_v1's one scoring, stored: only at its endpoint and only once (NotAtEndpoint otherwise)."""
+    from contracts import rth_session as rs
+    now = now or datetime.now(timezone.utc)
+    if store.rth_eval_result(conn, rs.VERSION) is not None:
+        raise NotAtEndpoint(f"{rs.VERSION} was scored already; the stored result stands")
+    st = session_status(conn, now)
+    counted, past_end = st["counted_sessions"], now.astimezone(cal.NY_TZ).date() >= date.fromisoformat(rs.END_DATE)
+    if counted < rs.ENDPOINT_SESSIONS and not past_end:
+        raise NotAtEndpoint(f"{counted} of {rs.ENDPOINT_SESSIONS} sessions counted; the end date is {rs.END_DATE}")
+    if counted < rs.ENDPOINT_SESSIONS and counted < rs.MIN_SESSIONS_AT_END_DATE:
+        results = {"insufficient": True, "counted_sessions": counted, "by_reason": st["by_reason"],
+                   "availability": st["availability"]}
+    else:
+        results = session_analyse(session_cases(conn, now))
+    results.update(definition_hash=rs.definition_hash(), version=rs.VERSION)
+    store.save_rth_eval_result(conn, rs.VERSION, results, code_revision())
     return results

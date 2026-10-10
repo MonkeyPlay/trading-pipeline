@@ -1,10 +1,12 @@
 # dashboard/views/rth_analogues.py
 """
-The RTH analogues of the Session Explorer (matcher nq_match_rth_v1,
-forecaster/rth_analogues.py, docs/rth_analogues.md): the earlier NQ sessions whose
-first n minutes from the 09:30 ET open most resemble the selected session's first n
-- a stored set per window, separate from the saved pre-open set
-(dashboard/views/analogues.py), which it never replaces.
+The RTH analogues of the Session Explorer (forecaster/rth_analogues.py,
+docs/rth_analogues.md): the earlier NQ sessions whose first n minutes from the 09:30
+ET open most resemble the selected session's first n - a stored set per window,
+separate from the saved pre-open set (dashboard/views/analogues.py), which it never
+replaces. Two matchers: the full session's (nq_match_rth_v3, to the RTH close - shown
+by default when the day has its sets) and the first hour's (nq_match_rth_v2, the
+record of its frozen evaluations); a day with both offers the switch.
 
 Two views, switched explicitly:
 
@@ -88,7 +90,8 @@ class RthAnaloguesPanel:
         self.aset: Optional[Dict[str, Any]] = None
         self.reason: Optional[str] = None
         self.windows: List[Dict[str, Any]] = []
-        self.version = rth.RTH_MATCHER_VERSION         # the matcher version shown (a superseded one for review)
+        self.version = rth.SESSION_VERSION             # the matcher version shown (a superseded one for review)
+        self.matcher_choice: Optional[str] = None       # the matcher picked; None: the full session's when stored
         self.chosen: Optional[str] = None
         self.date_buttons: Dict[str, Any] = {}
         self.view_choice: Optional[str] = None          # the view picked; None: as issued when anything was
@@ -110,14 +113,19 @@ class RthAnaloguesPanel:
                                              "included")
                 self.window_select = ui.select({FOLLOW: "Follow"}, value=FOLLOW, label="Window",
                                                on_change=self._picked).props("dense options-dense").classes("w-72")
+                self.matcher_toggle = ui.toggle({rth.SESSION_VERSION: "Full session",
+                                                 rth.RTH_MATCHER_VERSION: "First hour"},
+                                                value=rth.SESSION_VERSION, on_change=self._matcher_picked).props(
+                    "dense no-caps").tooltip("Full session (nq_match_rth_v3): matched to the RTH close. First hour "
+                                             "(nq_match_rth_v2): the record its frozen evaluations score")
                 self.summary = ui.label().classes("text-sm").style(_MUTED)
-            ui.label(f"Earlier sessions whose opening most resembles this one's over the same minutes from the 09:30 "
-                     f"ET open ({rth.RTH_MATCHER_VERSION}): the path from the open, its range, pullbacks and "
-                     f"recoveries, where it stands against VWAP and the frozen pre-open levels, relative volume and "
-                     f"the pre-open context - every earlier session scored afresh at each window. Prices are in each "
-                     f"session's own daily ATR, frozen before its open. Similarity is how closely the observed "
-                     f"openings agree, not a probability; the chart beside the session greys what an analogue did "
-                     f"after the matched minutes - shown, never matched.").classes("text-sm").style(_MUTED)
+            ui.label("Earlier sessions whose regular session most resembles this one's over the same minutes from the "
+                     "09:30 ET open: the path from the open, its range, pullbacks and "
+                     "recoveries, where it stands against VWAP and the frozen pre-open levels, relative volume and "
+                     "the pre-open context - every earlier session scored afresh at each window. Prices are in each "
+                     "session's own daily ATR, frozen before its open. Similarity is how closely the observed "
+                     "openings agree, not a probability; the chart beside the session greys what an analogue did "
+                     "after the matched minutes - shown, never matched.").classes("text-sm").style(_MUTED)
             self.table = ui.column().classes("w-full gap-0 overflow-x-auto")
         self.body.set_visibility(False)
 
@@ -141,17 +149,28 @@ class RthAnaloguesPanel:
         if day != self.day:
             self._set_window(FOLLOW)
             self.view_choice = None
+            self.matcher_choice = None
         self.day, self.aset, self.reason = day, None, None
         if not day or symbol != defs.SYMBOL:
             self.reason = f"RTH analogues are kept for {defs.SYMBOL}, the journal symbol."
             return self._empty()
-        self.version = rth.RTH_MATCHER_VERSION
-        self.windows = store.rth_windows(self.conn, defs.SYMBOL, day, self.version)
+        stored = {v: store.rth_windows(self.conn, defs.SYMBOL, day, v)
+                  for v in (rth.SESSION_VERSION, rth.RTH_MATCHER_VERSION)}
+        both = all(stored.values())
+        self.version = (self.matcher_choice if self.matcher_choice in stored and stored[self.matcher_choice]
+                        else rth.SESSION_VERSION if stored[rth.SESSION_VERSION] else rth.RTH_MATCHER_VERSION)
+        self.windows = stored[self.version]
         for older in () if self.windows else rth.SUPERSEDED:
             self.windows = store.rth_windows(self.conn, defs.SYMBOL, day, older)
             if self.windows:
                 self.version = older
                 break
+        self._syncing = True
+        try:
+            self.matcher_toggle.value = self.version if self.version in stored else rth.RTH_MATCHER_VERSION
+        finally:
+            self._syncing = False
+        self.matcher_toggle.set_visibility(both)
         self._window_options()
         if not self.windows:
             self.reason = (f"No RTH analogue set of {day} is stored. The session in progress gets one a minute from "
@@ -215,6 +234,14 @@ class RthAnaloguesPanel:
         if self.on_window is not None:
             self.on_window()
 
+    def _matcher_picked(self, event) -> None:
+        if self._syncing or not event.value:
+            return
+        self.matcher_choice = event.value
+        self._set_window(FOLLOW)
+        if self.on_window is not None:
+            self.on_window()
+
     def _set_window(self, value) -> None:
         self._syncing = True
         try:
@@ -252,9 +279,12 @@ class RthAnaloguesPanel:
                 "Reconstructed (the latest calculation of this window): ")
         self.title.text = view + ra.describe(aset)
         notes = []
-        if self.version != rth.RTH_MATCHER_VERSION:
+        if self.version in rth.SUPERSEDED:
             notes.append(f"Superseded matcher {self.version}: its reconstructions are shown for review only - "
                          f"{rth.RTH_MATCHER_VERSION} keeps the record.")
+        elif self.version == rth.RTH_MATCHER_VERSION:
+            notes.append("First-hour matcher (nq_match_rth_v2): matching stops at 10:30 ET; it is the record its "
+                         "frozen evaluations score.")
         if aset["quality"].get("provisional"):
             notes.append(f"Provisional: only {aset['elapsed_minutes']} minute(s) of the opening observed - early "
                          f"matches move a lot.")
@@ -266,10 +296,16 @@ class RthAnaloguesPanel:
             cutoff = ra.utc(aset["cutoff_at"])
             behind = (now - cutoff).total_seconds() / 60
             newest = ra.newest_bar_end(self.conn, self.day)
-            if behind >= 2:
+            closed = (aset.get("session_minutes") is not None
+                      and int(aset["elapsed_minutes"]) >= int(aset["session_minutes"]))
+            if behind >= 2 and not closed:
                 notes.append(f"Now {now.astimezone(cal.NY_TZ):%H:%M} ET: these matches are {behind:.0f} min behind "
                              f"the clock" + (f" (newest bar stored ends {newest.astimezone(cal.NY_TZ):%H:%M} ET - "
                                              f"the feed is delayed)" if newest is not None else "") + ".")
+            idle = (now - ra.utc(aset["created_at"])).total_seconds() / 60
+            if self.version == rth.SESSION_VERSION and not closed and idle >= 3:
+                notes.append(f"Stale: no newer set stored for {idle:.0f} min - Auto may be off or the collection "
+                             f"failing.")
         self.quality.text = " ".join(notes)
         self.quality.set_visibility(bool(notes))
         excluded = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in aset["excluded"].items()) or "none"

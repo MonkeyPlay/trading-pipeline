@@ -848,13 +848,16 @@ def save_rth_set(conn: Database, rec: Dict[str, Any], members: List[Dict[str, An
             "INSERT INTO journal.rth_analogue_sets (set_id, symbol, session_date, contract_id, matcher_version, "
             "context_snapshot_id, elapsed_minutes, cutoff_at, input_digest, pool_size, pool_hash, excluded, "
             "mean_similarity, target_features, quality, code_revision, issued_by, inputs_received_at, "
-            "pool_received_at, pit_status, data_mode) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s, %s, %s, %s, 'historical_reconstruction');",
+            "pool_received_at, pit_status, session_minutes, computation_started_at, confirmed_by_start, "
+            "confirmed_received_at, data_mode) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'historical_reconstruction');",
             (set_id, rec["symbol"], rec["session_date"], rec["contract_id"], rec["matcher_version"],
              rec["context_snapshot_id"], rec["elapsed_minutes"], rec["cutoff_at"], rec["input_digest"],
              rec["pool_size"], rec["pool_hash"], canonical_json(rec["excluded"]), rec["mean_similarity"],
              canonical_json(rec["target_features"]), canonical_json(rec["quality"]), rec["code_revision"],
-             rec["issued_by"], rec.get("inputs_received_at"), rec.get("pool_received_at"), rec.get("pit_status")))
+             rec["issued_by"], rec.get("inputs_received_at"), rec.get("pool_received_at"), rec.get("pit_status"),
+             rec.get("session_minutes"), rec.get("computation_started_at"), rec.get("confirmed_by_start"),
+             rec.get("confirmed_received_at")))
         conn.executemany(
             "INSERT INTO journal.rth_analogue_members (set_id, rank, session_date, contract_id, snapshot_id, "
             "similarity, comparable_weight, components) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
@@ -915,6 +918,38 @@ def rth_set_issued(conn: Database, symbol: str, session_date: str, matcher_versi
     return None if row is None else _rth_set(conn, row)
 
 
+def rth_last_issue(conn: Database, symbol: str, session_date: str, matcher_version: str) -> Optional[Dict[str, Any]]:
+    """The session's newest set issued by Auto or by hand (live or late): ``elapsed_minutes`` and ``created_at``, or
+    None - where the next issue's skipped windows start."""
+    row = conn.execute(
+        "SELECT elapsed_minutes, created_at FROM journal.rth_analogue_sets WHERE symbol = %s AND session_date = %s "
+        "AND matcher_version = %s AND issued_by IN ('auto', 'manual') ORDER BY created_at DESC LIMIT 1;",
+        (symbol, session_date, matcher_version)).fetchone()
+    return None if row is None else {"elapsed_minutes": int(row[0]), "created_at": row[1]}
+
+
+def save_rth_misses(conn: Database, rows: List[Dict[str, Any]]) -> int:
+    """Records windows a live issue did not store (journal.rth_issue_misses, migration 0031): each row ``symbol``,
+    ``session_date``, ``matcher_version``, ``first_minutes``, ``last_minutes``, ``reason`` (coalesced, not_running,
+    expired), ``detail``, ``issued_by``; the database stamps recorded_at. Returns how many were stored."""
+    if not rows:
+        return 0
+    with conn:
+        conn.executemany(
+            "INSERT INTO journal.rth_issue_misses (symbol, session_date, matcher_version, first_minutes, last_minutes, "
+            "reason, detail, issued_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
+            [(r["symbol"], r["session_date"], r["matcher_version"], r["first_minutes"], r["last_minutes"],
+              r["reason"], r["detail"], r["issued_by"]) for r in rows])
+    return len(rows)
+
+
+def rth_misses(conn: Database, symbol: str, session_date: str, matcher_version: str) -> List[Dict[str, Any]]:
+    """The windows live issues of a session did not store, with why, in the order recorded."""
+    rows = conn.execute("SELECT * FROM journal.rth_issue_misses WHERE symbol = %s AND session_date = %s AND "
+                        "matcher_version = %s ORDER BY miss_id;", (symbol, session_date, matcher_version)).fetchall()
+    return [dict(zip(r.keys(), r), session_date=str(r["session_date"])) for r in rows]
+
+
 def rth_windows(conn: Database, symbol: str, session_date: str, matcher_version: str) -> List[Dict[str, Any]]:
     """The session's stored RTH windows, shortest first: ``elapsed_minutes``, ``checkpoint``, ``sets`` (how many -
     more than one when an input was revised), ``live`` (how many were issued live), ``issued`` (how many by Auto or
@@ -934,15 +969,16 @@ def rth_windows(conn: Database, symbol: str, session_date: str, matcher_version:
 # --------------------------------------------------------------------------
 
 def save_rth_eval_forecast(conn: Database, rec: Dict[str, Any]) -> Tuple[str, bool]:
-    """Stores the evaluation forecasts of one session and cutoff (``rec``: the journal.rth_eval_forecasts columns
-    but ``forecast_id``, ``created_at``, ``issue_delay_s`` and ``eligible``, which the database stamps). Only the
-    first per evaluation, session and cutoff is stored; a later one returns the first."""
-    key = (rec["evaluation_version"], rec["symbol"], rec["session_date"], rec["elapsed_minutes"])
+    """Stores the evaluation forecasts of one session, cutoff and horizon (``rec``: the journal.rth_eval_forecasts
+    columns but ``forecast_id``, ``created_at``, ``issue_delay_s`` and ``eligible``, which the database stamps). Only
+    the first per evaluation, session, cutoff and horizon is stored; a later one returns the first."""
+    key = (rec["evaluation_version"], rec["symbol"], rec["session_date"], rec["elapsed_minutes"],
+           rec["horizon_minutes"])
     with conn:
         _lock(conn, "journal.rth_eval_forecasts", *key)
         row = conn.execute(
             "SELECT forecast_id FROM journal.rth_eval_forecasts WHERE evaluation_version = %s AND symbol = %s "
-            "AND session_date = %s AND elapsed_minutes = %s;", key).fetchone()
+            "AND session_date = %s AND elapsed_minutes = %s AND horizon_minutes = %s;", key).fetchone()
         if row is not None:
             return str(row[0]), False
         forecast_id = str(uuid.uuid4())
