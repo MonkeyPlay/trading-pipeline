@@ -103,9 +103,11 @@ def snapshot_pending(conn, day: str, profile: str = defs.DEFAULT_PROFILE,
 
 def register(conn) -> None:
     from contracts import nq_forecast
-    from forecaster import ml_model
+    from contracts import nq_ml_bundle
+    from forecaster import ml_bundle, ml_model
+    bundles = any(ml_bundle.manifest(v) is not None for v in nq_ml_bundle.VERSIONS.values())
     for rec in (defs.all_records() + [preopen.rules_record(), preopen.matcher_record()]
-                + nq_forecast.all_records() + ml_model.records()):
+                + nq_forecast.all_records() + ml_model.records() + (ml_bundle.records() if bundles else [])):
         store.register_version(conn, rec)
 
 

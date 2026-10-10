@@ -236,19 +236,27 @@ def capture(conn, app, day: str, profile: str = defs.DEFAULT_PROFILE, protocol: 
 
 def _issue_ml(conn, snapshot, profile, event, summary) -> None:
     """The ML forecasts with a stored artifact (forecaster/ml_service.py), live, from the same snapshot - for the
-    profile they were trained for only; the session's features built once, as of now."""
+    profile they were trained for only; the session's features built once per input set, as of now (NQ's own for N
+    and P, the context instruments too for M). Each model on its own: an exception in one is an event, never a stop
+    for the others or for the delivery that follows."""
     from contracts import nq_ml
     from forecaster import ml_model, ml_service
     from forecaster.forecast_service import timely
     if profile != nq_ml.PROFILE:
         return
-    fs = None
+    built = {}
     for version in nq_ml.ALGORITHMS:
         if ml_model.manifest(version) is None:
             continue
-        if fs is None:
-            fs = ml_service.features(conn, snapshot, datetime.now(timezone.utc))
-        run, created = ml_service.issue(conn, snapshot, profile, "live", version, fs=fs)
+        try:
+            syms = ml_service.symbols_of(version)
+            if syms not in built:
+                built[syms] = ml_service.features(conn, snapshot, datetime.now(timezone.utc), syms)
+            run, created = ml_service.issue(conn, snapshot, profile, "live", version, fs=built[syms])
+        except Exception as e:
+            logger.exception("live ML forecast %s failed", version)
+            event("forecast", algorithm=version, status="error", reason=f"{type(e).__name__}: {e}", new=False)
+            continue
         event("forecast", run_id=run["run_id"], algorithm=version, status=run["lifecycle_status"],
               issued_at=None if run["issued_at"] is None else str(run["issued_at"]), timely=timely(run),
               new=created, reason=run["failure_reason"])

@@ -18,12 +18,16 @@ arms A and B, and records the forecast in force.
       policy (the database decides late) and are acknowledged after their commit
   issue_pending(conn, profile, now)
       Auto's journal step: every snapshot after the models' training window still
-      without its ML runs, once the context instruments' cutoff bars are in (or
-      MAX_WAIT_MINUTES after the cutoff); and the session's forecast in force, recorded
-      once - when the delivery order's ML models (none while experimental) have their
-      runs, and only by the replay deadline (contracts/nq_ml.replay_deadline): a session
-      caught up later gets ML runs that are reconstructions and no delivery, so what was
-      in force that morning is never decided after the fact
+      without its ML runs - the v1 models and the seven-target bundles
+      (forecaster/ml_bundle_service.py, shadow) - each arm as soon as its own inputs are
+      ready: N and P (NQ's own data, already in the snapshot) at once, M once the
+      context instruments' cutoff bars are in (or MAX_WAIT_MINUTES after the cutoff). One
+      arm's wait, failure or exception never holds up another; and the session's forecast
+      in force, recorded once - when the delivery order's ML models (none while
+      experimental) have their runs, and only by the replay deadline
+      (contracts/nq_ml.replay_deadline): a session caught up later gets ML runs that are
+      reconstructions and no delivery, so what was in force that morning is never decided
+      after the fact
   record_delivery(conn, day, profile, mode)
       the first usable run in contracts/nq_ml.delivery_order(), or none, with the reason
       (journal.forecast_deliveries, migration 0030)
@@ -61,10 +65,21 @@ def registered_sha(conn, version: str) -> Optional[str]:
     return None if row is None else ((row.get("definition") or {}).get("artifact") or {}).get("sha256")
 
 
-def features(conn, snapshot: Dict[str, Any], as_of: Optional[datetime] = None) -> mf.FeatureSet:
-    """The session's features as of its cutoff and ``as_of`` - built once, read by every model."""
+def features(conn, snapshot: Dict[str, Any], as_of: Optional[datetime] = None,
+             symbols=mf.ALL_SYMBOLS) -> mf.FeatureSet:
+    """The session's features as of its cutoff and ``as_of`` - built once per input set, read by every model that
+    needs it (``symbols``: NQ alone for the NQ-only and pooled models, whose features are NQ's own)."""
     day = str(snapshot["session_date"])
-    return mf.build(conn, [day], {day: snapshot}, as_of=as_of, profile=ml.PROFILE)
+    return mf.build(conn, [day], {day: snapshot}, as_of=as_of, symbols=symbols, profile=ml.PROFILE)
+
+
+def needs_context(version: str) -> bool:
+    """Whether a v1 model reads the context instruments (the multi-instrument one): only it waits for their bars."""
+    return ml.CONFIG_OF.get(version) == "multi"
+
+
+def symbols_of(version: str):
+    return mf.ALL_SYMBOLS if needs_context(version) else ("NQ",)
 
 
 def predict(conn, snapshot: Dict[str, Any], version: str, as_of: Optional[datetime] = None,
@@ -232,12 +247,17 @@ def record_delivery(conn, day: str, profile: str, mode: str) -> Dict[str, Any]:
 def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = None,
                   root: Optional[str] = None) -> Dict[str, int]:
     """Auto's step (see the module docstring); returns how many runs (and reconstructions among them) and deliveries
-    were new, and how many sessions wait for the context instruments."""
+    were new, how many sessions wait for the context instruments, and how many arms raised (each recorded in the log;
+    the other arms carried on)."""
+    from contracts import nq_ml_bundle as mb
+    from forecaster import ml_bundle as mbun
+    from forecaster import ml_bundle_service as mbs
     now = now or datetime.now(timezone.utc)
-    counts = {"runs": 0, "reconstructions": 0, "deliveries": 0, "waiting": 0}
+    counts = {"runs": 0, "reconstructions": 0, "deliveries": 0, "waiting": 0, "errors": 0}
     if profile != ml.PROFILE:
         return counts
     mans = {v: mm.manifest(v, root) for v in ml.ALGORITHMS}
+    mans.update({v: mbun.manifest(v, root) for v in mb.VERSIONS.values()})
     mans = {v: m for v, m in mans.items() if m is not None}
     if not mans:
         return counts
@@ -250,6 +270,7 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
     for r in store.list_forecast_runs(conn, start, today, profile, "historical_replay"):
         runs.setdefault(str(r["session_date"]), set()).add(r["algorithm_version"])
     delivered = store.delivery_days(conn, start, today, profile, "historical_replay")
+    bundle = set(mb.VERSIONS.values())
     for ref in store.list_snapshots(conn, start, today, version, payload=False):
         day = str(ref["session_date"])
         if day <= start or ref["data_mode"] == "live_capture":
@@ -257,16 +278,31 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
         deadline = ml.replay_deadline(_utc(ref["cutoff_at"]))
         have = set(runs.get(day, ()))
         todo = [v for v in mans if v not in have]
-        if todo and context_ready(conn, ref, now):
+        waits = [v for v in todo if (mbs.needs_context(v) if v in bundle else needs_context(v))]
+        ready = [v for v in todo if v not in waits]
+        if waits and context_ready(conn, ref, now):
+            ready += waits
+        elif waits:
+            counts["waiting"] += 1
+        if ready:
             snap = store.get_snapshot(conn, ref["snapshot_id"])
-            fs = features(conn, snap, now)
-            for v in todo:
-                _, created = issue(conn, snap, profile, "historical_replay", v, root, now, fs)
+            built: Dict[tuple, mf.FeatureSet] = {}
+            for v in ready:
+                try:                                   # each arm on its own: one arm's exception never stops another
+                    if v in bundle:
+                        _, created = mbs.issue(conn, snap, profile, "historical_replay", v, root, now)
+                    else:
+                        syms = symbols_of(v)
+                        if syms not in built:
+                            built[syms] = features(conn, snap, now, syms)
+                        _, created = issue(conn, snap, profile, "historical_replay", v, root, now, built[syms])
+                except Exception:
+                    logger.exception("ML forecast %s for %s could not be issued", v, day)
+                    counts["errors"] += 1
+                    continue
                 counts["runs"] += int(created)
                 counts["reconstructions"] += int(created and now > deadline)
-            have |= set(todo)
-        elif todo:
-            counts["waiting"] += 1
+                have.add(v)
         if now <= deadline and all(v in have for v in in_order) and day not in delivered:
             record_delivery(conn, day, profile, "historical_replay")
             counts["deliveries"] += 1
@@ -275,5 +311,6 @@ def issue_pending(conn, profile: str = ml.PROFILE, now: Optional[datetime] = Non
                     + (f" ({counts['reconstructions']} reconstruction(s): issued after the replay deadline, never in "
                        "force)" if counts["reconstructions"] else "")
                     + f", {counts['deliveries']} deliver(ies) recorded, {counts['waiting']} session(s) waiting for "
-                      "the context instruments.")
+                      "the context instruments" + (f", {counts['errors']} arm(s) raised (logged; the others carried "
+                                                   "on)" if counts["errors"] else "") + ".")
     return counts

@@ -320,11 +320,15 @@ def test_ml_runs_are_issued_after_the_training_window_only_once_with_exact_proba
     conn = journal["conn"]
     after = [d for d in journal["pool"] if d > journal["until"]]
     # the first session's morning, 5 minutes after the cutoff: the forecast in force is recorded (B - nothing
-    # experimental is delivered), the ML forecasts wait for the context instruments
+    # experimental is delivered); N and P issue at once from NQ's own data, only M waits for the context instruments
     cutoff = mf_utc(_snap(conn, after[0])["cutoff_at"])
     early = ml_service.issue_pending(conn, ml.PROFILE, now=cutoff + timedelta(minutes=5))
-    assert early == {"runs": 0, "reconstructions": 0, "deliveries": 1, "waiting": 1}
+    assert early == {"runs": 2, "reconstructions": 0, "deliveries": 1, "waiting": 1, "errors": 0}
     assert store.first_delivery(conn, after[0], ml.PROFILE, "historical_replay")["algorithm"] == fc.BASELINE_VERSION
+    morning = {r["algorithm_version"]: r for r in store.list_forecast_runs(conn, after[0], after[0], ml.PROFILE,
+                                                                           "historical_replay")}
+    assert {ml.ML_NQ_VERSION, ml.ML_POOLED_VERSION} <= set(morning) and ml.ML_MULTI_VERSION not in morning
+    assert set(store.get_forecast_run(conn, morning[ml.ML_NQ_VERSION]["run_id"])["evidence"]["instruments"]) == {"NQ"}
     # issued now, long after every session's replay deadline: reconstructions, and no forecast in force decided
     # after the fact (the synthetic bars were stored today, so an earlier issue time would find them unreceived)
     first = ml_service.issue_pending(conn, ml.PROFILE)
@@ -390,9 +394,16 @@ def test_the_forecast_in_force_falls_back_explicitly(journal, monkeypatch):
         got = ml_service.record_delivery(conn, day, ml.PROFILE, "historical_replay")
         assert got["algorithm"] == ml.ML_MULTI_VERSION and got["reason"] == "ML multi-instrument"
     from forecaster.delivery import delivered
-    fake = [dict(store.get_forecast_run(conn, runs[ml.ML_MULTI_VERSION]["run_id"]), lifecycle_status="unavailable",
+    # the fallback order on the next session, whose runs were all issued at once (the first session's N and P ran at
+    # its simulated morning, before the synthetic bars had a receipt - unavailable, as they should be)
+    nxt = {r["algorithm_version"]: r for r in store.list_forecast_runs(
+        conn, [d for d in journal["pool"] if d > journal["until"]][1], [d for d in journal["pool"]
+                                                                         if d > journal["until"]][1],
+        ml.PROFILE, "historical_replay")}
+    assert nxt[ml.ML_NQ_VERSION]["lifecycle_status"] == "issued"
+    fake = [dict(store.get_forecast_run(conn, nxt[ml.ML_MULTI_VERSION]["run_id"]), lifecycle_status="unavailable",
                  failure_reason="required instrument(s) not usable at the cutoff: ES stale")] + \
-        [store.get_forecast_run(conn, runs[v]["run_id"]) for v in (ml.ML_NQ_VERSION, fc.BASELINE_VERSION)]
+        [store.get_forecast_run(conn, nxt[v]["run_id"]) for v in (ml.ML_NQ_VERSION, fc.BASELINE_VERSION)]
     run, why = delivered(fake, ml.delivery_order(), lambda v: ml.ARM_LABELS[v])
     assert run["algorithm_version"] == ml.ML_NQ_VERSION and "ML multi-instrument unavailable" in why
     run, why = delivered(fake[2:], ml.delivery_order(), lambda v: ml.ARM_LABELS[v])

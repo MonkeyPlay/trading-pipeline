@@ -12,7 +12,7 @@ import pandas as pd
 
 from features import calendar as cal
 
-NQ_CID, ES_CID = 101, 102
+NQ_CID, ES_CID, RTY_CID = 101, 102, 103
 
 
 def _session_minutes(s: cal.Session, start_et: str, end_et: str, prior_evening: bool) -> pd.DatetimeIndex:
@@ -58,3 +58,15 @@ def make_market(last_day="2026-06-10", n_sessions=90, seed=7):
             frames[cid].append(df.assign(contract_id=cid))
     bars = {cid: pd.concat(dfs, ignore_index=True) for cid, dfs in frames.items()}
     return bars, sessions
+
+
+def make_instrument(sessions, cid, start_price, vol, seed):
+    """One more instrument's full Globex sessions over ``sessions`` (its own random stream, so adding it never
+    changes make_market's NQ and ES bars)."""
+    rng = np.random.default_rng(seed)
+    price, frames = start_price, []
+    for s in sessions:
+        df = _walk(_session_minutes(s, "18:00", "17:00", prior_evening=True), price, vol, rng)
+        price = float(df["close"].iloc[-1])
+        frames.append(df.assign(contract_id=cid))
+    return pd.concat(frames, ignore_index=True)
