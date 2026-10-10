@@ -290,9 +290,11 @@ def render(res: Dict[str, Any]) -> str:
          "analogues stay useful as historical comparisons. Their similarity percentage is not an outcome "
          "probability.",
          _size_bullet(P),
-         "- **Why N, M and P look like A:** the tuning prefers the strongest penalty, looser penalties score worse, "
-         "and the same pipeline moves with planted signals. That is shrinkage on a weak signal, not a coding bug "
-         "(section 2).",
+         "- **Why N and M look like A:** their tuning prefers the strongest penalty, looser penalties score worse, "
+         "and the same pipeline moves with planted signals - shrinkage on a weak signal (section 2). **P is "
+         "different:** its inner tuning split had a coding defect (the pooled rows were cut by position, so its "
+         "validation rows were RTY's on dates also in training). The outer folds were unaffected; its corrected "
+         "rerun is docs/reports/ml_pooled_split_v1.md.",
          "- **Sample sizes** (estimates under stated assumptions, not guarantees; section 5): with an effect of exactly "
          "0.01, the registered rule cannot reach 80 % power at any sample size. At 60 sessions it has 80 % power "
          "only for true improvements of about 0.05 or more before the open.", ""])
@@ -537,7 +539,10 @@ def render(res: Dict[str, Any]) -> str:
            "- along the path, a looser penalty scores steadily worse;",
            "- the same pipeline moves with a planted signal: " + _planted_frozen(ctl) + ";",
            "- the features come from history only (section 1).", "",
-           "This is shrinkage on a weak signal, not a bug.", ""])
+           "For N and M this is shrinkage on a weak signal. It does not clear P: P's inner tuning split had a real "
+           "defect - pooled rows cut by position, validation on RTY rows whose dates were also in training - "
+           "corrected and rerun in docs/reports/ml_pooled_split_v1.md (the outer test folds were never affected).",
+           ""])
 
     # ------------------------------------------------------------------ 3. pre-open ladder
     add(["## 3. Pre-open direction_15m: the candidate ladder", "",

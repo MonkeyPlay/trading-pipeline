@@ -4,6 +4,8 @@
 |---|---|---|
 | `label_disagreement_impl3_vs_impl5.md` / `.csv` | The recorded `nq_prompt_v2_1_impl3` outcomes against impl5 on snapshots built today under `nq_conv_v5` (strict completeness), and the stored rule-based structure annotation against `nq_structure_rules_v4`; every difference walked one change at a time (bars revised, snapshot, rules) to its cause | `scripts/label_revision_report.py` |
 | `experiment_<name>.md` / `.csv` | A registered forecast experiment (guideline stage 4): coverage, the primary paired difference with its bootstrap interval, every target per arm, where the differences sit (class, month, volatility), reliability; per case and target in the CSV | `scripts/nq_journal.py experiment-score --name <name>` |
+| `ml_pooled_split_v1.md`, `ml_pooled_split_v1/` | The pooled model's inner tuning split corrected (session dates, embargo, NQ objective) and the affected development results rerun before / after; ml_study_v1's files hashed and left unchanged | `scripts/ml_pooled_split.py all` |
+| `ml_development_dates.md` / `.json` | The ML development comparison under the session-date tuning split (`ml_development.md` is the 2026-10-09 run, reproducible with `--legacy-row-split`) | `scripts/nq_journal.py ml-dev-eval` |
 | `label_disagreement_v5_vs_nq_v2.md` / `.csv` | The old v5 labels (`nq_labels_v5_candidate`) against the NQ-v2 labels, session by session, with the definition behind every difference (guideline stage 1E) | `scripts/label_disagreement_report.py` |
 
 ## Regenerating the disagreement report

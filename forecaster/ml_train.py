@@ -10,19 +10,24 @@ artifacts themselves.
                   (the latest outcome revision), the features of every config as of each
                   cutoff, and the pooled candidate's rows (NQ, ES and RTY, each with its own
                   features and its own label - forecaster/ml_features.own_direction)
+  training_rows   a model's rows of its training sessions with every row's session date and
+                  instrument (TrainingRows) - the date split needs them; an array alone has lost
+                  which session and market a row belongs to
   train(conn)     every model of contracts/nq_ml.ALGORITHMS: its config's rows of the
                   labelled sessions, the family contracts/nq_ml.FAMILY names, tuned on the
                   window's last quarter, refitted on all of it, saved with its manifest
                   (training dates, sessions, rows per instrument, class counts, tuning scores,
                   software versions, sha256). The forecasts it issues start after its last
-                  training session (forecaster/ml_service.py)
+                  training session (forecaster/ml_service.py). The registered v1 artifacts were
+                  tuned by row position, so reproducing them takes split='legacy_rows' (the
+                  default for these versions); the date split is contracts/nq_ml.SPLIT
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -90,29 +95,43 @@ def dataset(conn, profile: str = ml.PROFILE) -> Data:
     return Data(snaps, days, y, fs, loaded, X, PX, pd.Series(labs, index=PX.index, dtype=object))
 
 
-def training_rows(data: Data, version: str, days: Sequence[str]):
-    """``(X, y, rows per instrument)`` of a model's training sessions ``days`` (labelled ones only)."""
+class TrainingRows(NamedTuple):
+    X: Any                         # the feature matrix, rows in the dataset's order
+    y: List[str]
+    per: Dict[str, int]            # rows per instrument
+    dates: List[str]               # each row's session date
+    instruments: List[str]         # each row's instrument
+
+
+def training_rows(data: Data, version: str, days: Sequence[str]) -> TrainingRows:
+    """A model's rows of its training sessions ``days`` (labelled ones only), each with its session date and
+    instrument. The pooled rows stay in the dataset's order (instrument first, date second): only a split by the
+    carried dates is chronological (forecaster/ml_split.py)."""
     cfg = ml.CONFIG_OF[version]
     if cfg == "pooled":
         keep = set(days)
         idx = [(s, d) for (s, d) in data.PX.index if d in keep and isinstance(data.py[(s, d)], str)]
         per = {s: sum(1 for x, _ in idx if x == s) for s in ml.POOLED_INSTRUMENTS}
-        return data.PX.loc[idx].to_numpy(), [data.py[i] for i in idx], per
+        return TrainingRows(data.PX.loc[idx].to_numpy(), [data.py[i] for i in idx], per, [d for _, d in idx],
+                            [s for s, _ in idx])
     lab = [d for d in days if isinstance(data.y[d], str)]
-    return data.X[cfg].loc[lab].to_numpy(), [data.y[d] for d in lab], {"NQ": len(lab)}
+    return TrainingRows(data.X[cfg].loc[lab].to_numpy(), [data.y[d] for d in lab], {"NQ": len(lab)}, list(lab),
+                        ["NQ"] * len(lab))
 
 
 def train(conn, root: Optional[str] = None, data: Optional[Data] = None, until: Optional[str] = None,
-          versions: Sequence[str] = ml.ALGORITHMS) -> Dict[str, Dict[str, Any]]:
-    """Trains and saves every model (see the module docstring); returns the manifests."""
+          versions: Sequence[str] = ml.ALGORITHMS, split: str = "legacy_rows") -> Dict[str, Dict[str, Any]]:
+    """Trains and saves every model (see the module docstring); returns the manifests. ``split``: the v1 versions'
+    registered artifacts were tuned by row position ('legacy_rows'); 'dates' is the corrected split."""
     data = data or dataset(conn)
     days = [d for d in data.days if until is None or d <= until]
     labelled = [d for d in days if isinstance(data.y[d], str)]
     out = {}
     for version in versions:
-        X, y, per = training_rows(data, version, labelled)
+        rows = training_rows(data, version, labelled)
+        X, y, per = rows.X, rows.y, rows.per
         family = ml.FAMILY[version]
-        model, params, tuning = mm.tune(X, y, family)
+        model, params, tuning = mm.tune(X, y, family, dates=rows.dates, instruments=rows.instruments, split=split)
         training = {"from": labelled[0], "to": labelled[-1], "sessions": len(labelled), "rows": per,
                     "class_counts": {c: int(sum(1 for v in y if v == c)) for c in ml.CLASSES},
                     "label_version": defs.LABEL_VERSION, "labels": "the latest outcome revision of each session's "

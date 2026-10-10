@@ -20,6 +20,9 @@ rules, with which models and tuning budget, and how it is evaluated and delivere
   MODELS / TUNING     regularised logistic regression and a shallow gradient-boosted
                       classifier, each with a small predefined grid chosen on the last
                       part of its own training window
+  SPLIT               that part by session date - every instrument's rows of a date
+                      together, the embargo before it, the pooled candidate scored on NQ's
+                      rows (the v1 artifacts were tuned by row position: TUNING)
   DEV_EVALUATION      the chronological development comparison (walk-forward,
                       one-session embargo); POOLED the separate pooled-training candidate
   STATUS              experimental until FORWARD's promotion rule is met on fresh forward
@@ -227,7 +230,12 @@ TUNING = {"rule": "per training window, every grid point is fitted on its first 
                   "the mean unhalved multiclass Brier score on the last 25 %; the best is refitted on the whole "
                   "window. Nothing else is selected: the feature sets are fixed above, and there is no calibration "
                   "step (calibration is reported, not fitted)",
-          "validation_share": 0.25, "budget": "4 logistic + 4 boosted fits per training window"}
+          "validation_share": 0.25, "budget": "4 logistic + 4 boosted fits per training window",
+          # 2026-10-10 review: the v1 artifacts and ml_study_v1 cut by ROW position (forecaster/ml_model.
+          # tune_rows_legacy). For N and M (one row per session, date order) that was chronological without the
+          # embargo; for the pooled rows (instrument first, date second) the validation rows were RTY's on dates also
+          # in training. SPLIT is the correction; the legacy cut stays only to reproduce the registered artifacts.
+          "implementation": "legacy_rows for the registered v1 artifacts (reproduction only); SPLIT otherwise"}
 DEV_EVALUATION = {
     "design": "chronological walk-forward over the research_0929 pool: train on every earlier session (expanding), "
               "test the next block, embargo one session between them",
@@ -245,6 +253,20 @@ DEV_EVALUATION = {
                    "resamples, seed 20261009), 95 % percentile interval",
     "status": "development data: every one of these sessions has been inspected before (stage-4 hist_dev_v1, "
               "p1_pool_tuning_v1, the fan experiments) - an improvement here is a candidate, not a result",
+}
+# The session-date split of every inner and outer fold (forecaster/ml_split.py, docs/reports/ml_pooled_split_v1.md).
+SPLIT = {
+    "unit": "the session date: rows carry their date and instrument, every split is made on the sorted unique dates, "
+            "never on row positions - all instruments' rows of a date fall on one side",
+    "inner": "the last validation_share of the training window's dates validate; the embargo dates before them leave "
+             "inner training; the best grid point is refitted on the whole window",
+    "embargo_sessions": DEV_EVALUATION["embargo_sessions"],
+    "objective": "the validation rows of NQ only - the pooled candidate trains on NQ's, ES's and RTY's rows, but "
+                 "deployment predicts NQ",
+    "preprocessing": "inside each fit's pipeline: fitted on that fit's training rows only",
+    "calibration": "when a calibration is fitted (the seven-target bundles), from out-of-fold predictions of "
+                   "date-grouped inner folds",
+    "uncertainty": "per-session (per-date) paired differences resampled in moving blocks of sessions - never rows",
 }
 POOLED = {
     "question": "does training on ES and RTY sessions as well as NQ's improve the forecast for NQ?",

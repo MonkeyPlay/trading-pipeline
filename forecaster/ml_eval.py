@@ -10,10 +10,14 @@ pooled candidate, on identical NQ targets and opportunities.
   data       the research_0929 pool's sessions (their historical snapshots), direction_15m
              as labelled (the latest outcome revision), the features as of each cutoff
              (forecaster/ml_features.py)
-  folds      chronological walk-forward: train on every earlier session (expanding), skip
-             the embargo session(s), test the next block - preprocessing, tuning and the
-             fit inside each training window only; the folds are independent, so they run
-             in parallel worker processes (``jobs``; the results are the same as one by one)
+  folds      chronological walk-forward by session date (forecaster/ml_split.py): train on
+             every earlier session (expanding), skip the embargo session(s), test the next
+             block - preprocessing, tuning and the fit inside each training window only; the
+             tuning's inner split is by session date too, with the embargo, and the pooled
+             candidate is tuned on NQ's validation rows (contracts/nq_ml.SPLIT; split=
+             'legacy_rows' reproduces the v1 row-position cut, docs/reports/ml_pooled_split_v1.md);
+             the folds are independent, so they run in parallel worker processes (``jobs``; the
+             results are the same as one by one)
   A, B       their stored historical-replay runs of the same snapshots (first issued)
   scores     per session the unhalved multiclass Brier score (primary) and log loss;
              paired differences on the sessions all compared arms forecast and a label
@@ -46,6 +50,7 @@ from database import journal_store as store
 from features import calendar as cal
 from forecaster import ml_features as mf
 from forecaster import ml_model as mm
+from forecaster import ml_split as sp
 from forecaster.experiments import block_bootstrap
 
 ARMS_A_B = {"A": fc.PRIOR_VERSION, "B": fc.BASELINE_VERSION}
@@ -72,14 +77,18 @@ def stored_arm(conn, snaps: Sequence[Dict[str, Any]], algorithm: str) -> Dict[st
     return out
 
 
-def folds(n: int) -> List[Tuple[int, int, int]]:
-    """``(train_end, test_start, test_end)`` index triples: train on [0, train_end), test [test_start, test_end)."""
+def date_folds(days: Sequence[str]) -> List["sp.DateFold"]:
+    """The development comparison's outer folds over the pool's session dates (forecaster/ml_split.outer_folds)."""
     d = ml.DEV_EVALUATION
-    out, start = [], d["initial_train_sessions"]
-    while start < n:
-        out.append((start - d["embargo_sessions"], start, min(n, start + d["test_block_sessions"])))
-        start += d["test_block_sessions"]
-    return out
+    return sp.outer_folds(days, d["initial_train_sessions"], d["test_block_sessions"], d["embargo_sessions"])
+
+
+def folds(n: int) -> List[Tuple[int, int, int]]:
+    """``(train_end, test_start, test_end)`` index triples over ``n`` date-ordered sessions - the date folds as
+    positions: train on [0, train_end), test [test_start, test_end)."""
+    days = [f"{i:08d}" for i in range(n)]                  # n distinct, sortable dates stand for the sessions
+    return [(len(f.train), len(f.train) + len(f.embargo), len(f.train) + len(f.embargo) + len(f.test))
+            for f in date_folds(days)]
 
 
 def _scores(p: np.ndarray, y: str) -> Tuple[float, float]:
@@ -124,34 +133,45 @@ def calibration(preds: Dict[str, np.ndarray], y: Dict[str, str], days: Sequence[
 ML_ARMS = [(cfg, fam) for cfg in ("nq_only", "multi") for fam in ("logit", "gbm")]
 
 
-def _fold(X, PX, y, py_, abstain, days, train_end: int, test_start: int, test_end: int):
+def _fold(X, PX, y, py_, abstain, days, train_end: int, test_start: int, test_end: int, split: str = "dates"):
     """One walk-forward fold - in a worker process: the four NQ-trained fits and the two pooled ones, tuned and fitted
-    on the training sessions only, and their probabilities for the test sessions; ``(predictions, log entry)``."""
-    train_days = [d for d in days[:train_end] if y[d] is not None]
-    test_days = days[test_start:test_end]
+    on the training sessions only, and their probabilities for the test sessions; ``(predictions, log entry)``.
+    ``split``: the tuner's inner split - 'dates' (contracts/nq_ml.SPLIT) or 'legacy_rows' (the v1 reproduction)."""
+    fold = sp.DateFold(tuple(days[:train_end]), tuple(days[train_end:test_start]), tuple(days[test_start:test_end]))
+    sp.check(fold)
+    train_days = [d for d in fold.train if y[d] is not None]
+    test_days = list(fold.test)
     entry = {"train": [train_days[0], train_days[-1], len(train_days)], "test": [test_days[0], test_days[-1]],
-             "chosen": {}}
+             "chosen": {}, "split": split}
     preds: Dict[str, Dict[str, np.ndarray]] = {}
     for cfg, fam in ML_ARMS:
-        model, params, _ = mm.tune(X[cfg].loc[train_days].to_numpy(), [y[d] for d in train_days], fam)
+        model, params, _ = mm.tune(X[cfg].loc[train_days].to_numpy(), [y[d] for d in train_days], fam,
+                                   dates=train_days, split=split)
         avail = [d for d in test_days if cfg == "nq_only" or d not in abstain]
         preds[f"{cfg}/{fam}"] = ({} if not avail else
                                  dict(zip(avail, mm.probabilities(model, X[cfg].loc[avail].to_numpy()))))
         entry["chosen"][f"{cfg}/{fam}"] = params
-    # pooled: every instrument's rows of the training dates (labels present), NQ's test rows
+    # pooled: every instrument's rows of the training dates (labels present), NQ's test rows; tuned on NQ's rows of
+    # the inner validation dates (the date split) - every instrument's rows of a date on one side
     train_set = set(train_days)
     keep = [(s, d) for (s, d) in PX.index if d in train_set and isinstance(py_[(s, d)], str)]
     for fam in ("logit", "gbm"):
-        model, params, _ = mm.tune(PX.loc[keep].to_numpy(), [py_[k] for k in keep], fam)
+        model, params, _ = mm.tune(PX.loc[keep].to_numpy(), [py_[k] for k in keep], fam, dates=[d for _, d in keep],
+                                   instruments=[s for s, _ in keep], split=split)
         preds[f"pooled/{fam}"] = dict(zip(test_days, mm.probabilities(model, X["pooled"].loc[test_days].to_numpy())))
         entry["chosen"][f"pooled/{fam}"] = params
     entry["pooled_training_rows"] = len(keep)
+    if split == "dates":
+        inner = sp.inner_split([d for _, d in keep], ml.TUNING["validation_share"], ml.SPLIT["embargo_sessions"])
+        entry["inner"] = inner.describe()
     return preds, entry
 
 
-def run(conn, profile: str = ml.PROFILE, progress=print, data=None, jobs: Optional[int] = None) -> Dict[str, Any]:
+def run(conn, profile: str = ml.PROFILE, progress=print, data=None, jobs: Optional[int] = None,
+        split: str = "dates") -> Dict[str, Any]:
     """The development comparison (see the module docstring); returns the results. ``jobs``: worker processes for
-    the folds (default one per fold, at most one per CPU; 1 runs them here, one by one)."""
+    the folds (default one per fold, at most one per CPU; 1 runs them here, one by one). ``split``: the tuner's inner
+    split ('legacy_rows' reproduces docs/reports/ml_development.md of 2026-10-09)."""
     from joblib import Parallel, delayed
     from forecaster.ml_train import dataset
     t0 = time.time()
@@ -168,7 +188,7 @@ def run(conn, profile: str = ml.PROFILE, progress=print, data=None, jobs: Option
     plan = folds(len(days))
     jobs = min(len(plan), os.cpu_count() or 1) if jobs is None else jobs
     t1 = time.time()
-    done = Parallel(n_jobs=jobs)(delayed(_fold)(X, PX, y, py_, abstain, days, *f) for f in plan)
+    done = Parallel(n_jobs=jobs)(delayed(_fold)(X, PX, y, py_, abstain, days, *f, split=split) for f in plan)
     fold_log = []
     for fold_preds, entry in done:                  # in fold order, whatever order the workers finished in
         for arm, got in fold_preds.items():
@@ -202,7 +222,8 @@ def run(conn, profile: str = ml.PROFILE, progress=print, data=None, jobs: Option
                  ("pooled/gbm", "A"), ("pooled/logit", "B"), ("pooled/gbm", "B")]:
         pairs[f"{a} - {b}"] = paired(scored[a], scored[b], common)
     class_counts = {c: sum(1 for d in common if y[d] == c) for c in ml.CLASSES}
-    return {"profile": profile, "sessions": len(days), "labelled": sum(1 for d in days if y[d] is not None),
+    return {"profile": profile, "split": split, "sessions": len(days),
+            "labelled": sum(1 for d in days if y[d] is not None),
             "test_span": [test_days[0], test_days[-1]], "test_sessions": len(test_days), "common": len(common),
             "class_counts": class_counts, "folds": fold_log, "summary": summary, "pairs": pairs,
             "pooled_rows": {s: int(sum(1 for (x, d) in PX.index if x == s and isinstance(py_[(x, d)], str)))
@@ -252,7 +273,13 @@ def report(res: Dict[str, Any], chosen: Dict[str, str], lat: Optional[Dict[str, 
         f"- **Compared on** the {res['common']} test sessions where every arm has a forecast and the session a label "
         f"(classes: " + ", ".join(f"{k} {v}" for k, v in res["class_counts"].items()) + ").",
         "- **Primary score:** the unhalved multiclass Brier score (0 to 2, lower is better); intervals are 95 % "
-        "moving-block bootstrap intervals (blocks of 5 sessions) of the paired per-session differences.", "",
+        "moving-block bootstrap intervals (blocks of 5 sessions) of the paired per-session differences.",
+        "- **Tuning split:** " + ("the session-date inner split with the one-session embargo, the pooled candidate "
+                                  "scored on NQ's validation rows (contracts/nq_ml.SPLIT)."
+                                  if res.get("split", "dates") == "dates" else
+                                  "the v1 row-position cut (legacy reproduction: the pooled candidate's validation "
+                                  "rows were RTY's, on dates also in training - docs/reports/ml_pooled_split_v1.md)."),
+        "",
         "## Scores on the common sessions", "",
         "| arm | Brier | log loss | calibration error (mean over classes) | available / scheduled |",
         "|---|---:|---:|---:|---:|"]

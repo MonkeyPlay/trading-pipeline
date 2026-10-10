@@ -4,6 +4,17 @@
 
 The protocol `ml_study_v1` (hash `bb93b0e15deecab8`, [research/ml_study.py](../../research/ml_study.py)) was fixed before any outer prediction. Every outer prediction was written with its sha256 before the scoring stage read an outcome (9 files checked at scoring). The trial manifest, predictions and per-session scores are in [ml_study_v1/](ml_study_v1/).
 
+> **Erratum (2026-10-10, after publication).** Two statements below - "That is shrinkage on a weak signal, not a
+> coding bug" (Answer) and "This is shrinkage on a weak signal, not a bug" (section 2) - are too broad. The
+> shrinkage diagnosis is supported for N and M (one row per session, in date order). It does not clear P: its inner
+> tuning split had a real defect. `forecaster/ml_train.dataset` built the pooled rows instrument first, date second,
+> and `forecaster/ml_model.tune` cut them by row position, so P's inner validation rows were RTY's, on dates whose NQ
+> and ES rows (and later dates) were in inner training. The outer walk-forward folds always excluded their test
+> dates, so this is not demonstrated outer-test leakage, and the correction is not assumed to improve P. The P
+> numbers in this report are the uncorrected ones. The corrected split is `forecaster/ml_split.py`; its rerun is
+> [ml_pooled_split_v1.md](ml_pooled_split_v1.md) (run `scripts/ml_pooled_split.py` on the production database).
+> Everything else here, and every file and hash in [ml_study_v1/](ml_study_v1/), is unchanged.
+
 ## Answer
 
 **No directional edge established for the tested models, features, horizons and evaluation design. No challenger is recommended.** Before the open, nothing beats the frequencies (A). During the session, nothing beats a forecast with no view on direction, beyond what the many comparisons would produce anyway.

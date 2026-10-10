@@ -5,10 +5,14 @@ The NQ direction model's estimators, tuning and artifacts (contracts/nq_ml.py).
   pipeline(family, params)   imputation (and scaling for the logistic model) and the
                              estimator in one scikit-learn Pipeline, so preprocessing is
                              always fitted on the training rows only and saved with it
-  tune(X, y, family)         the predefined grid: every point fitted on the first 75 % of
-                             the window (time order), scored by the mean unhalved
-                             multiclass Brier score on the last 25 %, the best refitted on
-                             the whole window
+  tune(X, y, family, dates, instruments)
+                             the predefined grid: every point fitted on the window's
+                             earlier session dates, scored by the mean unhalved multiclass
+                             Brier score of NQ's rows on its last 25 % of dates, the
+                             one-session embargo between (contracts/nq_ml.SPLIT,
+                             forecaster/ml_split.py); the best refitted on the whole window.
+                             split='legacy_rows' is the row-position cut the registered v1
+                             artifacts were tuned with (tune_rows_legacy) - reproduction only
   probabilities(model, X)    class probabilities in contracts/nq_ml.CLASSES order (a class
                              the training window lacked gets 0)
   exact(probs)               the probabilities as exact fractions over 1,000,000 summing
@@ -83,8 +87,41 @@ def brier(p: np.ndarray, y: Sequence[str]) -> np.ndarray:
     return ((p - onehot) ** 2).sum(axis=1)
 
 
-def tune(X, y: Sequence[str], family: str) -> Tuple[Any, Dict[str, Any], List[Dict[str, Any]]]:
-    """``(fitted model, chosen params, the grid's validation scores)`` - see the module docstring."""
+SPLITS = ("dates", "legacy_rows")
+
+
+def tune(X, y: Sequence[str], family: str, dates: Optional[Sequence[str]] = None,
+         instruments: Optional[Sequence[str]] = None, split: str = "dates", objective: str = "NQ"
+         ) -> Tuple[Any, Dict[str, Any], List[Dict[str, Any]]]:
+    """``(fitted model, chosen params, the grid's validation scores)`` - see the module docstring. ``dates`` (each
+    row's session date) is required for the date split; ``instruments`` (each row's instrument) makes the validation
+    score ``objective``'s rows only."""
+    if split == "legacy_rows":
+        return tune_rows_legacy(X, y, family)
+    if split != "dates":
+        raise ValueError(f"unknown split {split!r}")
+    from forecaster import ml_split as sp
+    if dates is None or len(dates) != len(y):
+        raise ValueError("the date split needs every row's session date")
+    y = np.asarray(y)
+    fold = sp.inner_split(dates, ml.TUNING["validation_share"], ml.SPLIT["embargo_sessions"])
+    train = sp.mask(dates, fold.train)
+    val = sp.objective(dates, instruments, fold, objective)
+    if not val.any():
+        raise ValueError(f"no {objective} row on the validation dates {fold.test[0]}..{fold.test[-1]}")
+    scores = []
+    for params in grid(family):
+        m = pipeline(family, params).fit(X[train], y[train])
+        scores.append({"params": params, "brier": float(brier(probabilities(m, X[val]), y[val]).mean())})
+    best = min(scores, key=lambda s: (s["brier"], json.dumps(s["params"], sort_keys=True)))
+    return pipeline(family, best["params"]).fit(X, y), best["params"], scores
+
+
+def tune_rows_legacy(X, y: Sequence[str], family: str) -> Tuple[Any, Dict[str, Any], List[Dict[str, Any]]]:
+    """The v1 tuner, unchanged: every grid point fitted on the first 75 % of the ROWS and scored on the last 25 %. Kept
+    only to reproduce the registered v1 artifacts and ml_study_v1. For rows that are not one per session in date
+    order - the pooled rows are instrument first, date second - the cut is not chronological and validation shares
+    dates with training (forecaster/ml_split.py)."""
     y = np.asarray(y)
     n = len(y)
     cut = int(round(n * (1 - ml.TUNING["validation_share"])))

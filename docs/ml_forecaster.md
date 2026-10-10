@@ -126,6 +126,19 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
   boosting tries learning rate {0.03, 0.1} × {50, 150} iterations. Each point is fitted on the
   first 75 % of the window and scored by unhalved Brier on the last 25 %. Nothing else is
   selected, and there is no calibration step.
+- **The tuning split, corrected (2026-10-10).** The deployed artifacts and the studies of 2026-10-09
+  cut the window by **row position**. For N and M (one row per session, in date order) that cut was
+  chronological, without the embargo. For P it was not: the pooled rows are built instrument first,
+  date second, so the last 25 % of the rows were RTY's, on dates whose NQ and ES rows - later dates
+  included - were in the inner training. The outer walk-forward folds always excluded their test
+  dates; this is not outer-test leakage, and the correction is not assumed to improve P. It does make
+  P's inner selection unfit for chronological NQ model selection and weakens the attribution of its
+  pooling benefit. Every split is now made on session dates ([forecaster/ml_split.py](../forecaster/ml_split.py),
+  `contracts/nq_ml.SPLIT`): all instruments of a date on one side, the one-session embargo between
+  inner training and validation, the pooled candidate scored on NQ's validation rows. The registered
+  v1 artifacts keep their row-position tuning (`ml_model.tune_rows_legacy`, reproduction only): they
+  and `p1_ml_forward_v2` are unchanged. The corrected rerun of the affected development results is
+  [reports/ml_pooled_split_v1.md](reports/ml_pooled_split_v1.md) (`scripts/ml_pooled_split.py`).
 - **Artifacts:** trained offline (`nq_journal.py ml-train`) into `data/models/nq_ml/<version>/`
   as `model.joblib` and `manifest.json`. The manifest records:
   - training dates, sessions and rows per instrument, and class counts;
@@ -185,7 +198,9 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
 Its findings:
 
 - No edge was established.
-- The models stay near A because the data prefer maximal shrinkage, not because of a bug.
+- N and M stay near A because the data prefer maximal shrinkage (supported by the tuning path and
+  the planted-signal controls). That diagnosis does not cover P: P's inner tuning split had the
+  defect described under Models, and its numbers there are uncorrected.
 - Sixty forward sessions can detect only improvements several times larger than any development estimate.
 
 ## Forward evaluation `p1_ml_forward_v2`
@@ -290,7 +305,10 @@ commit, deployed, which puts it first in the delivery order.
 
 ```bash
 python scripts/nq_journal.py instrument-inventory        # docs/reports/instrument_inventory.md
-python scripts/nq_journal.py ml-dev-eval                 # docs/reports/ml_development.md (development data)
+python scripts/nq_journal.py ml-dev-eval                 # docs/reports/ml_development_dates.md (date split; development data)
+python scripts/nq_journal.py ml-dev-eval --legacy-row-split   # docs/reports/ml_development.md (the v1 tuning, reproduced)
+python scripts/ml_pooled_split.py predict                # the corrected rerun of the affected P results ...
+python scripts/ml_pooled_split.py score                  # ... and its before/after report
 python scripts/nq_journal.py ml-train                    # data/models/nq_ml/<version>/ (a new version per model)
 python scripts/nq_journal.py summary --date 2026-10-12   # the session's forecast summary
 python scripts/nq_journal.py experiment-register --name p1_ml_forward_v2 --design ml-forward --start 2026-10-12 --end 2027-06-30

@@ -449,6 +449,40 @@ def test_the_development_comparison_runs_on_identical_opportunities(journal, mon
         assert f["train"][1] < f["test"][0]
     text = ml_eval.report(res, {"nq_only": "logit", "multi": "logit", "pooled": "gbm"})
     assert "Development data, not a test" in text and "Paired differences" in text
+    assert res["split"] == "dates" and "session-date inner split" in text
+    assert all(f["split"] == "dates" and f["inner"]["test"][2] > 0 for f in res["folds"])
+
+
+@needs_db
+def test_the_corrected_pooled_split_study_freezes_predictions_then_scores_before_and_after(journal, monkeypatch,
+                                                                                          tmp_path):
+    """research/ml_pooled_split.py end to end on the synthetic journal: both splits' refits written with their sha256
+    before any outcome is read, ml_study_v1's files untouched, a changed file refused at scoring, and a before /
+    after report."""
+    from research import ml_pooled_split as study
+    conn = journal["conn"]
+    monkeypatch.setitem(ml.DEV_EVALUATION, "initial_train_sessions", 50)
+    monkeypatch.setitem(ml.DEV_EVALUATION, "test_block_sessions", 20)
+    monkeypatch.setattr(study, "REPORT_DIR", str(tmp_path / "out"))
+    monkeypatch.setattr(study, "REPORT_MD", str(tmp_path / "report.md"))
+    monkeypatch.setattr(study, "WEEK", journal["pool"][-2:])
+    monkeypatch.setattr(study, "CONTROL", dict(study.CONTROL, shuffles=1, synthetic_seeds=1))
+    v1 = study.v1_hashes()
+    man = study.predict(conn, jobs=1, progress=lambda *a: None)
+    assert set(man["files"]) == {"predictions_legacy_rows.csv", "predictions_dates.csv", "week_refits.json",
+                                 "diagnostics.json", "controls.json", "control_labels.json"}
+    assert man["ml_study_v1_files"] == v1 == study.v1_hashes()
+    res = study.score(conn, progress=lambda *a: None)
+    assert res["common"] > 0 and {"P: after - before", "P@after - A", "P@after - B", "P@after - N@after"} <= set(
+        res["pairs"])
+    assert all(set(f["legacy"]["validation_instruments"]) <= {"ES", "NQ"} for f in res["inner"])
+    assert {c["kind"] for c in res["controls"]} == {"shuffled", "synthetic"}
+    text = (tmp_path / "report.md").read_text()
+    assert "## The defect" in text and "not outer-test leakage" in text and "before" in text
+    with open(tmp_path / "out" / "predictions_dates.csv", "a") as f:
+        f.write("2099-01-01,P,0.3,0.3,0.4\n")
+    with pytest.raises(RuntimeError, match="changed after the predict stage"):
+        study.score(conn, progress=lambda *a: None)
 
 
 @needs_db

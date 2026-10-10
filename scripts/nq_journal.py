@@ -27,6 +27,7 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py live-report --start 2026-10-05 --end 2026-10-09   # capture timing
     python scripts/nq_journal.py instrument-inventory                       # what each instrument's data holds
     python scripts/nq_journal.py ml-dev-eval                                # A, B and the ML models (development)
+    python scripts/nq_journal.py ml-dev-eval --legacy-row-split             # ... the v1 row-position tuning, reproduced
     python scripts/nq_journal.py ml-train                                   # the model artifacts, offline
     python scripts/nq_journal.py summary --date 2026-10-12                  # a session's forecast summary
     python scripts/nq_journal.py experiment-register --name p1_ml_forward_v2 --design ml-forward --start ... --end ...
@@ -721,12 +722,14 @@ def cmd_ml_train(conn, args):
 
 
 def cmd_ml_dev_eval(conn, args):
-    """The development comparison of A, B and the ML models (forecaster/ml_eval.py); writes
-    docs/reports/ml_development.md - development data, not a test."""
+    """The development comparison of A, B and the ML models (forecaster/ml_eval.py) under the session-date tuning
+    split; writes docs/reports/ml_development_dates.md - development data, not a test. --legacy-row-split reproduces
+    the v1 row-position tuning and writes docs/reports/ml_development.md (the 2026-10-09 report's name)."""
     import json
     from contracts import nq_ml as ml
     from forecaster import ml_eval, ml_model
-    res = ml_eval.run(conn)
+    split = "legacy_rows" if args.legacy_row_split else "dates"
+    res = ml_eval.run(conn, split=split)
     chosen = {cfg: ml.FAMILY[v] for v, cfg in ml.CONFIG_OF.items()}
     have = [v for v in ml.ALGORITHMS if ml_model.manifest(v) is not None]
     lat = None
@@ -735,10 +738,11 @@ def cmd_ml_dev_eval(conn, args):
         lat = ml_eval.latency(conn, have, [str(s["session_date"]) for s in pool(conn)][-(1 if args.quick else 5):])
     text = ml_eval.report(res, chosen, lat)
     os.makedirs(args.report_dir, exist_ok=True)
-    path = os.path.join(args.report_dir, "ml_development.md")
+    name = "ml_development" if split == "legacy_rows" else "ml_development_dates"
+    path = os.path.join(args.report_dir, f"{name}.md")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
-    with open(os.path.join(args.report_dir, "ml_development.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(args.report_dir, f"{name}.json"), "w", encoding="utf-8") as f:
         json.dump({k: v for k, v in res.items() if k != "folds"} | {"folds": res["folds"], "latency": lat}, f,
                   indent=1, default=str)
     print(text + f"\nWritten to {path}")
@@ -890,6 +894,8 @@ def main(argv=None):
     p = sub.add_parser("ml-dev-eval", help="Development comparison of A, B and the ML models (not a test)")
     p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
     p.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--legacy-row-split", action="store_true",
+                   help="Reproduce the v1 row-position tuning (writes ml_development.md); default: the date split")
     p = sub.add_parser("summary", help="A session's forecast summary from validated numbers")
     p.add_argument("--date", required=True)
     p.add_argument("--profile", default=defs.DEFAULT_PROFILE, choices=sorted(defs.PROFILES))

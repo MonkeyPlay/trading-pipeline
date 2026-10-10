@@ -126,7 +126,8 @@ def _pred_frame(problem: st.Problem, preds: Dict[str, Dict[int, np.ndarray]], ex
 
 def _week(pre: dd.Preopen) -> Dict[str, Any]:
     """The five-session check reproduced: per day N, M and P refitted on every labelled session before it (the
-    earlier check's method, no embargo), beside the stored A and B runs - full vectors."""
+    earlier check's method, no embargo, the v1 row-position tuning), beside the stored A and B runs - full vectors.
+    research/ml_pooled_split.week_refits reruns it under the session-date split."""
     from forecaster import ml_features as mf
     from forecaster import ml_model as mm
     data = pre.data
@@ -138,13 +139,13 @@ def _week(pre: dd.Preopen) -> Dict[str, Any]:
         for arm, version in (("N", ml.ML_NQ_VERSION), ("M", ml.ML_MULTI_VERSION)):
             cfg = ml.CONFIG_OF[version]
             model, params, _ = mm.tune(data.X[cfg].loc[train].to_numpy(), [data.y[x] for x in train],
-                                       ml.FAMILY[version])
+                                       ml.FAMILY[version], split="legacy_rows")
             row[arm] = (None if cfg == "multi" and mf.required_missing(data.fs, d) else
                         mm.probabilities(model, data.X[cfg].loc[[d]].to_numpy())[0])
             row[f"{arm}_params"] = params
         keep = [(s, x) for (s, x) in data.PX.index if x in set(train) and isinstance(data.py[(s, x)], str)]
         model, params, _ = mm.tune(data.PX.loc[keep].to_numpy(), [data.py[k] for k in keep],
-                                   ml.FAMILY[ml.ML_POOLED_VERSION])
+                                   ml.FAMILY[ml.ML_POOLED_VERSION], split="legacy_rows")
         row["P"] = mm.probabilities(model, data.X["pooled"].loc[[d]].to_numpy())[0]
         row["P_params"] = params
         out[d] = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in row.items()}
@@ -536,13 +537,15 @@ def fan(conn) -> Dict[str, Any]:
 
 def _frozen_on(pre: dd.Preopen, y_map: Dict[str, Optional[str]], py_map: Dict[Tuple[str, str], Optional[str]]
                ) -> Dict[str, Dict[str, np.ndarray]]:
-    """N, M and P's walk-forward refits (forecaster/ml_eval._fold) under other labels."""
+    """N, M and P's walk-forward refits (forecaster/ml_eval._fold, the v1 row-position tuning as ml_study_v1 ran)
+    under other labels - the P arm of these controls carries the pooled tuning defect; research/ml_pooled_split.py
+    reruns them under the session-date split."""
     from forecaster import ml_eval
     data = pre.data
     py = pd.Series([py_map[k] for k in data.PX.index], index=data.PX.index, dtype=object)
     out: Dict[str, Dict[str, np.ndarray]] = {}
     for f in ml_eval.folds(len(data.days)):
-        preds, _ = ml_eval._fold(data.X, data.PX, y_map, py, set(pre.abstain), data.days, *f)
+        preds, _ = ml_eval._fold(data.X, data.PX, y_map, py, set(pre.abstain), data.days, *f, split="legacy_rows")
         for k, v in preds.items():
             out.setdefault(k, {}).update(v)
     return out

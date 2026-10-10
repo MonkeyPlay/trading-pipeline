@@ -117,18 +117,23 @@ def test_the_pooled_fit_trains_on_training_dates_only(monkeypatch):
     seen = []
     real = mm.tune
 
-    def spy(Xa, ya, family):
-        seen.append(np.asarray(Xa))
-        return real(Xa, ya, family)
+    def spy(Xa, ya, family, **kw):
+        seen.append((np.asarray(Xa), kw))
+        return real(Xa, ya, family, **kw)
     monkeypatch.setattr(mm, "tune", spy)
-    preds, entry = ml_eval._fold(X, PX, y, py, set(), days, 25, 26, 36)
-    pooled = [a for a in seen if a.shape[1] == len(ml.POOLED_FEATURES)]
-    assert len(pooled) == 2                                     # the pooled logit and boosted fits
-    for a in pooled:
-        used = set(a[:, ml.POOLED_FEATURES.index("ret_on")].astype(int))
-        assert used == set(range(25))                           # training dates only: not 25 (embargo), not 26..35
-        assert len(a) == 3 * 25                                 # every instrument's row of those dates
-    assert set(preds["pooled/gbm"]) == set(days[26:36])        # scored on NQ's test rows
+    for split in ("legacy_rows", "dates"):
+        seen.clear()
+        preds, entry = ml_eval._fold(X, PX, y, py, set(), days, 25, 26, 36, split=split)
+        pooled = [(a, kw) for a, kw in seen if a.shape[1] == len(ml.POOLED_FEATURES)]
+        assert len(pooled) == 2                                 # the pooled logit and boosted fits
+        for a, kw in pooled:
+            used = set(a[:, ml.POOLED_FEATURES.index("ret_on")].astype(int))
+            assert used == set(range(25))                       # training dates only: not 25 (embargo), not 26..35
+            assert len(a) == 3 * 25                             # every instrument's row of those dates
+            assert kw["split"] == split and len(kw["dates"]) == len(a) and set(kw["instruments"]) == {"NQ", "ES",
+                                                                                                    "RTY"}
+        assert set(preds["pooled/gbm"]) == set(days[26:36])    # scored on NQ's test rows
+        assert entry["split"] == split
 
 
 # --------------------------------------------------------------------------

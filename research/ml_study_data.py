@@ -5,8 +5,9 @@ The data of ml_study_v1 (research/ml_study.py), read from the database read-only
   connect()            a read-only connection (default_transaction_read_only): the study never writes
   preopen(conn)        the pre-open task: the research_0929 pool's dataset exactly as the development
                        comparison builds it (forecaster/ml_train.dataset), the stored A and B runs, and
-                       the frozen N, M and P walk-forward refits (forecaster/ml_eval._fold) - so the
-                       development comparison is reproduced on identical rows
+                       the frozen N, M and P walk-forward refits (forecaster/ml_eval._fold, under the v1
+                       row-position tuning split it ran with) - so the development comparison is
+                       reproduced on identical rows
   rth_sessions(conn)   the RTH task's sessions: NQ, ES, RTY and VXN 1m bars of every session from
                        RTH_FIRST, minute-indexed from the open on each session's active contract, with
                        the as-of statistics each session's features are normalised by (earlier sessions
@@ -87,8 +88,10 @@ def preopen(conn, jobs: int = 8) -> Preopen:
     stored = {arm: ml_eval.stored_arm(conn, data.snaps, alg) for arm, alg in ml_eval.ARMS_A_B.items()}
     abstain = {d for d in days if mf.required_missing(data.fs, d)}
     plan = ml_eval.folds(len(days))
+    # ml_study_v1 is reproduced as it ran: the v1 row-position tuning (contracts/nq_ml.TUNING); the corrected
+    # session-date split is research/ml_pooled_split.py's
     done = Parallel(n_jobs=min(jobs, len(plan)))(
-        delayed(ml_eval._fold)(data.X, data.PX, y, data.py, abstain, days, *f) for f in plan)
+        delayed(ml_eval._fold)(data.X, data.PX, y, data.py, abstain, days, *f, split="legacy_rows") for f in plan)
     frozen: Dict[str, Dict[str, np.ndarray]] = {}
     log = []
     for preds, entry in done:
