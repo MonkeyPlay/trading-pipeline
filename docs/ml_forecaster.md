@@ -174,6 +174,20 @@ Measured, not assumed: [reports/instrument_inventory.md](reports/instrument_inve
   instruments, loaded in parallel threads. The prediction itself takes milliseconds, and one
   build serves all three models.
 
+**Why the models look like A** is the subject of a separate study,
+[reports/ml_study.md](reports/ml_study.md) (`ml_study_v1`, `scripts/ml_study.py`). It covers:
+
+- the development comparison and the five sessions of 2026-10-05..09, reproduced exactly;
+- a bounded candidate ladder: conditional prior, nested logistic and boosted models, a prior-plus-residual model, TabPFN v2 and a blend;
+- new rolling RTH targets;
+- controls and power.
+
+Its findings:
+
+- No edge was established.
+- The models stay near A because the data prefer maximal shrinkage, not because of a bug.
+- Sixty forward sessions can detect only improvements several times larger than any development estimate.
+
 ## Forward evaluation `p1_ml_forward_v2`
 
 [contracts/nq_ml.py](../contracts/nq_ml.py) `forward_manifest` and `promotion_rule`. It is

@@ -1,0 +1,3538 @@
+[
+ {
+  "train": [
+   "2025-09-02",
+   "2026-02-20",
+   119
+  ],
+  "test": [
+   "2026-02-24",
+   "2026-03-23",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "nq_rv_on",
+    "kappa": 20
+   },
+   "LR": {
+    "features": "nq",
+    "C": 1.0
+   },
+   "GB": {
+    "features": "nq",
+    "max_depth": 2,
+    "learning_rate": 0.03,
+    "max_iter": 150
+   },
+   "RES": {
+    "features": "nq",
+    "C": 1.0
+   },
+   "BL": {
+    "family": "LR",
+    "w": 0.7319986938318631
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.6292338806929789
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.628939148977885
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.6283818751485505
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.6219826541335733
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.6219197798970387
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.6241883864314927
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6350089666403304
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6316221553343854
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.6288324790442865
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.6250971145936297
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.624151690224893
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.6253450846937679
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.628426283720615
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6269960454368845
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6240343605212518
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6202470561522443
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6155686968760814
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6089827528471112
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.5978965182211601
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.6308326855482027
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6338562411076921
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6438144433036272
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6653231777757599
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7044792436334899
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7376978991130191
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7715588061089917
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.628028794444853
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6296256320245825
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6320024040083615
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6303028373466942
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6266497621582824
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6352473629785258
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6318121165034417
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6388992936255804
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.641329293047434
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.637107863829669
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.662134437422318
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6675474220628655
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6252724634343582
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.622321382946505
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.618539802100252
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6136153654923188
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6070459347769951
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.598495826246076
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6322513097422983
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6425557336884158
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6647580642070559
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7057278011473521
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7447419012097352
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7914644326514497
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "LR",
+      "w": 0.7319986938318631
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-03-20",
+   139
+  ],
+  "test": [
+   "2026-03-24",
+   "2026-04-21",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "vix_level",
+    "kappa": 5
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "GB": {
+    "features": "nq",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 150
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "CP",
+    "w": 1.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.6451107597010797
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.6448781308432471
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.6443871840899226
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.6538130791882745
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.6495015513202826
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.6455407800548919
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6509485499196452
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6469116482638612
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.64395234770203
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.6260324008726816
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.6303976265090372
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.6369517426220591
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.6449284644444947
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6449087766862475
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6460200688983402
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6493676538322535
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6559436044520915
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6608847538660576
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6630511153751637
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.6474144435517495
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6515801690117364
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6630396121657124
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6839119026780442
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7108055894199429
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7180283989103271
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7186444567306385
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6507173541696376
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6506223108169694
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.652653888827428
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6623307671375561
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.672062800185493
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6785530520493606
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.659752467006925
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6745433041246217
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6761136662245798
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6775686867329004
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7255483180769721
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7241528114489835
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6432383627475711
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6441478341327683
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6470821704145371
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6527856879523166
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6576045045021482
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6612696967697621
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6499455018960223
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6613987023970328
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6821813848662571
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7092021518119938
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.718955045604878
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7220790881951076
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "CP",
+      "w": 1.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-04-20",
+   159
+  ],
+  "test": [
+   "2026-04-22",
+   "2026-05-19",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "vix_level",
+    "kappa": 80
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "nq",
+    "max_depth": 2,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "CP",
+    "w": 1.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.6265189378212477
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.6264804005957062
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.6263762321810912
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.6444635221485311
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.6384715091409932
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.6313525655326131
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6297386603079452
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6274714057834249
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.6257651698344702
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.6254178899528999
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.624450117562788
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.624325872507237
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.6275786581996012
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6296088399029405
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6350790693362108
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6444342474154542
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6596094921311774
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6760608068113385
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6943472964416455
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.6306558818550178
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6371063491036644
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6507997931884542
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6700169593166483
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6963401781463098
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7219260082954188
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7552165660322605
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6322988286573372
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6349993556345883
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6367158854166894
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6314309701409957
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6548619062615819
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6610560157403504
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6433854782529086
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6648164753096881
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6658253082957013
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6669018743090068
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7473828097106993
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.753297208572339
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6291814448764945
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6345602112728985
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.643752436309615
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6585714784899604
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6746820663156792
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6919670779365512
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6367483390466719
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6505384206028527
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6698156186554337
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6959477165971151
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7217943990353973
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7530676700462581
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "CP",
+      "w": 1.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-05-18",
+   179
+  ],
+  "test": [
+   "2026-05-20",
+   "2026-06-17",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": null,
+    "kappa": 80
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "multi",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "CP",
+    "w": 0.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.6337902111852922
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.6337155577483177
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.6335311628024646
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.6509652217135784
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.6459384230874703
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.6391113254957321
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6455257174370337
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6414507819520642
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.6364816387040282
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.638635076995628
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.6361016911331273
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.6336264206385217
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.6353443125557067
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6380892427292082
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.644988210126695
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6568717037444796
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6778280438887128
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.7014891049085024
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.7259383979431736
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.6374542560100487
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6429296698429389
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6548547203279844
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6748797300527323
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7077147065084528
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7420650267538724
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7818933481094118
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6554074990159389
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6847794425124787
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6914217962715906
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6802078806719511
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7340170343193795
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7341151472819024
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6432477397439691
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6637858349564244
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.664425361908863
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6628101103762886
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7435246703850599
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7524242876460371
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.637419306041462
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6441983062433436
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6557736183668293
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6762874787224225
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6996434198091457
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.7225777270037251
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6422678241434235
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6540804374929362
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6739300572410026
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.7069651741872206
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7412080896823972
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.77664175656193
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "CP",
+      "w": 0.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-06-16",
+   199
+  ],
+  "test": [
+   "2026-06-18",
+   "2026-07-17",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": null,
+    "kappa": 80
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "multi",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "CP",
+    "w": 0.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.6191178695672358
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.6190942246824779
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.6190342754687345
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.622842716282604
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.6217987974772593
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.6202788060560162
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6341625311225154
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6300519811646035
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.6241504741881898
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.6311857467872517
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.6271275687745937
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.6220845383957172
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.621620470376793
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6252411304007981
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6329228868898823
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6445005600390616
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.661429766221118
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6790677468246299
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6991815367278253
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.6238293605113593
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6299021174528737
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6422935451400043
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6606795148874626
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6881773560860105
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7214518628436084
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7670861830360659
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6488621612084648
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6852458973586076
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6917296446308003
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.663834764708523
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7023696073877717
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7020615375689669
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.626780184504531
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6471583379289556
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.650259242201535
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6408722110577032
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7215647797141802
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7403123687410057
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6250119473890072
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6326840326494293
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6441750379737852
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6609708134700216
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6784484583755658
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6982461376733282
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6296961917965942
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6421063602612579
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6605305583754498
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6884249189992226
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7215640641577287
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7627323940118294
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "CP",
+      "w": 0.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-07-16",
+   219
+  ],
+  "test": [
+   "2026-07-20",
+   "2026-08-14",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "nq_rv_on",
+    "kappa": 80
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "multi",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "GB",
+    "w": 0.6163292635293262
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.5967972019843776
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.5968116167347878
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.5968529086958153
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.5968257893407358
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.5967076541160854
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.5966752901459551
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.6080446520149271
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.6052653982592044
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.6010121867022759
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.5989604922403398
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.5982026067675847
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.5972732836363934
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.5985599346324062
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6015404285708812
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6091329302720437
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.621691262289305
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6405412047613769
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6602474794573328
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.681069074278519
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.5997628943798382
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.6049068334132884
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6193913219054469
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6460950035084659
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.687643156599485
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.72904994897044
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7725308358203203
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6302895142472237
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6735995111532916
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6797010542419818
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6530617992153516
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.7044458876103248
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.7079133006759314
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5947236270580846
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6118583181528484
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6158957341724816
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6230013845842547
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6724154767494992
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6827986214927246
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.6017424298370254
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.6093256256393645
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6219128201645917
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.641028000358575
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6608835401203966
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6813809390054221
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.605096361171715
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6195891452458931
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6464164225464271
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6883404441404172
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.7290890284976348
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7696907356917109
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "GB",
+      "w": 0.6163292635293262
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-08-13",
+   239
+  ],
+  "test": [
+   "2026-08-17",
+   "2026-09-14",
+   20
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "nq_rv_on",
+    "kappa": 5
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "multi",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "GB",
+    "w": 1.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.5866380498544828
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.5866546595211949
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.5867052037337146
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.5817018226510575
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.5824708124373579
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.584132394841059
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.5863620950627761
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.5860787884426365
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.5859884644022078
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.590396120831496
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.5892000896954711
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.5875712021950331
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.5881326013562261
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.5904917696340599
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.596175236629491
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6055179542331856
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6202667455524152
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6359002628815429
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.6512590479623015
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.5893750631453832
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.5938348268912319
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.6063826340414958
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6297470640247054
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6654408095530749
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.6997818971766541
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7345302986585808
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6015085870793377
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6247430433874755
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6264569743445698
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.601679470520957
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6246913060014835
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6285992527666437
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5729933047060424
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.5887127433166633
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5934642089980503
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6030719304704965
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.6340986385901289
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6415047429815325
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.5907577869132373
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.5964190398986989
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.6058262784156913
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.6208864445765239
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.6367144362421124
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.652111535876221
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.5940468419290261
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.606520613440029
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.6298092261345075
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6655824902849752
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.699948063671938
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.7349098413931592
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "GB",
+      "w": 1.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ },
+ {
+  "train": [
+   "2025-09-02",
+   "2026-09-11",
+   259
+  ],
+  "test": [
+   "2026-09-15",
+   "2026-10-09",
+   19
+  ],
+  "best": {
+   "CP": {
+    "grain": "none",
+    "context": "nq_rv_on",
+    "kappa": 5
+   },
+   "LR": {
+    "features": "nq",
+    "C": 0.001
+   },
+   "GB": {
+    "features": "multi",
+    "max_depth": 1,
+    "learning_rate": 0.03,
+    "max_iter": 50
+   },
+   "RES": {
+    "features": "nq",
+    "C": 0.003
+   },
+   "BL": {
+    "family": "GB",
+    "w": 1.0
+   }
+  },
+  "trials": {
+   "CP": [
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 5
+     },
+     "inner_brier": 0.5665187298718245
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 20
+     },
+     "inner_brier": 0.5665498439643394
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": null,
+      "kappa": 80
+     },
+     "inner_brier": 0.5666437408433175
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 5
+     },
+     "inner_brier": 0.5656809688915609
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 20
+     },
+     "inner_brier": 0.5658125038711266
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "nq_rv_on",
+      "kappa": 80
+     },
+     "inner_brier": 0.5661794967210725
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 5
+     },
+     "inner_brier": 0.5663235752472747
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 20
+     },
+     "inner_brier": 0.5661453987699885
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "abs_gap",
+      "kappa": 80
+     },
+     "inner_brier": 0.5661337917736791
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 5
+     },
+     "inner_brier": 0.571990136825839
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 20
+     },
+     "inner_brier": 0.5704326345065157
+    },
+    {
+     "config": {
+      "grain": "none",
+      "context": "vix_level",
+      "kappa": 80
+     },
+     "inner_brier": 0.5681511007833238
+    }
+   ],
+   "LR": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.001
+     },
+     "inner_brier": 0.5671414195264755
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.568042302814229
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.5696957237460416
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.5712664128255603
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.5743888889245093
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.5807740263602849
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.5899226634836748
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.001
+     },
+     "inner_brier": 0.567327033102853
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.5693741379234029
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.5770337032552412
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.5942044896075456
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6237600754471612
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.65210066845365
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.678483223603685
+    }
+   ],
+   "GB": [
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.57365975643057
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.5810626464802188
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5822226435612745
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5667067628838081
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.5970625663197567
+    },
+    {
+     "config": {
+      "features": "nq",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6019553714559456
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5508733480043925
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.5700705734923148
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 1,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5727347425303784
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 50
+     },
+     "inner_brier": 0.5865639181446408
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.03,
+      "max_iter": 150
+     },
+     "inner_brier": 0.5984699298935617
+    },
+    {
+     "config": {
+      "features": "multi",
+      "max_depth": 2,
+      "learning_rate": 0.1,
+      "max_iter": 50
+     },
+     "inner_brier": 0.6022138767665438
+    }
+   ],
+   "RES": [
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.003
+     },
+     "inner_brier": 0.568566000739452
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.01
+     },
+     "inner_brier": 0.5702457551284251
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.03
+     },
+     "inner_brier": 0.5720710725890762
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.1
+     },
+     "inner_brier": 0.5758763558797184
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 0.3
+     },
+     "inner_brier": 0.5830583216305507
+    },
+    {
+     "config": {
+      "features": "nq",
+      "C": 1.0
+     },
+     "inner_brier": 0.5926158923433718
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.003
+     },
+     "inner_brier": 0.5698269049073282
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.01
+     },
+     "inner_brier": 0.5774190175846612
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.03
+     },
+     "inner_brier": 0.5945733626257542
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.1
+     },
+     "inner_brier": 0.6242741577377634
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 0.3
+     },
+     "inner_brier": 0.6527126814776304
+    },
+    {
+     "config": {
+      "features": "multi",
+      "C": 1.0
+     },
+     "inner_brier": 0.6795438110684756
+    }
+   ],
+   "BL": [
+    {
+     "config": {
+      "family": "GB",
+      "w": 1.0
+     },
+     "inner_brier": null
+    }
+   ]
+  }
+ }
+]

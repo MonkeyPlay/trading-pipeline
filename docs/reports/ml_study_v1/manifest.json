@@ -1,0 +1,1510 @@
+{
+ "protocol": {
+  "bootstrap": {
+   "block": 5,
+   "interval": 0.95,
+   "resamples": 2000,
+   "seed": 20261010
+  },
+  "classes": [
+   "bearish",
+   "bullish",
+   "neutral_band"
+  ],
+  "controls": {
+   "future_bars": "features, analogue ranks and predictions recomputed with every bar after a cutoff removed or altered must not change",
+   "shuffled": "session labels permuted across sessions (a session's rows keep their cutoffs, they move together) - the whole nested procedure rerun; no reproducible skill should remain",
+   "synthetic": "labels drawn from softmax(log p_prior + beta z), z a fixed standardised combination of two features, beta for an oracle Brier gain of about 0.04 (strong) and 0.015 (weak) - must be learnable"
+  },
+  "families": {
+   "BL": {
+    "grid": [
+     {
+      "w": "fitted"
+     }
+    ],
+    "what": "(1 - w) prior + w best, best the family with the lowest inner score among CP, LR, GB and RES, w in [0, 1] minimising the Brier score of the inner (earlier, out-of-fold) predictions; w = 0 means no incremental signal"
+   },
+   "CP": {
+    "grid_preopen": [
+     {
+      "context": null,
+      "grain": "none",
+      "kappa": 5
+     },
+     {
+      "context": null,
+      "grain": "none",
+      "kappa": 20
+     },
+     {
+      "context": null,
+      "grain": "none",
+      "kappa": 80
+     },
+     {
+      "context": "nq_rv_on",
+      "grain": "none",
+      "kappa": 5
+     },
+     {
+      "context": "nq_rv_on",
+      "grain": "none",
+      "kappa": 20
+     },
+     {
+      "context": "nq_rv_on",
+      "grain": "none",
+      "kappa": 80
+     },
+     {
+      "context": "abs_gap",
+      "grain": "none",
+      "kappa": 5
+     },
+     {
+      "context": "abs_gap",
+      "grain": "none",
+      "kappa": 20
+     },
+     {
+      "context": "abs_gap",
+      "grain": "none",
+      "kappa": 80
+     },
+     {
+      "context": "vix_level",
+      "grain": "none",
+      "kappa": 5
+     },
+     {
+      "context": "vix_level",
+      "grain": "none",
+      "kappa": 20
+     },
+     {
+      "context": "vix_level",
+      "grain": "none",
+      "kappa": 80
+     }
+    ],
+    "grid_rth": [
+     {
+      "context": null,
+      "grain": "clock",
+      "kappa": 10
+     },
+     {
+      "context": null,
+      "grain": "clock",
+      "kappa": 50
+     },
+     {
+      "context": null,
+      "grain": "clock",
+      "kappa": 200
+     },
+     {
+      "context": "rv_30",
+      "grain": "clock",
+      "kappa": 10
+     },
+     {
+      "context": "rv_30",
+      "grain": "clock",
+      "kappa": 50
+     },
+     {
+      "context": "rv_30",
+      "grain": "clock",
+      "kappa": 200
+     },
+     {
+      "context": "rv_open",
+      "grain": "clock",
+      "kappa": 10
+     },
+     {
+      "context": "rv_open",
+      "grain": "clock",
+      "kappa": 50
+     },
+     {
+      "context": "rv_open",
+      "grain": "clock",
+      "kappa": 200
+     },
+     {
+      "context": null,
+      "grain": "phase",
+      "kappa": 10
+     },
+     {
+      "context": null,
+      "grain": "phase",
+      "kappa": 50
+     },
+     {
+      "context": null,
+      "grain": "phase",
+      "kappa": 200
+     },
+     {
+      "context": "rv_30",
+      "grain": "phase",
+      "kappa": 10
+     },
+     {
+      "context": "rv_30",
+      "grain": "phase",
+      "kappa": 50
+     },
+     {
+      "context": "rv_30",
+      "grain": "phase",
+      "kappa": 200
+     },
+     {
+      "context": "rv_open",
+      "grain": "phase",
+      "kappa": 10
+     },
+     {
+      "context": "rv_open",
+      "grain": "phase",
+      "kappa": 50
+     },
+     {
+      "context": "rv_open",
+      "grain": "phase",
+      "kappa": 200
+     }
+    ],
+    "what": "smoothed conditional prior: the training frequencies in coarse context cells (time of day and/or a volatility tercile, the terciles fitted on the training rows), shrunk to the global training frequencies with weight kappa: (n_cell,c + kappa g_c) / (n_cell + kappa)"
+   },
+   "GB": {
+    "grid": [
+     {
+      "features": "nq",
+      "learning_rate": 0.03,
+      "max_depth": 1,
+      "max_iter": 50
+     },
+     {
+      "features": "nq",
+      "learning_rate": 0.03,
+      "max_depth": 1,
+      "max_iter": 150
+     },
+     {
+      "features": "nq",
+      "learning_rate": 0.1,
+      "max_depth": 1,
+      "max_iter": 50
+     },
+     {
+      "features": "nq",
+      "learning_rate": 0.03,
+      "max_depth": 2,
+      "max_iter": 50
+     },
+     {
+      "features": "nq",
+      "learning_rate": 0.03,
+      "max_depth": 2,
+      "max_iter": 150
+     },
+     {
+      "features": "nq",
+      "learning_rate": 0.1,
+      "max_depth": 2,
+      "max_iter": 50
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.03,
+      "max_depth": 1,
+      "max_iter": 50
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.03,
+      "max_depth": 1,
+      "max_iter": 150
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.1,
+      "max_depth": 1,
+      "max_iter": 50
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.03,
+      "max_depth": 2,
+      "max_iter": 50
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.03,
+      "max_depth": 2,
+      "max_iter": 150
+     },
+     {
+      "features": "multi",
+      "learning_rate": 0.1,
+      "max_depth": 2,
+      "max_iter": 50
+     }
+    ],
+    "what": "shallow gradient-boosted trees (scikit-learn HistGradientBoostingClassifier, min_samples_leaf 20, l2_regularization 1.0, median imputation; the number of iterations chosen on the inner folds - early stopping by chronological validation)"
+   },
+   "LR": {
+    "grid": [
+     {
+      "C": 0.001,
+      "features": "nq"
+     },
+     {
+      "C": 0.003,
+      "features": "nq"
+     },
+     {
+      "C": 0.01,
+      "features": "nq"
+     },
+     {
+      "C": 0.03,
+      "features": "nq"
+     },
+     {
+      "C": 0.1,
+      "features": "nq"
+     },
+     {
+      "C": 0.3,
+      "features": "nq"
+     },
+     {
+      "C": 1.0,
+      "features": "nq"
+     },
+     {
+      "C": 0.001,
+      "features": "multi"
+     },
+     {
+      "C": 0.003,
+      "features": "multi"
+     },
+     {
+      "C": 0.01,
+      "features": "multi"
+     },
+     {
+      "C": 0.03,
+      "features": "multi"
+     },
+     {
+      "C": 0.1,
+      "features": "multi"
+     },
+     {
+      "C": 0.3,
+      "features": "multi"
+     },
+     {
+      "C": 1.0,
+      "features": "multi"
+     }
+    ],
+    "what": "multinomial logistic regression, L2, median imputation and standard scaling fitted on the training rows (scikit-learn, lbfgs)"
+   },
+   "RES": {
+    "grid": [
+     {
+      "C": 0.003,
+      "features": "nq"
+     },
+     {
+      "C": 0.01,
+      "features": "nq"
+     },
+     {
+      "C": 0.03,
+      "features": "nq"
+     },
+     {
+      "C": 0.1,
+      "features": "nq"
+     },
+     {
+      "C": 0.3,
+      "features": "nq"
+     },
+     {
+      "C": 1.0,
+      "features": "nq"
+     },
+     {
+      "C": 0.003,
+      "features": "multi"
+     },
+     {
+      "C": 0.01,
+      "features": "multi"
+     },
+     {
+      "C": 0.03,
+      "features": "multi"
+     },
+     {
+      "C": 0.1,
+      "features": "multi"
+     },
+     {
+      "C": 0.3,
+      "features": "multi"
+     },
+     {
+      "C": 1.0,
+      "features": "multi"
+     }
+    ],
+    "what": "prior plus residual: softmax(log p_prior + x W), no intercept, W penalised (L2, C as in the logistic grid), x median-imputed and standardised on the training rows; as C falls it returns the prior exactly"
+   },
+   "TPF": {
+    "grid": [
+     {
+      "features": "nq"
+     }
+    ],
+    "what": "TabPFN v2 classifier (tabpfn 9.1.0, weights tabpfn-v2-classifier-finetuned-zk73skhh.ckpt, Prior Labs License: Apache 2.0 with attribution), CPU, defaults, the compact NQ features ('nq'); one configuration, no tuning; RTH task at the primary horizon only; run in .venv-research"
+   },
+   "budget": "at most 20 configurations per tuned family; every configuration and feature set is counted in the trial manifest; no other family, feature set or grid point is tried",
+   "frozen": "A and B (their stored historical-replay runs), N, M, P (walk-forward refits under their frozen definitions: family, grid and 75/25 tuning of contracts/nq_ml) - pre-open task only"
+  },
+  "folds": {
+   "embargo_sessions": 1,
+   "inner": "inside each outer training window: the last three blocks of 20 sessions, each predicted by a fit on the sessions before it less one embargoed session; configurations are chosen by the mean inner Brier score over sessions (sessions weigh equally), refitted on the whole outer window",
+   "outer": "chronological by session date: train on every session before the test block less the embargo, test the next 20 sessions; the first test block starts after 120 sessions - for the pre-open task exactly the development comparison's folds (contracts/nq_ml.DEV_EVALUATION)",
+   "purge": "every label window ends inside its own session (09:45 for direction_15m, by the close for the RTH targets) and features read only earlier sessions and the session's bars to its cutoff, so no training label overlaps a test session; the embargoed session is dropped anyway",
+   "storage": "every outer prediction is written, with its sha256, before the scoring stage reads an outcome"
+  },
+  "metrics": {
+   "aggregation": "per session the mean over its rows (RTH: its cutoffs at one horizon and origin), then the mean over sessions; paired differences per session",
+   "operational": "every row counts for every arm: an arm that cannot forecast a row falls back to the prior and the fallback is counted (policy scores); matched scores use only rows no arm fell back on",
+   "primary": "unhalved multiclass Brier score sum_c (p_c - [c realised])^2, 0 to 2, from the full vector",
+   "secondary": [
+    "log loss (natural log)",
+    "class-wise reliability (10 bins) and expected calibration error",
+    "dispersion: each class probability's standard deviation over sessions, the mean total variation distance from the prior",
+    "skill: 1 - Brier / Brier of the reference (A, B)"
+   ],
+   "uncertainty": "moving-block bootstrap of the per-session paired differences in date order (blocks of 5, 2000 resamples, seed 20261010), 95 % percentile intervals - descriptive: development data, many comparisons"
+  },
+  "power": "per comparison the standard deviation and the bootstrap design effect of the per-session differences; sessions needed for 80 % power under the registered rule of p1_ml_forward_v2 (point at most -0.01, 98.33 % upper bound below zero) and under a stricter material-edge rule (98.33 % upper bound below -0.01); normal approximation",
+  "status": "development research on inspected sessions: a candidate is a candidate for a prospective study, never a result; nothing is registered, promoted or delivered",
+  "tasks": {
+   "preopen": {
+    "feature_version": "nq_ml_features_v1",
+    "features": {
+     "multi": [
+      "nq_ret_on",
+      "nq_ret_pm",
+      "nq_ret_30",
+      "nq_rv_on",
+      "nq_vol_on",
+      "nq_range_pos",
+      "nq_gap_atr",
+      "nq_dist_high_atr",
+      "nq_dist_low_atr",
+      "event_preopen",
+      "event_session",
+      "es_ret_on",
+      "es_ret_pm",
+      "es_ret_30",
+      "rty_ret_on",
+      "rty_ret_pm",
+      "vix_chg_on",
+      "vix_level",
+      "y10_chg_on",
+      "dx_ret_on",
+      "nq_es_resid_on",
+      "nq_es_resid_pm",
+      "nq_es_corr",
+      "eq_agree",
+      "eq_dispersion",
+      "nq_rty_spread_pm",
+      "rty_missing",
+      "vix_missing",
+      "10y_missing",
+      "dx_missing"
+     ],
+     "nq": [
+      "nq_ret_on",
+      "nq_ret_pm",
+      "nq_ret_30",
+      "nq_rv_on",
+      "nq_vol_on",
+      "nq_range_pos",
+      "nq_gap_atr",
+      "nq_dist_high_atr",
+      "nq_dist_low_atr",
+      "event_preopen",
+      "event_session"
+     ]
+    },
+    "prior": "A_s: the training sessions' class frequencies, Laplace-smoothed ((n_c + 1) / (n + 3)) - a versioned comparator beside the frozen A, never a rewrite of it",
+    "sessions": "the research_0929 pool's historical snapshots with a recorded label",
+    "target": "direction_15m exactly as labelled (contracts/nq_prompt_v2): the 09:44 bar's close minus the 09:30 open against the snapshot's frozen T - its own task, never mixed with the RTH targets"
+   },
+   "rth": {
+    "analogues": "B_rth: the 20 highest similarities of nq_match_rth_v3's ranking at the cutoff (the whole earlier pool re-scored, never a top-five subset), each member's own move over [S, S + h) classified with the target's band in daily-ATR units, Laplace-smoothed; B_rth_recent: the same with the similarity averaged with a recent-path similarity (the last 30 minutes re-anchored, path tolerance at 30 minutes) - expanding-only against expanding-plus-recent context",
+    "band": "0.5 x the session's two-minute ATR frozen at the cutoff (features/nq_evidence, the last 71 complete 2m buckets) x sqrt(h / 15): direction_15m's rule at 15 minutes, scaled with the horizon; fixed ex ante from as-of volatility, never tuned on outcomes",
+    "cutoffs_minutes": [
+     30,
+     60,
+     90,
+     120,
+     150,
+     180,
+     210,
+     240,
+     270,
+     300,
+     330,
+     360
+    ],
+    "features": {
+     "multi": [
+      "ret_5",
+      "ret_15",
+      "ret_30",
+      "ret_60",
+      "ret_open",
+      "ret_on",
+      "rv_30",
+      "rv_open",
+      "eff_30",
+      "vwap_dist",
+      "range_pos",
+      "range_sofar",
+      "dist_prev_high",
+      "dist_prev_low",
+      "rel_vol",
+      "elapsed",
+      "to_close",
+      "ev_recent",
+      "ev_ahead",
+      "es_ret_15",
+      "resid_open",
+      "rty_ret_open",
+      "vxn_chg",
+      "es_missing",
+      "rty_missing",
+      "vxn_missing"
+     ],
+     "nq": [
+      "ret_5",
+      "ret_15",
+      "ret_30",
+      "ret_60",
+      "ret_open",
+      "ret_on",
+      "rv_30",
+      "rv_open",
+      "eff_30",
+      "vwap_dist",
+      "range_pos",
+      "range_sofar",
+      "dist_prev_high",
+      "dist_prev_low",
+      "rel_vol",
+      "elapsed",
+      "to_close",
+      "ev_recent",
+      "ev_ahead"
+     ]
+    },
+    "horizons": [
+     15,
+     5,
+     30,
+     60
+    ],
+    "origins": {
+     "cutoff": "S = the cutoff (cutoff-origin research: the window starts as the data ends)",
+     "delayed": "S = the cutoff + 14 minutes: the feed's ~10-minute delay, the confirming bar and the 2nd full minute after the build (contracts/rth_session.LEAD_MINUTES) - features still end at the cutoff, the unseen minutes are never an input"
+    },
+    "primary_horizon": 15,
+    "prior": "CLOCK: the training sessions' class frequencies at the same cutoff, horizon and origin, Laplace-smoothed - the same-clock history",
+    "sessions": "every NQ session with RTH bars from 2025-07-08 (twenty sessions after the IB history floor, for the as-of statistics) to the last labelled session",
+    "target": "the direction of NQ's move over the window [S, S + h) after the cutoff: (close of the bar ending at S + h - close of the bar ending at S) against the band, bullish above +band, bearish below -band, else neutral_band - the next h minutes, never the day's first 15",
+    "window_rule": "S + h must be by the scheduled RTH close; a window that would cross it has no row (never shortened); a row missing a bar of its window or of the cutoff has no label (counted, never filled in)"
+   }
+  },
+  "version": "ml_study_v1"
+ },
+ "protocol_hash": "bb93b0e15deecab8",
+ "stages": {
+  "analogues": {
+   "at": "2026-10-10T00:17:13Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "earlier_runs": [
+    {
+     "at": "2026-10-09T23:17:00Z",
+     "files": {
+      "predictions_rth_analogues.csv.gz (data/research)": "0a1fab26868feb93ccd783f36ef3343210fa10fa9eb610e29e011fcddd6395dd"
+     }
+    }
+   ],
+   "files": {
+    "predictions_rth_analogues.csv.gz (data/research)": "0a1fab26868feb93ccd783f36ef3343210fa10fa9eb610e29e011fcddd6395dd"
+   },
+   "reproduced": true,
+   "rows": 36432,
+   "seconds": 29.0,
+   "sessions": 198
+  },
+  "controls": {
+   "at": "2026-10-09T23:55:31Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "invariance": {
+    "preopen_truncation": [
+     {
+      "boundary": "2026-04-08",
+      "identical": true,
+      "max_abs_diff": 0.0,
+      "sessions": 150
+     },
+     {
+      "boundary": "2026-08-03",
+      "identical": true,
+      "max_abs_diff": 0.0,
+      "sessions": 230
+     }
+    ],
+    "rth_features": {
+     "changed": 0,
+     "rows": 144
+    },
+    "rth_ranks": {
+     "changed": 0,
+     "rankings": 12
+    }
+   },
+   "preopen_runs": 40,
+   "rth_runs": 11,
+   "seconds": 895.1
+  },
+  "predict_preopen": {
+   "at": "2026-10-10T00:01:22Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "earlier_runs": [
+    {
+     "at": "2026-10-09T23:14:15Z",
+     "files": {
+      "predictions_preopen.csv": "d0607a1fd83cf1e186dac1307c93911bccddb9aca373a75955ad115b822b0e9a"
+     }
+    }
+   ],
+   "files": {
+    "predictions_preopen.csv": "d0607a1fd83cf1e186dac1307c93911bccddb9aca373a75955ad115b822b0e9a"
+   },
+   "folds": 8,
+   "frozen_folds": [
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 150
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.1,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.3
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 345,
+     "test": [
+      "2026-02-24",
+      "2026-03-23"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-02-20",
+      119
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 405,
+     "test": [
+      "2026-03-24",
+      "2026-04-21"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-03-20",
+      139
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 465,
+     "test": [
+      "2026-04-22",
+      "2026-05-19"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-04-20",
+      159
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 525,
+     "test": [
+      "2026-05-20",
+      "2026-06-17"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-05-18",
+      179
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 585,
+     "test": [
+      "2026-06-18",
+      "2026-07-17"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-06-16",
+      199
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 645,
+     "test": [
+      "2026-07-20",
+      "2026-08-14"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-07-16",
+      219
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 705,
+     "test": [
+      "2026-08-17",
+      "2026-09-14"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-08-13",
+      239
+     ]
+    },
+    {
+     "chosen": {
+      "multi/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "multi/logit": {
+       "C": 0.01
+      },
+      "nq_only/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "nq_only/logit": {
+       "C": 0.01
+      },
+      "pooled/gbm": {
+       "learning_rate": 0.03,
+       "max_iter": 50
+      },
+      "pooled/logit": {
+       "C": 0.01
+      }
+     },
+     "pooled_training_rows": 765,
+     "test": [
+      "2026-09-15",
+      "2026-10-09"
+     ],
+     "train": [
+      "2025-09-02",
+      "2026-09-11",
+      259
+     ]
+    }
+   ],
+   "labelled": 278,
+   "pooled_split": [
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 345
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 405
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 465
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 525
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 585
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 645
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 705
+    },
+    {
+     "dates_outside_training": 0,
+     "rows_on_test_or_embargo_dates": 0,
+     "train_rows": 765
+    }
+   ],
+   "reproduced": true,
+   "seconds": 283.5,
+   "sessions": 279,
+   "software": {
+    "joblib": "1.6.0",
+    "numpy": "2.5.3",
+    "pandas": "3.0.5",
+    "python": "3.14.4",
+    "scikit-learn": "1.9.1",
+    "scipy": "1.18.1"
+   },
+   "test": [
+    "2026-02-24",
+    "2026-10-09"
+   ],
+   "trials": {
+    "configurations": {
+     "BL": 1,
+     "CP": 12,
+     "GB": 12,
+     "LR": 14,
+     "RES": 12
+    },
+    "folds": 8,
+    "inner_fits": {
+     "CP": 288,
+     "GB": 288,
+     "LR": 336,
+     "RES": 288
+    }
+   }
+  },
+  "predict_rth": {
+   "at": "2026-10-10T00:16:43Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "earlier_runs": [
+    {
+     "at": "2026-10-09T23:16:03Z",
+     "files": {
+      "distribution_rth_h15.csv.gz (data/research)": "755cfca78b6396c554cba2efe63b2923ef3f44be8cb0d5bbef79f136aa177829",
+      "predictions_rth.csv.gz (data/research)": "fb68ee7f28a8b3cc5b6e11f8f3c73dc8a4047657eb4477c3664aa14312144b4f",
+      "predictions_rth_h15.csv.gz": "a856bba0ec891db9e205ad6d98d9c231a99d811dfa86a22f4a647c37b6397762"
+     }
+    }
+   ],
+   "feature_rows": 3804,
+   "files": {
+    "distribution_rth_h15.csv.gz (data/research)": "755cfca78b6396c554cba2efe63b2923ef3f44be8cb0d5bbef79f136aa177829",
+    "predictions_rth.csv.gz (data/research)": "fb68ee7f28a8b3cc5b6e11f8f3c73dc8a4047657eb4477c3664aa14312144b4f",
+    "predictions_rth_h15.csv.gz": "a856bba0ec891db9e205ad6d98d9c231a99d811dfa86a22f4a647c37b6397762"
+   },
+   "label_reasons": {
+    "ok": 29160
+   },
+   "label_rows": 29160,
+   "problems": {
+    "rth/h15/cutoff": {
+     "folds": 10,
+     "labelled": 3804,
+     "rows": 3804,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h15/delayed": {
+     "folds": 10,
+     "labelled": 3804,
+     "rows": 3804,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h30/cutoff": {
+     "folds": 10,
+     "labelled": 3804,
+     "rows": 3804,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h30/delayed": {
+     "folds": 10,
+     "labelled": 3486,
+     "rows": 3486,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h5/cutoff": {
+     "folds": 10,
+     "labelled": 3804,
+     "rows": 3804,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h5/delayed": {
+     "folds": 10,
+     "labelled": 3804,
+     "rows": 3804,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h60/cutoff": {
+     "folds": 10,
+     "labelled": 3486,
+     "rows": 3486,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    },
+    "rth/h60/delayed": {
+     "folds": 10,
+     "labelled": 3168,
+     "rows": 3168,
+     "test": [
+      "2025-12-26",
+      "2026-10-09"
+     ],
+     "trials": {
+      "configurations": {
+       "BL": 1,
+       "CP": 18,
+       "GB": 12,
+       "LR": 14,
+       "RES": 12
+      },
+      "folds": 10,
+      "inner_fits": {
+       "CP": 540,
+       "GB": 360,
+       "LR": 420,
+       "RES": 360
+      }
+     }
+    }
+   },
+   "reproduced": true,
+   "seconds": 79.4,
+   "sessions": 318,
+   "software": {
+    "joblib": "1.6.0",
+    "numpy": "2.5.3",
+    "pandas": "3.0.5",
+    "python": "3.14.4",
+    "scikit-learn": "1.9.1",
+    "scipy": "1.18.1"
+   },
+   "span": [
+    "2025-07-08",
+    "2026-10-09"
+   ]
+  },
+  "score": {
+   "at": "2026-10-10T00:23:03Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "verified": [
+    "distribution_rth_h15.csv.gz",
+    "predictions_preopen.csv",
+    "predictions_rth.csv.gz",
+    "predictions_rth_analogues.csv.gz",
+    "predictions_rth_h15.csv.gz",
+    "predictions_tabpfn_preopen.csv",
+    "predictions_tabpfn_rth_h15_cutoff.csv",
+    "predictions_tabpfn_rth_h15_delayed.csv"
+   ]
+  },
+  "tabpfn": {
+   "at": "2026-10-10T00:08:35Z",
+   "code_revision": "900f3cb196afe9e2e6f53e7db14dd25545f978a5+dirty",
+   "environment": "TABPFN_ALLOW_CPU_LARGE_DATASET=1 (CPU size guard lifted), HF_HUB_OFFLINE=1, no API keys or DATABASE_URL in the process",
+   "files": {
+    "meta_preopen": {
+     "at": "2026-10-09T23:21:10Z",
+     "folds": [
+      {
+       "fold": 0,
+       "seconds": 1.8,
+       "test_rows": 20,
+       "train_rows": 119
+      },
+      {
+       "fold": 1,
+       "seconds": 2.6,
+       "test_rows": 20,
+       "train_rows": 139
+      },
+      {
+       "fold": 2,
+       "seconds": 2.0,
+       "test_rows": 20,
+       "train_rows": 159
+      },
+      {
+       "fold": 3,
+       "seconds": 2.7,
+       "test_rows": 20,
+       "train_rows": 179
+      },
+      {
+       "fold": 4,
+       "seconds": 2.6,
+       "test_rows": 20,
+       "train_rows": 199
+      },
+      {
+       "fold": 5,
+       "seconds": 8.8,
+       "test_rows": 20,
+       "train_rows": 219
+      },
+      {
+       "fold": 6,
+       "seconds": 3.2,
+       "test_rows": 20,
+       "train_rows": 239
+      },
+      {
+       "fold": 7,
+       "seconds": 2.7,
+       "test_rows": 19,
+       "train_rows": 259
+      }
+     ],
+     "name": "preopen",
+     "params": {
+      "auto_scale_n_estimators": "True",
+      "average_before_softmax": "False",
+      "balance_probabilities": "False",
+      "categorical_features_indices": "None",
+      "device": "cpu",
+      "differentiable_input": "False",
+      "eval_metric": "None",
+      "fit_mode": "fit_preprocessors",
+      "ignore_pretraining_limits": "False",
+      "inference_config": "None",
+      "inference_precision": "auto",
+      "keep_cache_on_device": "True",
+      "kv_cache_precision": "None",
+      "memory_saving_mode": "auto",
+      "n_estimators": "auto",
+      "n_jobs": "None",
+      "n_preprocessing_jobs": "1",
+      "random_state": "0",
+      "show_progress_bar": "False",
+      "softmax_temperature": "auto",
+      "tuning_config": "None"
+     },
+     "tabpfn": "9.1.0",
+     "threads": 6,
+     "torch": "2.14.1+cpu",
+     "weights": "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+     "weights_sha256": "cf8c519c01eaf1613ee91239006d57b1c806ff5f23ac1aeb1315ba1015210e49"
+    },
+    "meta_rth_h15_cutoff": {
+     "at": "2026-10-09T23:48:12Z",
+     "folds": [
+      {
+       "fold": 0,
+       "seconds": 53.5,
+       "test_rows": 240,
+       "train_rows": 1422
+      },
+      {
+       "fold": 1,
+       "seconds": 110.2,
+       "test_rows": 240,
+       "train_rows": 1656
+      },
+      {
+       "fold": 2,
+       "seconds": 145.3,
+       "test_rows": 240,
+       "train_rows": 1896
+      },
+      {
+       "fold": 3,
+       "seconds": 166.9,
+       "test_rows": 240,
+       "train_rows": 2136
+      },
+      {
+       "fold": 4,
+       "seconds": 163.2,
+       "test_rows": 240,
+       "train_rows": 2376
+      },
+      {
+       "fold": 5,
+       "seconds": 203.5,
+       "test_rows": 240,
+       "train_rows": 2616
+      },
+      {
+       "fold": 6,
+       "seconds": 148.5,
+       "test_rows": 240,
+       "train_rows": 2856
+      },
+      {
+       "fold": 7,
+       "seconds": 118.6,
+       "test_rows": 240,
+       "train_rows": 3096
+      },
+      {
+       "fold": 8,
+       "seconds": 214.1,
+       "test_rows": 240,
+       "train_rows": 3336
+      },
+      {
+       "fold": 9,
+       "seconds": 297.6,
+       "test_rows": 216,
+       "train_rows": 3576
+      }
+     ],
+     "name": "rth_h15_cutoff",
+     "params": {
+      "auto_scale_n_estimators": "True",
+      "average_before_softmax": "False",
+      "balance_probabilities": "False",
+      "categorical_features_indices": "None",
+      "device": "cpu",
+      "differentiable_input": "False",
+      "eval_metric": "None",
+      "fit_mode": "fit_preprocessors",
+      "ignore_pretraining_limits": "False",
+      "inference_config": "None",
+      "inference_precision": "auto",
+      "keep_cache_on_device": "True",
+      "kv_cache_precision": "None",
+      "memory_saving_mode": "auto",
+      "n_estimators": "auto",
+      "n_jobs": "None",
+      "n_preprocessing_jobs": "1",
+      "random_state": "0",
+      "show_progress_bar": "False",
+      "softmax_temperature": "auto",
+      "tuning_config": "None"
+     },
+     "tabpfn": "9.1.0",
+     "threads": 6,
+     "torch": "2.14.1+cpu",
+     "weights": "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+     "weights_sha256": "cf8c519c01eaf1613ee91239006d57b1c806ff5f23ac1aeb1315ba1015210e49"
+    },
+    "meta_rth_h15_delayed": {
+     "at": "2026-10-10T00:08:35Z",
+     "folds": [
+      {
+       "fold": 0,
+       "seconds": 105.7,
+       "test_rows": 240,
+       "train_rows": 1422
+      },
+      {
+       "fold": 1,
+       "seconds": 111.1,
+       "test_rows": 240,
+       "train_rows": 1656
+      },
+      {
+       "fold": 2,
+       "seconds": 144.6,
+       "test_rows": 240,
+       "train_rows": 1896
+      },
+      {
+       "fold": 3,
+       "seconds": 105.1,
+       "test_rows": 240,
+       "train_rows": 2136
+      },
+      {
+       "fold": 4,
+       "seconds": 103.7,
+       "test_rows": 240,
+       "train_rows": 2376
+      },
+      {
+       "fold": 5,
+       "seconds": 112.2,
+       "test_rows": 240,
+       "train_rows": 2616
+      },
+      {
+       "fold": 6,
+       "seconds": 124.1,
+       "test_rows": 240,
+       "train_rows": 2856
+      },
+      {
+       "fold": 7,
+       "seconds": 142.1,
+       "test_rows": 240,
+       "train_rows": 3096
+      },
+      {
+       "fold": 8,
+       "seconds": 130.3,
+       "test_rows": 240,
+       "train_rows": 3336
+      },
+      {
+       "fold": 9,
+       "seconds": 143.5,
+       "test_rows": 216,
+       "train_rows": 3576
+      }
+     ],
+     "name": "rth_h15_delayed",
+     "params": {
+      "auto_scale_n_estimators": "True",
+      "average_before_softmax": "False",
+      "balance_probabilities": "False",
+      "categorical_features_indices": "None",
+      "device": "cpu",
+      "differentiable_input": "False",
+      "eval_metric": "None",
+      "fit_mode": "fit_preprocessors",
+      "ignore_pretraining_limits": "False",
+      "inference_config": "None",
+      "inference_precision": "auto",
+      "keep_cache_on_device": "True",
+      "kv_cache_precision": "None",
+      "memory_saving_mode": "auto",
+      "n_estimators": "auto",
+      "n_jobs": "None",
+      "n_preprocessing_jobs": "1",
+      "random_state": "0",
+      "show_progress_bar": "False",
+      "softmax_temperature": "auto",
+      "tuning_config": "None"
+     },
+     "tabpfn": "9.1.0",
+     "threads": 6,
+     "torch": "2.14.1+cpu",
+     "weights": "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+     "weights_sha256": "cf8c519c01eaf1613ee91239006d57b1c806ff5f23ac1aeb1315ba1015210e49"
+    },
+    "predictions_tabpfn_preopen.csv (data/research)": "dc72cb82e3a53898eca5e93e37e1fefa3e04cfbf87086acfcb85e04a8d893033",
+    "predictions_tabpfn_rth_h15_cutoff.csv (data/research)": "d3596982c862032a36a618dc9f4c88bbc2b361f7c14ee110637361b76911e6ea",
+    "predictions_tabpfn_rth_h15_delayed.csv (data/research)": "ac2aed819086f3eed0cefc9d4ef7170e2cbe68615a8206cf91b68e5ab584d48f"
+   }
+  }
+ },
+ "version": "ml_study_v1"
+}
