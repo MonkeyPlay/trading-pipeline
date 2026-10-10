@@ -208,7 +208,7 @@ def test_selection_scores_nq_validation_rows_of_later_dates_only(monkeypatch):
     monkeypatch.setattr(mbun, "_fit", spy)
     real_brier = mbun.brier
     monkeypatch.setattr(mbun, "brier", lambda P, y, classes: real_brier(P, y, classes))
-    chosen, scores, folds = mbun.select(data, "direction_15m", "P", data.days[:140])
+    chosen, scores, folds, _ = mbun.select(data, "direction_15m", "P", data.days[:140])
     assert chosen is not None and folds
     for f in folds:
         assert f["train"][1] < f["embargo"][0] < f["test"][0]
@@ -531,3 +531,30 @@ def test_a_tampered_or_unregistered_bundle_never_forecasts(world, tmp_path):
     assert all(p["status"] == "unavailable" and p["distribution"] is None for p in run["predictions"].values())
     with pytest.raises(mm.ArtifactError):                             # the registered hash, not just the manifest
         mbun.load(v, expected_sha256="0" * 64)
+
+
+@needs_db
+def test_the_bundle_evaluation_freezes_predictions_then_scores_every_target_against_a_and_b(world, monkeypatch,
+                                                                                            tmp_path):
+    from forecaster import ml_bundle_eval as ev
+    conn, data = world["conn"], world["data"]
+    monkeypatch.setitem(ml.DEV_EVALUATION, "initial_train_sessions", 45)     # the synthetic pool has 80 sessions
+    monkeypatch.setitem(ml.DEV_EVALUATION, "test_block_sessions", 18)
+    out = str(tmp_path / "eval")
+    man = ev.predict(data, out, jobs=2, progress=lambda *a: None)
+    assert set(man["files"]) == {"predictions.jsonl", "folds.json"} and man["protocol"]["claims"] == 21
+    assert len(man["folds"]) == 2 and all(f["embargo"] for f in man["folds"])
+    res = ev.score(conn, out, str(tmp_path / "report.md"), progress=lambda *a: None)
+    assert set(res["targets"]) == set(mb.TARGETS)
+    for t, e in res["targets"].items():
+        assert {"N - A", "N - B", "M - A", "P - B", "B - A"} <= set(e["pairs"]) and set(e["claims"]) == {"N", "M", "P"}
+        assert {"M - N", "P - P_nqonly", "P - P_complete"} == set(e["ablations"])
+        assert e["coverage"]["scheduled"] == res["scheduled"] and e["coverage"]["labelled"] <= res["scheduled"]
+        if t in mb.DIRECTION:
+            assert "N - N_sym" in e["pairs"] and "A_sym - A" in e["pairs"]
+    text = (tmp_path / "report.md").read_text()
+    assert "Results matrix" in text and "Development data, not a test" in text and "99.76" in text
+    with open(os.path.join(out, "predictions.jsonl"), "a") as f:
+        f.write("{}\n")
+    with pytest.raises(RuntimeError, match="changed after the predict stage"):
+        ev.score(conn, out, None, progress=lambda *a: None)

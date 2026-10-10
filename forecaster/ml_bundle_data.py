@@ -170,7 +170,9 @@ def build(conn, profile: str = ml.PROFILE, until: Optional[str] = None, pooled: 
         last = revs[-1] if revs else {"labels": {}, "measurements": {}}
         payload = _payload_of(s)
         entries.append({"date": d, "instrument": "NQ", "payload": payload,
-                        "features": bf.row(fs, d, "NQ", payload, payload, context=True),
+                        "features": {**bf.row(fs, d, "NQ", payload, payload, context=True),
+                                     # the development rows' M abstention (a required context instrument unusable)
+                                     "ctx_required_missing": float(bool(mf.required_missing(fs, d)))},
                         "candidates": bf.candidate_row(payload), "labels": last["labels"],
                         "measurements": last["measurements"]})
     built = {"NQ": len(entries)}

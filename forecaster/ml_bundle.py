@@ -58,72 +58,282 @@ class BundleError(RuntimeError):
 # Estimators: every family returns probabilities over the head's classes in canonical order
 # --------------------------------------------------------------------------
 
-def _design(X: pd.DataFrame, columns: Sequence[str], pooled: bool, instruments: Optional[Sequence[str]]
-            ) -> np.ndarray:
-    """The head's feature columns, plus the instrument identity for the pooled arm (NQ the reference)."""
-    A = X.reindex(columns=list(columns)).to_numpy(float)
-    if pooled:
-        inst = np.asarray(instruments if instruments is not None else ["NQ"] * len(X))
-        A = np.column_stack([A] + [(inst == s).astype(float) for s in ("ES", "RTY")])
-    return A
+IDENTITY_SCALE = 10.0              # the instrument intercepts enter x10: an effective L2 penalty 1/100 of a feature's
+SCALE_OFFSET = 0.1                 # the scale family models log(|z| + 0.1), z the move in threshold units
+POOLABLE = ("logit", "decomp", "decomp_sym", "scale", "scale_loc", "cand")
+INTERACTIONS = ("ret_30_atr2m", "ret_pm", "range_pos")       # the candidate scorer's side x path terms
 
 
-class SkHead:
-    """A scikit-learn family (contracts/nq_ml_bundle.FAMILIES 'logit' / 'gbm') on the head's columns."""
+class Prep:
+    """Median imputation and standard scaling fitted on the training rows only (an all-missing column: 0)."""
+
+    def fit(self, A: np.ndarray) -> "Prep":
+        with np.errstate(all="ignore"):
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                med = np.nanmedian(A, axis=0) if len(A) else np.zeros(A.shape[1])
+        self.med = np.where(np.isnan(med), 0.0, med)
+        F = np.where(np.isnan(A), self.med, A)
+        self.mu = F.mean(axis=0) if len(F) else np.zeros(A.shape[1])
+        sd = F.std(axis=0) if len(F) else np.ones(A.shape[1])
+        self.sd = np.where(sd > 0, sd, 1.0)
+        return self
+
+    def transform(self, A: np.ndarray) -> np.ndarray:
+        return (np.where(np.isnan(A), self.med, A) - self.mu) / self.sd
+
+
+def _base(X: pd.DataFrame, columns: Sequence[str]) -> np.ndarray:
+    return X.reindex(columns=list(columns)).to_numpy(float)
+
+
+def _pool(Z: np.ndarray, instruments: Optional[Sequence[str]], gamma: float, pooled: bool) -> np.ndarray:
+    """The pooled design (contracts/nq_ml_bundle.POOLING): shared columns Z, NQ deviations gamma x Z x is_nq (none at
+    gamma 0: complete pooling), and the instrument intercepts. Not pooled: Z."""
+    if not pooled:
+        return Z
+    inst = np.asarray(instruments if instruments is not None else ["NQ"] * len(Z))
+    parts = [Z]
+    if gamma > 0:
+        parts.append(gamma * Z * (inst == "NQ").astype(float)[:, None])
+    parts += [IDENTITY_SCALE * (inst == s).astype(float)[:, None] for s in ("ES", "RTY")]
+    return np.hstack(parts)
+
+
+class _Head:
+    """A family on the head's columns: ``fit(X, y, instruments, moves)``, ``predict(X)`` -> probabilities over the
+    head's classes in canonical order (before the structural zeros, calibration and smoothing of ``finish``)."""
 
     def __init__(self, family: str, params: Dict[str, Any], columns: Sequence[str], classes: Sequence[str],
                  pooled: bool):
-        self.family, self.params, self.columns, self.classes, self.pooled = family, dict(params), list(columns), \
-            tuple(classes), pooled
-        self.model = None
+        self.family, self.params, self.columns, self.classes = family, dict(params), list(columns), tuple(classes)
+        self.pooled = pooled
+        self.gamma = float(params.get("gamma", 0.0)) if pooled else 0.0
 
-    def _pipeline(self):
-        from sklearn.ensemble import HistGradientBoostingClassifier
-        from sklearn.impute import SimpleImputer
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.pipeline import Pipeline
-        from sklearn.preprocessing import StandardScaler
-        if self.family == "logit":
-            return Pipeline([("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
-                             ("scale", StandardScaler()),
-                             ("model", LogisticRegression(C=self.params["C"], max_iter=3000))])
-        if self.family == "gbm":
-            return Pipeline([("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
-                             ("model", HistGradientBoostingClassifier(
-                                 max_depth=2, min_samples_leaf=20, l2_regularization=1.0, learning_rate=0.05,
-                                 max_iter=self.params["max_iter"], early_stopping=False, random_state=0))])
-        raise ValueError(f"unknown family {self.family!r}")
+    def _design(self, X, instruments, fit: bool) -> np.ndarray:
+        A = _base(X, self.columns)
+        if fit:
+            self.prep = Prep().fit(A)
+        return _pool(self.prep.transform(A), instruments, self.gamma, self.pooled)
 
-    def fit(self, X: pd.DataFrame, y: Sequence[str], instruments: Optional[Sequence[str]] = None,
-            moves: Optional[Sequence[float]] = None) -> "SkHead":
-        self.model = self._pipeline().fit(_design(X, self.columns, self.pooled, instruments), np.asarray(y))
-        return self
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        raw = self.model.predict_proba(_design(X, self.columns, self.pooled, None))
-        out = np.zeros((len(X), len(self.classes)))
-        for j, c in enumerate(self.model.classes_):
+    def _full(self, model, raw: np.ndarray) -> np.ndarray:
+        out = np.zeros((raw.shape[0], len(self.classes)))
+        for j, c in enumerate(model.classes_):
             out[:, self.classes.index(c)] = raw[:, j]
         return out
 
 
-FAMILY_CLASSES = {"logit": SkHead, "gbm": SkHead}
+class LogitHead(_Head):
+    """Multinomial logistic regression (L2) - partially pooled for P (gamma)."""
+
+    def fit(self, X, y, instruments=None, moves=None):
+        from sklearn.linear_model import LogisticRegression
+        self.model = LogisticRegression(C=self.params["C"], max_iter=3000).fit(self._design(X, instruments, True),
+                                                                              np.asarray(y))
+        return self
+
+    def predict(self, X):
+        return self._full(self.model, self.model.predict_proba(self._design(X, None, False)))
 
 
-def make(family: str, params: Dict[str, Any], target: str, arm: str):
+class GbmHead(_Head):
+    """Shallow gradient boosting on median-imputed features; for P complete pooling, the identity a feature."""
+
+    def fit(self, X, y, instruments=None, moves=None):
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import Pipeline
+        self.model = Pipeline([("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
+                               ("model", HistGradientBoostingClassifier(
+                                   max_depth=2, min_samples_leaf=20, l2_regularization=1.0, learning_rate=0.05,
+                                   max_iter=self.params["max_iter"], early_stopping=False, random_state=0))])
+        self.model.fit(self._raw(X, instruments), np.asarray(y))
+        return self
+
+    def _raw(self, X, instruments):
+        A = _base(X, self.columns)
+        if self.pooled:
+            inst = np.asarray(instruments if instruments is not None else ["NQ"] * len(X))
+            A = np.column_stack([A] + [(inst == s).astype(float) for s in ("ES", "RTY")])
+        return A
+
+    def predict(self, X):
+        return self._full(self.model, self.model.predict_proba(self._raw(X, None)))
+
+
+class _Binary:
+    """A binary logistic fit, or the training frequency when only one outcome occurred: ``self(D) -> P(1)``."""
+
+    def __init__(self, C: float, D: np.ndarray, t: np.ndarray):
+        from sklearn.linear_model import LogisticRegression
+        t = np.asarray(t, dtype=bool)
+        self.model, self.rate = None, (float(t.mean()) if len(t) else 0.5)
+        if len(set(t.tolist())) == 2:
+            self.model = LogisticRegression(C=C, max_iter=3000).fit(D, t.astype(int))
+
+    def __call__(self, A: np.ndarray) -> np.ndarray:
+        if self.model is None:
+            return np.full(len(A), self.rate)
+        return self.model.predict_proba(A)[:, list(self.model.classes_).index(1)]
+
+
+def _binary(C: float, D: np.ndarray, t: np.ndarray) -> _Binary:
+    return _Binary(C, D, t)
+
+
+class DecompHead(_Head):
+    """Direction targets: q = P(outside the band), r = P(up | outside) - r = 0.5 for the symmetric version."""
+
+    def fit(self, X, y, instruments=None, moves=None):
+        y = np.asarray(y)
+        D = self._design(X, instruments, True)
+        out = y != "neutral_band"
+        self.q = _binary(self.params["C"], D, out)
+        self.symmetric = self.family == "decomp_sym"
+        self.r = None if self.symmetric else _binary(self.params["C"], D[out], (y[out] == "bullish"))
+        return self
+
+    def predict(self, X):
+        D = self._design(X, None, False)
+        q = self.q(D)
+        r = np.full(len(D), 0.5) if self.symmetric else self.r(D)
+        p = {"bullish": q * r, "bearish": q * (1 - r), "neutral_band": 1 - q}
+        return np.column_stack([p[c] for c in self.classes])
+
+
+class ScaleHead(_Head):
+    """Direction targets: a conditional distribution of the move z in threshold units - a scale s(x) from a ridge
+    regression of log(|z| + 0.1), the standardised training moves z / s(x) as an empirical distribution (symmetrised;
+    scale_loc adds a ridge location and keeps the residuals' asymmetry); the classes are its mass beyond +1 / s(x),
+    below -1 / s(x) and between - the target's exact threshold, no tail shape assumed."""
+
+    def fit(self, X, y, instruments=None, moves=None):
+        from sklearn.linear_model import Ridge
+        z = np.asarray(moves, float)
+        keep = np.isfinite(z)
+        if keep.sum() < 20:
+            raise ValueError(f"{int(keep.sum())} measured moves: too few for the scale model")
+        D = self._design(X, instruments, True)[keep]
+        z = z[keep]
+        self.scale = Ridge(alpha=self.params["alpha"]).fit(D, np.log(np.abs(z) + SCALE_OFFSET))
+        s = np.exp(self.scale.predict(D))
+        u = z / s
+        self.location = self.family == "scale_loc"
+        if self.location:
+            self.loc = Ridge(alpha=self.params["alpha"]).fit(D, u)
+            self.resid = np.sort(u - self.loc.predict(D))
+        else:
+            self.resid = np.sort(np.concatenate([u, -u]))
+        return self
+
+    def predict(self, X):
+        D = self._design(X, None, False)
+        s = np.exp(self.scale.predict(D))
+        m = self.loc.predict(D) if self.location else np.zeros(len(D))
+        n = len(self.resid)
+        up = 1 - np.searchsorted(self.resid, 1 / s - m, side="right") / n          # P(e > 1/s - m)
+        down = np.searchsorted(self.resid, -1 / s - m, side="left") / n            # P(e < -1/s - m)
+        p = {"bullish": up, "bearish": down, "neutral_band": np.clip(1 - up - down, 0, 1)}
+        return np.column_stack([p[c] for c in self.classes])
+
+
+class CandHead(_Head):
+    """First level: a conditional-logit candidate scorer. Each frozen candidate's score is its geometry (shared by
+    every candidate), its side times the recent path, and its identity; softmax over the session's possible
+    candidates; L2 on every coefficient. Partially pooled for P like the logistic family."""
+
+    FEATS = ("dist_atr", "abs_dist_atr", "above", "nearest_side", "rank_side", "coincident")
+
+    def _tensor(self, X):
+        n, K = len(X), len(self.classes)
+        F = np.zeros((n, K, len(self.FEATS) + len(INTERACTIONS)))
+        for k, c in enumerate(self.classes):
+            for j, f in enumerate(self.FEATS):
+                F[:, k, j] = X.get(f"c_{c}_{f}", pd.Series(np.nan, index=X.index)).to_numpy(float)
+            above = F[:, k, self.FEATS.index("above")]
+            for j, f in enumerate(INTERACTIONS):
+                F[:, k, len(self.FEATS) + j] = above * X.get(f, pd.Series(np.nan, index=X.index)).to_numpy(float)
+        return F
+
+    def _scaled(self, X, instruments, fit: bool):
+        F = self._tensor(X)
+        allowed = possible_mask("first_level_tested", X)
+        if fit:
+            flat = F[allowed]
+            self.prep = Prep().fit(flat)
+        Z = self.prep.transform(F.reshape(-1, F.shape[2])).reshape(F.shape)
+        Z = np.where(allowed[:, :, None], Z, 0.0)
+        if self.pooled and self.gamma > 0:
+            inst = np.asarray(instruments if instruments is not None else ["NQ"] * len(X))
+            nq = (inst == "NQ").astype(float)[:, None, None]
+            Z = np.concatenate([Z, self.gamma * Z * nq], axis=2)
+        return Z, allowed
+
+    def fit(self, X, y, instruments=None, moves=None):
+        from scipy.optimize import minimize
+        Z, allowed = self._scaled(X, instruments, True)
+        n, K, d = Z.shape
+        Y = np.array([[1.0 if c == lab else 0.0 for c in self.classes] for lab in y])
+        if (Y * ~allowed).sum() > 0:
+            raise ValueError("a realised first level the label contract rules out")
+        lam = self.params["l2"]
+
+        def loss(theta):
+            w, b = theta[:d], theta[d:]
+            S = Z @ w + b[None, :]
+            S = np.where(allowed, S, -np.inf)
+            mx = S.max(axis=1, keepdims=True)
+            E = np.where(allowed, np.exp(S - mx), 0.0)
+            tot = E.sum(axis=1, keepdims=True)
+            P = E / tot
+            ll = -(np.log(tot[:, 0]) + mx[:, 0] - (np.where(allowed, S, 0) * Y).sum(axis=1)).sum()
+            G = P - Y
+            gw = np.einsum("nk,nkd->d", G, Z)
+            gb = G.sum(axis=0)
+            return -ll + 0.5 * lam * theta @ theta, np.concatenate([gw, gb]) + lam * theta
+        res = minimize(loss, np.zeros(d + K), jac=True, method="L-BFGS-B", options={"maxiter": 500})
+        self.theta, self.d = res.x, d
+        return self
+
+    def predict(self, X):
+        Z, allowed = self._scaled(X, None, False)
+        w, b = self.theta[:self.d], self.theta[self.d:]
+        S = np.where(allowed, Z @ w + b[None, :], -np.inf)
+        E = np.where(allowed, np.exp(S - S.max(axis=1, keepdims=True)), 0.0)
+        return E / E.sum(axis=1, keepdims=True)
+
+
+FAMILY_CLASSES = {"logit": LogitHead, "gbm": GbmHead, "decomp": DecompHead, "decomp_sym": DecompHead,
+                  "scale": ScaleHead, "scale_loc": ScaleHead, "cand": CandHead}
+
+
+def make(family: str, params: Dict[str, Any], target: str, arm: str, pooled: Optional[bool] = None):
     cols = mb.head_features(target, arm)
-    return FAMILY_CLASSES[family](family, params, cols, mb.CLASSES[target], arm == "P")
+    return FAMILY_CLASSES[family](family, params, cols, mb.CLASSES[target], arm == "P" if pooled is None else pooled)
 
 
-def configurations(target: str, arm: str) -> List[Tuple[str, Dict[str, Any]]]:
-    """The declared selection budget of a head (contracts/nq_ml_bundle.FAMILIES, in FAMILY_ORDER)."""
+def configurations(target: str, arm: str, families: Optional[Sequence[str]] = None,
+                   gammas: Optional[Sequence[float]] = None) -> List[Tuple[str, Dict[str, Any]]]:
+    """The declared selection budget of a head (contracts/nq_ml_bundle.FAMILIES in FAMILY_ORDER; for P the logistic-
+    type families at every pooling strength of POOLING['gamma_grid']). ``families`` / ``gammas`` restrict it (the
+    evaluation's comparators); a comparator-only family (decomp_sym) is in it only when asked for."""
     kind = mb.HEADS[target]["kind"]
     out = []
     for fam in mb.FAMILY_ORDER:
         spec = mb.FAMILIES.get(fam)
         if spec is None or kind not in spec["kinds"] or fam not in FAMILY_CLASSES:
             continue
-        out += [(fam, dict(p)) for p in spec["grid"]]
+        if families is None and spec.get("comparator"):
+            continue
+        if families is not None and fam not in families:
+            continue
+        for p in spec["grid"]:
+            if arm == "P" and fam in POOLABLE:
+                for g in (gammas if gammas is not None else mb.POOLING["gamma_grid"]):
+                    out.append((fam, {**p, "gamma": g}))
+            else:
+                out.append((fam, dict(p)))
     return out
 
 
@@ -143,10 +353,20 @@ def possible_mask(target: str, X: pd.DataFrame) -> np.ndarray:
     return m
 
 
-def finish(target: str, P: np.ndarray, X: pd.DataFrame, n: int) -> np.ndarray:
-    """Structural zeros, renormalisation and the Jeffreys smoothing (contracts/nq_ml_bundle.SMOOTHING)."""
+def temper(P: np.ndarray, tau: float) -> np.ndarray:
+    """The temperature calibration p^(1/tau), renormalised (tau 1: unchanged)."""
+    if tau == 1.0:
+        return P
+    Q = np.power(np.clip(P, 0, None), 1.0 / tau)
+    s = Q.sum(axis=1, keepdims=True)
+    return np.where(s > 0, Q / np.where(s > 0, s, 1), P)
+
+
+def finish(target: str, P: np.ndarray, X: pd.DataFrame, n: int, tau: float = 1.0) -> np.ndarray:
+    """The temperature (when calibrated), structural zeros, renormalisation and the Jeffreys smoothing
+    (contracts/nq_ml_bundle.CALIBRATION, SMOOTHING)."""
     allowed = possible_mask(target, X)
-    P = np.where(allowed, np.clip(P, 0, None), 0.0)
+    P = np.where(allowed, np.clip(temper(P, tau), 0, None), 0.0)
     s = P.sum(axis=1, keepdims=True)
     k = allowed.sum(axis=1, keepdims=True)
     P = np.where(s > 0, P / np.where(s > 0, s, 1), allowed / k)
@@ -195,43 +415,47 @@ class Head:
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         if self.status != "trained":
             raise BundleError(f"{self.target}: head unavailable ({self.reason})")
-        return finish(self.target, self.estimator.predict(X), X, self.n)
+        return finish(self.target, self.estimator.predict(X), X, self.n, float(self.calibration.get("tau", 1.0)))
 
     def describe(self) -> Dict[str, Any]:
         cols = getattr(self.estimator, "columns", None)
         return {"target": self.target, "status": self.status, "reason": self.reason, "family": self.family,
                 "params": self.params, "estimator": None if self.family is None else mb.FAMILIES[self.family][
                     "estimator"], "columns": cols, "classes": list(mb.CLASSES[self.target]),
-                "preprocessing": "median imputation (and standard scaling for the logistic families), fitted on the "
-                                 "head's training rows inside the estimator",
-                "pooled": self.arm == "P", "n": self.n, "rows": self.rows, "class_counts": self.class_counts,
+                "preprocessing": "median imputation (and standard scaling for every family but the boosted one), "
+                                 "fitted on the head's training rows inside the estimator",
+                "pooled": bool(getattr(self.estimator, "pooled", False)),
+                "gamma": getattr(self.estimator, "gamma", None), "n": self.n, "rows": self.rows, "class_counts": self.class_counts,
                 "unseen": self.unseen, "smoothing": mb.SMOOTHING["rule"], "calibration": self.calibration,
                 "selection": self.selection, "folds": self.folds, "training": self.training}
 
 
-def _rows(data, target: str, arm: str, dates: Sequence[str]) -> np.ndarray:
-    pop = mb.ARMS[arm].get("training_symbols", ("NQ",))
+def _rows(data, target: str, arm: str, dates: Sequence[str], population: Optional[Sequence[str]] = None
+          ) -> np.ndarray:
+    pop = population or mb.ARMS[arm].get("training_symbols", ("NQ",))
     return np.flatnonzero(data.mask(target, instruments=pop, dates=dates))
 
 
-def _fit(fam, params, target, arm, data, idx):
-    est = make(fam, params, target, arm)
+def _fit(fam, params, target, arm, data, idx, pooled: Optional[bool] = None):
+    est = make(fam, params, target, arm, pooled)
     moves = data.moves[target].to_numpy()[idx] if target in data.moves else None
     return est.fit(data.rows.iloc[idx], [data.labels[target].iloc[i] for i in idx],
                    instruments=data.instruments[idx], moves=moves)
 
 
-def select(data, target: str, arm: str, train_dates: Sequence[str]) -> Tuple[Optional[Tuple[str, Dict]], List, List]:
+def select(data, target: str, arm: str, train_dates: Sequence[str],
+           configs: Optional[List[Tuple[str, Dict[str, Any]]]] = None):
     """The head's family and parameters by inner folds (forecaster/ml_split.inner_folds by session date, NQ rows
-    scored): ``(chosen, scores, folds)``. Out-of-fold predictions are post-processed exactly as at issue time."""
+    scored): ``(chosen, scores, folds, oof)`` - ``oof`` the chosen configuration's out-of-fold predictions per inner
+    fold (raw, labels), for the calibration. Out-of-fold predictions are post-processed exactly as at issue time."""
     b = mb.BUDGET["inner_folds"]
     nq_dates = sorted({d for d, s in zip(data.dates, data.instruments) if s == "NQ" and d in set(train_dates)})
     folds = sp.inner_folds(nq_dates, b["blocks"], b["block_sessions"], b["embargo_sessions"], b["min_train_sessions"])
     if not folds:
         folds = [sp.inner_split(nq_dates, 0.25, b["embargo_sessions"])]
-    scores = []
-    for fam, params in configurations(target, arm):
-        losses, ok = [], True
+    scores, oofs = [], {}
+    for k, (fam, params) in enumerate(configs if configs is not None else configurations(target, arm)):
+        losses, ok, oof = [], True, []
         for f in folds:
             tr = _rows(data, target, arm, f.train)
             va = np.flatnonzero(data.mask(target, instruments=("NQ",), dates=f.test))
@@ -241,30 +465,65 @@ def select(data, target: str, arm: str, train_dates: Sequence[str]) -> Tuple[Opt
             try:
                 est = _fit(fam, params, target, arm, data, tr)
                 X = data.rows.iloc[va]
-                P = finish(target, est.predict(X), X, n_tr)
+                raw = est.predict(X)
+                P = finish(target, raw, X, n_tr)
             except Exception as e:                           # a configuration that cannot fit is out, recorded
                 scores.append({"family": fam, "params": params, "error": f"{type(e).__name__}: {e}"})
                 ok = False
                 break
-            losses += list(brier(P, [data.labels[target].iloc[i] for i in va], mb.CLASSES[target]))
+            y = [data.labels[target].iloc[i] for i in va]
+            losses += list(brier(P, y, mb.CLASSES[target]))
+            oof.append({"raw": raw, "X": X, "y": y, "n": n_tr})
         if ok and losses:
             scores.append({"family": fam, "params": params, "brier": float(np.mean(losses)), "n": len(losses)})
-    good = [s for s in scores if "brier" in s]
+            oofs[len(scores) - 1] = oof
+    good = [i for i, s in enumerate(scores) if "brier" in s]
     if not good:
-        return None, scores, [f.describe() for f in folds]
-    best = min(good, key=lambda s: (round(s["brier"], 12), mb.FAMILY_ORDER.index(s["family"]),
-                                    json.dumps(s["params"], sort_keys=True)))
-    return (best["family"], best["params"]), scores, [f.describe() for f in folds]
+        return None, scores, [f.describe() for f in folds], []
+    best = min(good, key=lambda i: (round(scores[i]["brier"], 12), mb.FAMILY_ORDER.index(scores[i]["family"]),
+                                    json.dumps(scores[i]["params"], sort_keys=True)))
+    return (scores[best]["family"], scores[best]["params"]), scores, [f.describe() for f in folds], oofs[best]
 
 
-def fit_head(data, target: str, arm: str, train_dates: Sequence[str]) -> Head:
-    """One head on ``train_dates`` (see the module docstring); never reads a row of another date."""
-    idx = _rows(data, target, arm, train_dates)
+TAUS = tuple(np.round(np.linspace(0.5, 3.0, 26), 2))
+
+
+def calibrate(target: str, oof: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """contracts/nq_ml_bundle.CALIBRATION: a temperature is kept only if, fitted on the other inner blocks, it lowers
+    each held-out block's Brier score on average; then refitted on every block's out-of-fold predictions."""
+    if len(oof) < 2:
+        return {"chosen": "none", "why": f"{len(oof)} inner block(s): a temperature cannot be cross-fitted"}
+
+    def score(blocks, tau):
+        return float(np.mean(np.concatenate([brier(finish(target, b["raw"], b["X"], b["n"], tau), b["y"],
+                                                    mb.CLASSES[target]) for b in blocks])))
+
+    def fit(blocks):
+        return min(TAUS, key=lambda tau: (score(blocks, tau), abs(tau - 1)))
+    gain = []
+    for k in range(len(oof)):
+        rest = oof[:k] + oof[k + 1:]
+        tau = fit(rest)
+        gain.append(score([oof[k]], 1.0) - score([oof[k]], tau))
+    if np.mean(gain) <= 0:
+        return {"chosen": "none", "cross_fitted_gain": float(np.mean(gain)), "blocks": len(oof)}
+    tau = fit(oof)
+    return {"chosen": "temperature", "tau": float(tau), "cross_fitted_gain": float(np.mean(gain)), "blocks": len(oof)}
+
+
+def fit_head(data, target: str, arm: str, train_dates: Sequence[str],
+             configs: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+             fixed: Optional[Tuple[str, Dict[str, Any]]] = None, population: Optional[Sequence[str]] = None,
+             calibration: bool = True) -> Head:
+    """One head on ``train_dates`` (see the module docstring); never reads a row of another date. ``configs``
+    restricts the selection (the comparators); ``fixed`` skips it; ``population`` overrides the arm's training
+    population (P's NQ-only fit of the same family)."""
+    pop = tuple(population or mb.ARMS[arm].get("training_symbols", ("NQ",)))
+    idx = _rows(data, target, arm, train_dates, pop)
     inst = data.instruments[idx]
     labs = [data.labels[target].iloc[i] for i in idx]
     nq = [lab for lab, s in zip(labs, inst) if s == "NQ"]
-    head = Head(target, arm, "unavailable", n=len(nq),
-                rows={s: int(np.sum(inst == s)) for s in mb.ARMS[arm].get("training_symbols", ("NQ",))},
+    head = Head(target, arm, "unavailable", n=len(nq), rows={s: int(np.sum(inst == s)) for s in pop},
                 class_counts={c: nq.count(c) for c in mb.CLASSES[target]})
     head.unseen = [c for c in mb.CLASSES[target] if head.class_counts[c] == 0]
     dates = sorted({data.dates[i] for i in idx if data.instruments[i] == "NQ"})
@@ -275,19 +534,27 @@ def fit_head(data, target: str, arm: str, train_dates: Sequence[str]) -> Head:
     if len(set(labs)) < 2:
         head.reason = "a single class in the training rows: no model to fit"
         return head
-    if arm == "P":
+    if arm == "P" and population is None:
         other = sum(v for s, v in head.rows.items() if s != "NQ")
         if other < mb.POOLING["min_other_rows"]:
             head.reason = (f"{other} usable ES / RTY rows, fewer than {mb.POOLING['min_other_rows']}: no pooled "
                            "training (an NQ-only fit is arm N's, never shown as pooled)")
             return head
-    chosen, scores, folds = select(data, target, arm, train_dates)
-    head.selection, head.folds = scores, folds
-    if chosen is None:
-        head.reason = "no configuration could be scored on the inner folds"
-        return head
+    pooled = arm == "P" and len(pop) > 1
+    if fixed is not None:
+        chosen, oof = fixed, []
+        head.selection = [{"family": fixed[0], "params": fixed[1], "fixed": True}]
+    else:
+        chosen, scores, folds, oof = select(data, target, arm, train_dates, configs)
+        head.selection, head.folds = scores, folds
+        if chosen is None:
+            head.reason = "no configuration could be scored on the inner folds"
+            return head
     head.family, head.params = chosen
-    head.estimator = _fit(chosen[0], chosen[1], target, arm, data, idx)
+    head.estimator = _fit(chosen[0], chosen[1], target, arm, data, idx, pooled)
+    head.calibration = calibrate(target, oof) if calibration and oof else {"chosen": "none", "why": "no inner "
+                                                                                                    "out-of-fold "
+                                                                                                    "predictions"}
     head.status = "trained"
     return head
 
@@ -303,12 +570,15 @@ class Bundle:
         return self.heads[target].predict(X)
 
 
-def fit_bundle(data, arm: str, train_dates: Sequence[str], targets: Sequence[str] = mb.TARGETS) -> Bundle:
-    """Every head of ``arm`` on ``train_dates``; a head that fails is unavailable with the reason, the rest stand."""
+def fit_bundle(data, arm: str, train_dates: Sequence[str], targets: Sequence[str] = mb.TARGETS,
+               **head_options) -> Bundle:
+    """Every head of ``arm`` on ``train_dates``; a head that fails is unavailable with the reason, the rest stand.
+    ``head_options`` go to fit_head (the evaluation's comparators)."""
     heads = {}
     for t in targets:
         try:
-            heads[t] = fit_head(data, t, arm, train_dates)
+            heads[t] = fit_head(data, t, arm, train_dates, **({k: v(t) if callable(v) else v
+                                                              for k, v in head_options.items()}))
         except Exception as e:                               # one head's failure never blocks another
             heads[t] = Head(t, arm, "unavailable", reason=f"training failed: {type(e).__name__}: {e}")
     nq_dates = sorted({d for d, s in zip(data.dates, data.instruments) if s == "NQ" and d in set(train_dates)})

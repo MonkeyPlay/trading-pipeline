@@ -15,7 +15,9 @@ registered forward evaluation p1_ml_forward_v2, its artifacts and its runs are u
   ARMS                   information and training population of N, M and P, distinct by construction
   FAMILIES / BUDGET      the declared candidates per head kind and the small selection budget, chosen
                          inside chronological inner folds by session date (contracts/nq_ml.SPLIT)
-  POOLING                how P uses ES's and RTY's rows, and when a P head is unavailable
+  POOLING                P's partial pooling: shared effects plus regularised NQ deviations, the pooling
+                         strength chosen on NQ validation rows; complete pooling and an NQ-only fit of the
+                         same family as comparators; when a P head is unavailable
   SMOOTHING / CALIBRATION / UNSEEN    the declared handling of rare and unseen classes
   EVALUATION             nested chronological evaluation against A and B, per target first
   STATUS                 shadow: issued and shown, never delivered (contracts/nq_ml.delivery_order is
@@ -216,26 +218,51 @@ FAMILIES: Dict[str, Dict[str, Any]] = {
     "logit": {"kinds": ("direction", "classifier", "candidates"),
               "estimator": "multinomial logistic regression (L2, lbfgs) on median-imputed, standardised features",
               "grid": [{"C": c} for c in (0.01, 0.1, 1.0)]},
+    "decomp": {"kinds": ("direction",),
+               "estimator": "two binary logistic regressions on the same features: q = P(the move ends outside the "
+                            "band), r = P(up | outside), then p_up = q r, p_down = q (1 - r), p_neutral = 1 - q",
+               "grid": [{"C": c} for c in (0.01, 0.1)]},
+    "decomp_sym": {"kinds": ("direction",), "comparator": True,
+                   "estimator": "the decomposition with r = 0.5: movement size only, no direction view - the "
+                                "stronger symmetric comparator of the evaluation, never selected into a bundle",
+                   "grid": [{"C": c} for c in (0.01, 0.1)]},
+    "scale": {"kinds": ("direction",),
+              "estimator": "a conditional distribution of the move in threshold units z = (close - O) / threshold: "
+                           "log(|z| + 0.1) regressed on the features (ridge) gives the scale s(x); the training rows' "
+                           "standardised moves z / s(x), symmetrised, form an empirical distribution, and the class "
+                           "probabilities are its mass beyond +1 / s(x), below -1 / s(x) and between - each target's "
+                           "exact threshold, no Gaussian (or other) tail assumed",
+              "grid": [{"alpha": a} for a in (10.0, 100.0)]},
+    "scale_loc": {"kinds": ("direction",),
+                  "estimator": "the scale model plus a location: the standardised move regressed on the features "
+                               "(ridge), the residuals' empirical distribution kept asymmetric - chosen only if the "
+                               "inner folds support it",
+                  "grid": [{"alpha": a} for a in (10.0,)]},
+    "cand": {"kinds": ("candidates",),
+             "estimator": "a conditional-logit candidate scorer: each frozen candidate's score is its geometry (signed "
+                          "and absolute distance in two-minute ATRs, side, nearest on its side, rank, coincident "
+                          "count - one effect shared by every candidate), its side times the recent path (the last "
+                          "30 minutes, the premarket return, the range position) and its identity; softmax over the "
+                          "session's possible candidates; L2 on every coefficient",
+             "grid": [{"l2": v} for v in (1.0, 10.0)]},
     "gbm": {"kinds": ("direction", "classifier", "candidates"),
             "estimator": "HistGradientBoostingClassifier (max_depth 2, min_samples_leaf 20, l2 1.0, learning rate "
                          "0.05, early stopping off, random_state 0) on median-imputed features",
             "grid": [{"max_iter": m} for m in (60, 150)]},
 }
-FAMILY_ORDER = ("logit", "gbm")                     # ties: the earlier one
-BUDGET = {
-    "rule": "per head, every declared configuration of the families its kind allows is fitted on each inner fold "
-            "and scored by the mean unhalved multiclass Brier score of the inner validation sessions (NQ rows); the "
-            "lowest wins, ties to the earlier family in FAMILY_ORDER and the earlier grid point; nothing else is "
-            "searched - adding targets does not widen the search",
-    "configurations": {k: sum(len(f["grid"]) for f in FAMILIES.values() if k in f["kinds"])
-                       for k in ("direction", "classifier", "candidates")},
-    "inner_folds": {"blocks": 3, "block_sessions": 20, "embargo_sessions": 1, "min_train_sessions": 60},
-}
+FAMILY_ORDER = ("logit", "decomp", "decomp_sym", "scale", "scale_loc", "cand", "gbm")   # ties: the earlier one
 POOLING = {
-    "complete": "P fits every family on every instrument's rows of the training dates, each with its own label, with "
-                "the instrument identity (is_es, is_rty; NQ the reference) as features",
-    "selection": "the family and parameters are chosen inside the chronological inner folds on NQ validation rows "
-                 "only",
+    "partial": "P's logistic-type families (logit, decomp, decomp_sym, scale, scale_loc, cand) fit shared coefficients "
+               "on every instrument's rows plus NQ-specific deviations: each standardised feature also enters "
+               "multiplied by gamma x is_nq under the same L2 penalty, so a deviation's effective penalty is 1 / "
+               "gamma^2 times the shared one and gamma sets the pooling strength (gamma 0: complete pooling). The "
+               "instrument intercepts (is_es, is_rty) enter x10 - lightly penalised. The gradient-boosted family pools "
+               "completely, with the identity as a feature the trees may split on",
+    "gamma_grid": (0.0, 0.5, 1.0),
+    "selection": "gamma is chosen with the family's other parameters inside the chronological inner folds, on NQ "
+                 "validation rows only - an NQ deviation survives when the ES / RTY relationships transfer poorly",
+    "comparators": "complete pooling (gamma 0) and an NQ-only fit of the selected family are evaluated beside it "
+                   "(forecaster/ml_bundle_eval.py)",
     "rows": "every instrument's rows of a training date, each with its own label; no row of the prediction date or "
             "later - even another instrument's whose outcome is already observable",
     "min_other_rows": 30,
@@ -243,6 +270,18 @@ POOLING = {
                            "unavailable (an NQ-only fit is N's job and is never shown as pooled training)",
     "dependence": "NQ, ES and RTY on one day share its news: correlated observations, not independent sessions - "
                   "selection and uncertainty are by session date",
+}
+BUDGET = {
+    "rule": "per head, every declared configuration of the families its kind allows (for P the logistic-type ones at "
+            "every gamma) is fitted on each inner fold and scored by the mean unhalved multiclass Brier score of the "
+            "inner validation sessions (NQ rows); the lowest wins, ties to the earlier family in FAMILY_ORDER and "
+            "the earlier grid point; nothing else is searched - adding targets does not widen the search",
+    "configurations": {k: sum(len(f["grid"]) for f in FAMILIES.values() if k in f["kinds"] and not f.get("comparator"))
+                       for k in ("direction", "classifier", "candidates")},
+    "configurations_P": {k: sum(len(f["grid"]) * (1 if n == "gbm" else len(POOLING["gamma_grid"]))
+                                for n, f in FAMILIES.items() if k in f["kinds"] and not f.get("comparator"))
+                         for k in ("direction", "classifier", "candidates")},
+    "inner_folds": {"blocks": 3, "block_sessions": 20, "embargo_sessions": 1, "min_train_sessions": 60},
 }
 SMOOTHING = {
     "pseudo_count": 0.5,
@@ -255,8 +294,13 @@ SMOOTHING = {
     "class_balancing": "none: no class weights, no oversampling - either would change the class probabilities "
                        "without a valid correction",
 }
-CALIBRATION = {"options": ("none",), "rule": "no calibration step in this version: the probabilities are the "
-                                                 "estimator's, smoothed as SMOOTHING declares"}
+CALIBRATION = {
+    "options": ("none", "temperature"),
+    "rule": "optional, selected from the chosen configuration's chronological out-of-fold predictions of the inner "
+            "folds (training window only, grouped by session date): a single temperature (p^(1/tau), renormalised, "
+            "tau in 0.5..3 by 0.1) is kept only if, fitted on the other inner blocks, it lowers the held-out block's "
+            "Brier score on average; then refitted on every block. Never isotonic, never a manual sharpening",
+}
 UNSEEN = {
     "training": "a class with no training row in a fold stays in the vocabulary; the estimators predict the classes "
                 "they saw and the smoothing gives the others their pseudo-count share",

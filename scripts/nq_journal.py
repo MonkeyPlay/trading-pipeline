@@ -30,6 +30,8 @@ and their realised NQ-v2 outcome labels.
     python scripts/nq_journal.py ml-dev-eval --legacy-row-split             # ... the v1 row-position tuning, reproduced
     python scripts/nq_journal.py ml-train                                   # the model artifacts, offline
     python scripts/nq_journal.py ml-bundle-train --until 2026-10-09        # the seven-target bundles (shadow)
+    python scripts/nq_journal.py ml-bundle-eval predict                    # ... their development evaluation, frozen
+    python scripts/nq_journal.py ml-bundle-eval score                      # ... then scored against A and B
     python scripts/nq_journal.py summary --date 2026-10-12                  # a session's forecast summary
     python scripts/nq_journal.py experiment-register --name p1_ml_forward_v2 --design ml-forward --start ... --end ...
     python scripts/nq_journal.py rth-issue                                  # RTH analogues of the session in progress
@@ -741,6 +743,27 @@ def cmd_ml_bundle_train(conn, args):
     return 0
 
 
+def cmd_ml_bundle_eval(conn, args):
+    """The seven-target bundles' development evaluation (forecaster/ml_bundle_eval.py): 'predict' fits every variant
+    in nested chronological folds and freezes the outer predictions with their sha256; 'score' refuses a changed file,
+    then reads the outcomes and writes docs/reports/ml_bundle_eval_v1.md - development data, not a test."""
+    from forecaster import ml_bundle_data as bd
+    from forecaster import ml_bundle_eval as ev
+    out = args.out or ev.OUT
+    if args.stage == "predict":
+        data = bd.build(conn, progress=print)
+        m = ev.predict(data, out, jobs=args.jobs)
+        print(f"predict: {len(m['folds'])} folds, test {m['test_span'][0]}..{m['test_span'][1]}; files recorded in "
+              f"{out}/manifest.json")
+    else:
+        res = ev.score(conn, out, args.report or ev.REPORT)
+        for t, e in res["targets"].items():
+            met = [a for a, c in e["claims"].items() if c["met"]]
+            print(f"{t}: labelled {e['coverage']['labelled']}/{e['coverage']['scheduled']}; claims met: "
+                  f"{', '.join(met) or 'none'}")
+    return 0
+
+
 def cmd_ml_dev_eval(conn, args):
     """The development comparison of A, B and the ML models (forecaster/ml_eval.py) under the session-date tuning
     split; writes docs/reports/ml_development_dates.md - development data, not a test. --legacy-row-split reproduces
@@ -914,6 +937,11 @@ def main(argv=None):
     p = sub.add_parser("ml-bundle-train", help="Train the seven-target ML bundles offline (shadow)")
     p.add_argument("--until", default=None, help="Last training session (default: every labelled one)")
     p.add_argument("--arms", nargs="+", default=["N", "M", "P"], choices=["N", "M", "P"])
+    p = sub.add_parser("ml-bundle-eval", help="Development evaluation of the seven-target bundles (not a test)")
+    p.add_argument("stage", choices=["predict", "score"])
+    p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    p.add_argument("--out", default=None, help="Output directory (default docs/reports/ml_bundle_eval_v1)")
+    p.add_argument("--report", default=None, help="Report path (default docs/reports/ml_bundle_eval_v1.md)")
     p = sub.add_parser("ml-dev-eval", help="Development comparison of A, B and the ML models (not a test)")
     p.add_argument("--report-dir", default=os.path.join(_PROJECT_ROOT, "docs", "reports"))
     p.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
@@ -1013,7 +1041,7 @@ def main(argv=None):
                    "experiment-register": cmd_experiment_register, "experiment-score": cmd_experiment_score,
                    "experiment-list": cmd_experiment_list, "live": cmd_live, "live-report": cmd_live_report,
                    "preview": cmd_preview, "rth-issue": cmd_rth_issue, "instrument-inventory": cmd_instrument_inventory,
-                   "ml-train": cmd_ml_train, "ml-bundle-train": cmd_ml_bundle_train, "ml-dev-eval": cmd_ml_dev_eval, "summary": cmd_summary,
+                   "ml-train": cmd_ml_train, "ml-bundle-train": cmd_ml_bundle_train, "ml-bundle-eval": cmd_ml_bundle_eval, "ml-dev-eval": cmd_ml_dev_eval, "summary": cmd_summary,
                    "rth-backfill": cmd_rth_backfill, "rth-show": cmd_rth_show, "rth-calibrate": cmd_rth_calibrate, "timeliness": cmd_timeliness,
                    "rth-eval-status": cmd_rth_eval_status, "rth-eval-score": cmd_rth_eval_score,
                    "review-report": cmd_review_report}[args.command]
